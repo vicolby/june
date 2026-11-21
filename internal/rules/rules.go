@@ -44,10 +44,18 @@ type Fault struct {
 
 // RuleSet is a set of rules whose examples all behaved.
 type RuleSet struct {
-	bin    string
-	inline string
-	ids    map[string]bool
+	bin      string
+	inline   string
+	ids      map[string]bool
+	rules    int
+	examples int
 }
+
+// Rules is the number of rules that were verified.
+func (rs *RuleSet) Rules() int { return rs.rules }
+
+// Examples is the number of valid and invalid examples that were verified.
+func (rs *RuleSet) Examples() int { return rs.examples }
 
 // Match is one rule match anchored at its first line. Line and Col are one-based.
 type Match struct {
@@ -110,9 +118,11 @@ func Load(ctx context.Context, dir string) (*RuleSet, []Fault) {
 	var faults []Fault
 	var docs []string
 	var examples []string
+	var total int
 	ids := map[string]bool{}
 	for _, name := range files {
-		doc, id, fs := readRule(dir, name)
+		doc, id, n, fs := readRule(dir, name)
+		total += n
 		if id != "" && ids[id] {
 			fs = append(fs, Fault{Path: name, Cause: "the rule id is duplicated", Fix: "give every rule a unique id"})
 		}
@@ -127,7 +137,7 @@ func Load(ctx context.Context, dir string) (*RuleSet, []Fault) {
 	if faults := verify(ctx, bin, dir, files, examples); len(faults) > 0 {
 		return nil, faults
 	}
-	return &RuleSet{bin: bin, inline: strings.Join(docs, "\n---\n"), ids: ids}, nil
+	return &RuleSet{bin: bin, inline: strings.Join(docs, "\n---\n"), ids: ids, rules: len(files), examples: total}, nil
 }
 
 // Scan runs the rules over the given files and keeps only Python files.
@@ -321,45 +331,45 @@ func ruleFiles(dir string) ([]string, error) {
 	return names, nil
 }
 
-// readRule returns the rule text and the faults that make it unusable.
-func readRule(dir, name string) (string, string, []Fault) {
+// readRule returns the rule text, its id, its example count and the faults that make it unusable.
+func readRule(dir, name string) (string, string, int, []Fault) {
 	raw, err := os.ReadFile(filepath.Join(dir, name))
 	if err != nil {
-		return "", "", []Fault{{Path: name, Cause: "the rule cannot be read", Fix: "make the rule file readable"}}
+		return "", "", 0, []Fault{{Path: name, Cause: "the rule cannot be read", Fix: "make the rule file readable"}}
 	}
 	var doc ruleDoc
 	if err := decodeDocument(raw, &doc); err != nil {
-		return "", "", []Fault{{Path: name, Cause: "the rule must be one valid YAML document", Fix: "keep exactly one valid YAML document in the rule file"}}
+		return "", "", 0, []Fault{{Path: name, Cause: "the rule must be one valid YAML document", Fix: "keep exactly one valid YAML document in the rule file"}}
 	}
 	if doc.ID == "" {
-		return "", "", []Fault{{Path: name, Cause: "the rule has no id", Fix: "add an id such as PY012"}}
+		return "", "", 0, []Fault{{Path: name, Cause: "the rule has no id", Fix: "add an id such as PY012"}}
 	}
 	if doc.ID == "." || doc.ID == ".." || strings.ContainsAny(doc.ID, "/\\") {
-		return "", "", []Fault{{Path: name, Cause: "the rule id is not a filename", Fix: "use a rule id without path separators"}}
+		return "", "", 0, []Fault{{Path: name, Cause: "the rule id is not a filename", Fix: "use a rule id without path separators"}}
 	}
 	if !strings.EqualFold(doc.Language, "python") {
-		return "", "", []Fault{{Path: name, Cause: "the rule language is not Python", Fix: "set language to python"}}
+		return "", "", 0, []Fault{{Path: name, Cause: "the rule language is not Python", Fix: "set language to python"}}
 	}
 	if strings.TrimSpace(doc.Message) == "" {
-		return "", "", []Fault{{Path: name, Cause: fmt.Sprintf("rule %s has an empty message", doc.ID), Fix: "write the corrective instruction in the message"}}
+		return "", "", 0, []Fault{{Path: name, Cause: fmt.Sprintf("rule %s has an empty message", doc.ID), Fix: "write the corrective instruction in the message"}}
 	}
 
 	sidecar := filepath.Join(testsDir, doc.ID+"-test.yml")
 	rawEx, err := os.ReadFile(filepath.Join(dir, sidecar))
 	if err != nil {
-		return "", "", []Fault{{Path: name, Cause: fmt.Sprintf("rule %s has no examples", doc.ID), Fix: fmt.Sprintf("add %s with valid and invalid examples", sidecar)}}
+		return "", "", 0, []Fault{{Path: name, Cause: fmt.Sprintf("rule %s has no examples", doc.ID), Fix: fmt.Sprintf("add %s with valid and invalid examples", sidecar)}}
 	}
 	var ex exampleDoc
 	if err := decodeDocument(rawEx, &ex); err != nil {
-		return "", "", []Fault{{Path: sidecar, Cause: "the examples must be one valid YAML document", Fix: "keep exactly one valid YAML document in the examples file"}}
+		return "", "", 0, []Fault{{Path: sidecar, Cause: "the examples must be one valid YAML document", Fix: "keep exactly one valid YAML document in the examples file"}}
 	}
 	if ex.ID != doc.ID {
-		return "", "", []Fault{{Path: sidecar, Cause: "the examples id does not match the rule id", Fix: "set the examples id to " + doc.ID}}
+		return "", "", 0, []Fault{{Path: sidecar, Cause: "the examples id does not match the rule id", Fix: "set the examples id to " + doc.ID}}
 	}
 	if len(ex.Valid) == 0 || len(ex.Invalid) == 0 {
-		return "", "", []Fault{{Path: sidecar, Cause: fmt.Sprintf("rule %s needs both valid and invalid examples", doc.ID), Fix: "add at least one of each"}}
+		return "", "", 0, []Fault{{Path: sidecar, Cause: fmt.Sprintf("rule %s needs both valid and invalid examples", doc.ID), Fix: "add at least one of each"}}
 	}
-	return strings.TrimRight(string(raw), "\n"), doc.ID, nil
+	return strings.TrimRight(string(raw), "\n"), doc.ID, len(ex.Valid) + len(ex.Invalid), nil
 }
 
 func decodeDocument(raw []byte, out any) error {
@@ -408,11 +418,23 @@ func verify(ctx context.Context, bin, dir string, files, examples []string) []Fa
 
 	text := strings.ReplaceAll(stdout.String()+"\n"+stderr.String(), scratch+string(filepath.Separator), "")
 	var faults []Fault
-	for _, m := range failLine.FindAllStringSubmatch(text, -1) {
+	for _, c := range misbehaving(text) {
+		path := filepath.Join(testsDir, c.rule+"-test.yml")
 		faults = append(faults, Fault{
-			Path:  filepath.Join(testsDir, m[1]+"-test.yml"),
+			Path:  path,
+			Cause: fmt.Sprintf("rule %s %s example %q %s", c.rule, c.kind, c.code, c.problem),
+			Fix:   fmt.Sprintf(exampleFixHint, path),
+		})
+	}
+	if len(faults) > 0 {
+		return faults
+	}
+	for _, m := range failLine.FindAllStringSubmatch(text, -1) {
+		path := filepath.Join(testsDir, m[1]+"-test.yml")
+		faults = append(faults, Fault{
+			Path:  path,
 			Cause: fmt.Sprintf("an example of rule %s misbehaves (%s)", m[1], caseDetails(text)),
-			Fix:   fmt.Sprintf(exampleFixHint, filepath.Join(testsDir, m[1]+"-test.yml")),
+			Fix:   fmt.Sprintf(exampleFixHint, path),
 		})
 	}
 	if len(faults) > 0 {
@@ -452,6 +474,45 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, b, 0o644)
+}
+
+// misbehavior is one example that ast-grep test reported.
+type misbehavior struct {
+	rule, kind, code, problem string
+}
+
+var caseHeader = regexp.MustCompile(`^\[(Noisy|Missing)\] Expect (?:rule )?(\S+) to `)
+
+// misbehaving reads the individual examples out of the case details of ast-grep test output.
+func misbehaving(text string) []misbehavior {
+	var out []misbehavior
+	var cur *misbehavior
+	var code []string
+	flush := func() {
+		if cur != nil {
+			cur.code = oneLine(strings.Join(code, "\n"))
+			out = append(out, *cur)
+		}
+		cur, code = nil, nil
+	}
+	for _, l := range strings.Split(text, "\n") {
+		if m := caseHeader.FindStringSubmatch(l); m != nil {
+			flush()
+			cur = &misbehavior{rule: m[2], kind: "valid", problem: "is reported by the rule"}
+			if m[1] == "Missing" {
+				cur.kind, cur.problem = "invalid", "is not reported by the rule"
+			}
+			continue
+		}
+		if strings.HasPrefix(l, "FAIL ") || strings.HasPrefix(l, "Error: ") {
+			flush()
+		}
+		if cur != nil {
+			code = append(code, l)
+		}
+	}
+	flush()
+	return out
 }
 
 // caseDetails extracts the failing example report from ast-grep test output.

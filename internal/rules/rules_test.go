@@ -27,13 +27,40 @@ func TestLoadGood(t *testing.T) {
 	}
 }
 
+func TestLoadCountsRulesAndExamples(t *testing.T) {
+	rs, _ := rules.Load(context.Background(), fixture("good"))
+	if rs == nil {
+		t.Fatal("Load returned no rule set")
+	}
+	if rs.Rules() != 1 || rs.Examples() != 2 {
+		t.Errorf("Rules, Examples = %d, %d, want 1, 2", rs.Rules(), rs.Examples())
+	}
+}
+
+// Every misbehaving example is its own fault, so an author sees all of them at once.
+func TestLoadNamesEveryMisbehavingExample(t *testing.T) {
+	_, faults := rules.Load(context.Background(), fixture("bad_example"))
+	if len(faults) != 2 {
+		t.Fatalf("faults = %v, want 2", faults)
+	}
+	want := []string{
+		`rule LST01 valid example "x = [1]" is reported by the rule`,
+		`rule LST01 invalid example "x = (1,)" is not reported by the rule`,
+	}
+	for i, f := range faults {
+		if f.Path != "rule-tests/LST01-test.yml" || f.Cause != want[i] {
+			t.Errorf("fault %d = %+v, want path rule-tests/LST01-test.yml and cause %q", i, f, want[i])
+		}
+	}
+}
+
 func TestLoadRefusesUnverifiedRules(t *testing.T) {
 	tests := []struct {
 		dir       string
 		wantPath  string
 		wantCause string
 	}{
-		{"bad_example", "rule-tests/LST01-test.yml", "example of rule LST01 misbehaves"},
+		{"bad_example", "rule-tests/LST01-test.yml", "valid example \"x = [1]\" is reported"},
 		{"empty_message", "LST01.yml", "empty message"},
 		{"no_examples", "LST01.yml", "no examples"},
 		{"one_sided", "rule-tests/LST01-test.yml", "both valid and invalid"},

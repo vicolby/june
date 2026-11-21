@@ -175,9 +175,10 @@ func TestRuleSetExistsOnlyIfEveryExampleBehaved(t *testing.T) {
 		t.Fatalf("Exit = %d, want 2; Out: %s", res.Exit, res.Out)
 	}
 	out := string(res.Out)
-	if !strings.HasPrefix(out, "june: error: .june/rules/rule-tests/PY012-test.yml: an example of rule PY012 misbehaves (") ||
-		!strings.HasSuffix(out, ". Fix: make the rule and its examples in rule-tests/PY012-test.yml agree\n") {
-		t.Errorf("Out = %q", out)
+	fix := ". Fix: make the rule and its examples in rule-tests/PY012-test.yml agree\n"
+	want := "june: error: .june/rules/rule-tests/PY012-test.yml: rule PY012 valid example \"def f(a=[]): pass\" is reported by the rule" + fix
+	if out != want {
+		t.Errorf("Out = %q, want %q", out, want)
 	}
 	if strings.Contains(out, "app.py:") || strings.Contains(out, env.Dir) {
 		t.Errorf("Out has a finding or an absolute path: %q", out)
@@ -549,5 +550,96 @@ func TestSummaryCountsOptOutsOnTouchedLines(t *testing.T) {
 	res := change(t, env, "a.py:1-4\n")
 	if got, want := summaryOf(res), "june: 0 errors, 0 warnings, 2 opt-outs; checked 1 file, 4 changed lines"; got != want {
 		t.Errorf("summary = %q, want %q", got, want)
+	}
+}
+
+func TestRulesVerifiesEveryExample(t *testing.T) {
+	env := tree(t, nil)
+	res, err := check.Rules(context.Background(), env, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "june: verified 1 rule, 19 examples\n"; res.Exit != 0 || string(res.Out) != want {
+		t.Errorf("Exit = %d, Out = %q, want 0 and %q", res.Exit, res.Out, want)
+	}
+}
+
+func TestRulesFaultsRefuseVerifyAndRunAlike(t *testing.T) {
+	rule := func(msg string) string {
+		return "id: LST01\nlanguage: python\nseverity: error\nmessage: " + msg + "\nrule:\n  kind: list\n"
+	}
+	const sidecar = "rule-tests/LST01-test.yml"
+	const goodExamples = "id: LST01\nvalid:\n  - \"x = (1,)\"\ninvalid:\n  - \"x = [1]\"\n"
+	tests := []struct {
+		name  string
+		files map[string]string
+		out   string
+	}{
+		{
+			name:  "unparseable rule",
+			files: map[string]string{"LST01.yml": "id: LST01\nlanguage: python\nrule: [\n", sidecar: goodExamples},
+			out:   "june: error: rules/LST01.yml: the rule must be one valid YAML document. Fix: keep exactly one valid YAML document in the rule file\n",
+		},
+		{
+			name:  "rule ast-grep rejects",
+			files: map[string]string{"LST01.yml": "id: LST01\nlanguage: python\nmessage: m\nrule:\n  kind: list\nbogus: 1\n", sidecar: goodExamples},
+			out:   "june: error: rules/LST01.yml: ast-grep cannot parse the rule (",
+		},
+		{
+			name:  "empty message",
+			files: map[string]string{"LST01.yml": rule(`""`), sidecar: goodExamples},
+			out:   "june: error: rules/LST01.yml: rule LST01 has an empty message. Fix: write the corrective instruction in the message\n",
+		},
+		{
+			name:  "failing example",
+			files: map[string]string{"LST01.yml": rule("m"), sidecar: "id: LST01\nvalid:\n  - \"x = [1]\"\ninvalid:\n  - \"x = (1,)\"\n"},
+			out: "june: error: rules/rule-tests/LST01-test.yml: rule LST01 invalid example \"x = (1,)\" is not reported by the rule. Fix: make the rule and its examples in rule-tests/LST01-test.yml agree\n" +
+				"june: error: rules/rule-tests/LST01-test.yml: rule LST01 valid example \"x = [1]\" is reported by the rule. Fix: make the rule and its examples in rule-tests/LST01-test.yml agree\n",
+		},
+		{
+			name:  "zero rules",
+			files: map[string]string{"README.md": "no rules here\n"},
+			out:   "june: error: rules: the rules directory holds no rules. Fix: add a rule file such as PY012.yml with its rule-tests/PY012-test.yml, or point --rules elsewhere\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for name, body := range tt.files {
+				write(t, filepath.Join(dir, "rules", name), body)
+			}
+			write(t, filepath.Join(dir, "app.py"), "x = [1]\n")
+			env := check.Env{Dir: dir}
+
+			verified, err := check.Rules(context.Background(), env, "rules")
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, err := check.Change(context.Background(), env, check.Request{Rules: "rules", Changed: strings.NewReader("app.py:1\n")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if verified.Exit != 2 || run.Exit != 2 || string(verified.Out) != string(run.Out) {
+				t.Fatalf("verify = %d %q, run = %d %q, want the same refusal with exit 2", verified.Exit, verified.Out, run.Exit, run.Out)
+			}
+			out := string(verified.Out)
+			if !strings.HasPrefix(out, tt.out) || strings.Contains(out, "app.py:") || strings.Contains(out, dir) {
+				t.Errorf("Out = %q, want prefix %q and no finding or absolute path", out, tt.out)
+			}
+		})
+	}
+}
+
+func TestRulesCancelledContextIsAnError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := check.Rules(ctx, tree(t, nil), ""); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestRulesEmptyEnvDirIsAnError(t *testing.T) {
+	if _, err := check.Rules(context.Background(), check.Env{}, ""); err == nil {
+		t.Error("err = nil, want an error")
 	}
 }

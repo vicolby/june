@@ -95,7 +95,7 @@ Output is text by default and carries no ANSI. Rendering escapes control charact
 
 ## cmd/june
 
-The current build supports `june --version` and `june [--rules DIR] --changed-lines FILE`; `-` reads the list from stdin.
+The current build supports `june --version`, `june verify [--rules DIR]` and `june [--rules DIR] --changed-lines FILE`; `-` reads the list from stdin.
 An unstamped `june --version` prints `june dev`.
 With ast-grep on PATH, run the shipped Python rule and its sidecar examples from the repository root:
 
@@ -107,7 +107,8 @@ The list contains one `path:7` or `path:7-12` entry per line, with one-based, in
 Blank lines are ignored; whitespace in filenames is preserved, and only `.py` files are checked.
 The current check requires this list and emits plain text. Completed checks (exit 0 or 1) end with a summary line, `june: 1 error, 0 warnings, 0 opt-outs; checked 2 files, 5 changed lines`; refusals (exit 2) have no summary.
 Coverage counts distinct listed Python files and changed lines, counting overlapping ranges only once; the opt-out count is every opt-out printed on a touched line, honoured or not.
-Git scope inference, `verify`, and CI-specific formats remain planned.
+`june verify` runs every example of every rule and prints `june: verified 1 rule, 19 examples` on success; each rule fault is one line naming the rule file or sidecar and, for a failing example, the example, and any fault exits 2, as it does for a normal run.
+Git scope inference and CI-specific formats remain planned.
 
 `cmd/june` is a shell and owns no decision.
 It maps flags to a `Request`, snapshots the environment, writes `Out` and `Files`, and returns `Exit`.
