@@ -215,16 +215,29 @@ func exactPathspec(name string) string {
 	return pattern.String()
 }
 
+// scrubbedVars are the caller's git variables that change what a diff or a pathspec means.
+// git drops them so the touched lines depend on the trees, not on the caller's shell.
+var scrubbedVars = map[string]bool{
+	"GIT_DIFF_OPTS":         true,
+	"GIT_EXTERNAL_DIFF":     true,
+	"GIT_GLOB_PATHSPECS":    true,
+	"GIT_ICASE_PATHSPECS":   true,
+	"GIT_LITERAL_PATHSPECS": true,
+	"GIT_NOGLOB_PATHSPECS":  true,
+}
+
 // git runs git in env.Dir and returns its standard output.
 func git(ctx context.Context, env Env, input string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = env.Dir
 	cmd.Env = make([]string, 0, len(env.Vars)+4)
 	for k, v := range env.Vars {
-		cmd.Env = append(cmd.Env, k+"="+v)
+		if !scrubbedVars[k] {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
 	}
 	// Later entries win, so these fix the language and keep git read-only and non-interactive.
-	cmd.Env = append(cmd.Env, "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0", "GIT_DIFF_OPTS=")
+	cmd.Env = append(cmd.Env, "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0")
 	cmd.Stdin = strings.NewReader(input)
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out

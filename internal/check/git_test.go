@@ -51,6 +51,14 @@ func against(t *testing.T, env check.Env, base string) check.Result {
 	return res
 }
 
+// refused checks a refusal: Exit 2, the exact message and no summary line.
+func refused(t *testing.T, res check.Result, out string) {
+	t.Helper()
+	if res.Exit != 2 || string(res.Out) != out {
+		t.Errorf("Exit = %d, Out =\n%s\nwant 2 and\n%s", res.Exit, res.Out, out)
+	}
+}
+
 const old = "def f(a=[]): pass\n"
 
 func TestGitScopeSparseFilesAreNotRenameSources(t *testing.T) {
@@ -259,6 +267,28 @@ func TestGitScopeIgnoresContextSettings(t *testing.T) {
 	}
 }
 
+func TestGitScopeIgnoresCallerGitEnvironment(t *testing.T) {
+	for _, v := range []map[string]string{
+		{"GIT_LITERAL_PATHSPECS": "1"},
+		{"GIT_GLOB_PATHSPECS": "0"},
+		{"GIT_NOGLOB_PATHSPECS": "1"},
+		{"GIT_ICASE_PATHSPECS": "1"},
+		{"GIT_EXTERNAL_DIFF": "false"},
+	} {
+		for name := range v {
+			t.Run(name, func(t *testing.T) {
+				env := repo(t, map[string]string{"app.py": "x = 1\n", "sub/App.py": "y = 1\n"})
+				env.Vars = v
+				write(t, filepath.Join(env.Dir, "app.py"), old)
+				write(t, filepath.Join(env.Dir, "new.py"), old)
+				expect(t, against(t, env, "main"), 1, "app.py:1:9: "+py012+"new.py:1:9: "+py012)
+				commit(t, env)
+				expect(t, against(t, env, "main"), 1, "app.py:1:9: "+py012+"new.py:1:9: "+py012)
+			})
+		}
+	}
+}
+
 func TestGitScopePinsPathPrefixes(t *testing.T) {
 	for _, setting := range [][2]string{{"diff.noprefix", "true"}, {"diff.mnemonicPrefix", "true"}, {"diff.dstPrefix", "custom/"}} {
 		t.Run(setting[0], func(t *testing.T) {
@@ -347,7 +377,7 @@ func TestGitScopeTemporaryIndexFailureIsRefused(t *testing.T) {
 	env := repo(t, nil)
 	write(t, filepath.Join(env.Dir, "new.py"), old)
 	t.Setenv("TMPDIR", filepath.Join(env.Dir, "missing"))
-	expect(t, against(t, env, "main"), 2,
+	refused(t, against(t, env, "main"),
 		"june: error: a temporary git index cannot be created. Fix: check temporary directory permissions and run june again\n")
 }
 
@@ -488,7 +518,7 @@ func TestPathsWithSpacesAndUnicode(t *testing.T) {
 	for _, name := range []string{"my app.py", "é.py", "tab\tname.py"} {
 		write(t, filepath.Join(env.Dir, name), old)
 	}
-	want := "my app.py:1:9: " + py012 + "tab\tname.py:1:9: " + py012 + "é.py:1:9: " + py012
+	want := "my app.py:1:9: " + py012 + `tab\tname.py:1:9: ` + py012 + "é.py:1:9: " + py012
 	expect(t, against(t, env, "main"), 1, want)
 	commit(t, env)
 	expect(t, against(t, env, "main"), 1, want)
@@ -516,14 +546,14 @@ func TestChangedWinsOverBase(t *testing.T) {
 
 func TestBaseRefusals(t *testing.T) {
 	env := repo(t, map[string]string{"app.py": old})
-	expect(t, against(t, env, "nope"), 2,
+	refused(t, against(t, env, "nope"),
 		"june: error: the base \"nope\" is not a commit in this repository. Fix: fetch it, or pass an existing branch, tag or commit to --base\n")
-	expect(t, against(t, env, "--output=x"), 2,
+	refused(t, against(t, env, "--output=x"),
 		"june: error: the base \"--output=x\" is not a git ref. Fix: pass a branch, tag or commit to --base\n")
 
 	git(t, env.Dir, "checkout", "-q", "--orphan", "island")
 	git(t, env.Dir, "commit", "-q", "--allow-empty", "-m", "island")
-	expect(t, against(t, env, "main"), 2,
+	refused(t, against(t, env, "main"),
 		"june: error: HEAD and \"main\" have no merge base, so the touched lines are unknowable. Fix: fetch full history (git fetch --unshallow) or pass a base that shares history with HEAD\n")
 
 	dir := t.TempDir()
