@@ -362,7 +362,7 @@ def g(x=[]):  # june: ignore[PY012] untouched line
 		"a.py:3:15: OPTOUT malformed opt-out suppresses nothing: the reason is required. Fix: write # june: ignore[RULE] reason\n"+
 		"a.py:5:15: OPTOUT malformed opt-out suppresses nothing: rule PY999 does not exist. Fix: name a rule from the rules directory\n"+
 		"a.py:7:14: PY012 opt-out: nothing here (suppresses nothing: no PY012 finding on this line)\n"+
-		"a.py:9:15: OPTOUT malformed opt-out suppresses nothing: the comment is not `ignore[RULE] reason`. Fix: write # june: ignore[RULE] reason\n"+
+		"a.py:9:15: OPTOUT malformed opt-out suppresses nothing: the comment must start with `# june: ignore[`. Fix: write # june: ignore[RULE] reason\n"+
 		"a.py:3:9: "+py012+
 		"a.py:5:9: "+py012+
 		"a.py:9:9: "+py012+
@@ -372,6 +372,45 @@ def g(x=[]):  # june: ignore[PY012] untouched line
 func TestOptOutHonouredKeepsExitZero(t *testing.T) {
 	env := tree(t, map[string]string{"a.py": "def a(x=[]):  # june: ignore[PY012] shared on purpose\n    pass\n"})
 	expect(t, change(t, env, "a.py:1\n"), 0, "a.py:1:15: PY012 opt-out: shared on purpose\n")
+}
+
+func TestOptOutNearMissesSuppressNothing(t *testing.T) {
+	const prefixProblem = "the comment must start with `# june: ignore[`"
+	const paddingProblem = "the rule must not have surrounding whitespace"
+	const reasonSpaceProblem = "a space is required before the reason"
+	for _, tc := range []struct {
+		comment string
+		problem string
+	}{
+		{"#june: ignore[PY012] reason", prefixProblem},
+		{"# june:ignore[PY012] reason", prefixProblem},
+		{"#june:ignore[ PY012 ]why", prefixProblem},
+		{"#\tjune: ignore[PY012] reason", prefixProblem},
+		{"# june:\tignore[PY012] reason", prefixProblem},
+		{"#  june: ignore[PY012] reason", prefixProblem},
+		{"# june:  ignore[PY012] reason", prefixProblem},
+		{"# june: ignore[ PY012] reason", paddingProblem},
+		{"# june: ignore[PY012 ] reason", paddingProblem},
+		{"# june: ignore[\tPY012\t] reason", paddingProblem},
+		{"# june: ignore[PY012]reason", reasonSpaceProblem},
+		{"# june: ignore[PY012]\treason", reasonSpaceProblem},
+		{"# june: ignore[PY012] \t", "the reason is required"},
+	} {
+		for _, value := range []string{"[]", "1"} {
+			t.Run(tc.comment+"/"+value, func(t *testing.T) {
+				prefix := "def f(x=" + value + "): pass  "
+				env := tree(t, map[string]string{"a.py": prefix + tc.comment + "\nx = 1\n"})
+				out := fmt.Sprintf("a.py:1:%d: OPTOUT malformed opt-out suppresses nothing: %s. Fix: write # june: ignore[RULE] reason\n", len(prefix)+1, tc.problem)
+				exit := 0
+				if value == "[]" {
+					exit = 1
+					out += "a.py:1:9: " + py012
+				}
+				expect(t, change(t, env, "a.py:1\n"), exit, out)
+				expect(t, change(t, env, "a.py:2\n"), 0, "")
+			})
+		}
+	}
 }
 
 func TestOptOutOffTouchedLineIsSilent(t *testing.T) {

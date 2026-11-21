@@ -261,18 +261,16 @@ func disableSuppressions(source []byte, cs []comment) {
 	}
 }
 
-var optOutPattern = regexp.MustCompile(`^#\s*june:\s*(.*)$`)
-
 // optOuts reads the opt-outs out of the comments of source. A comment is an opt-out when it starts with `june:`.
 func (rs *RuleSet) optOuts(file string, source []byte, cs []comment) []OptOut {
 	var out []OptOut
 	for _, c := range cs {
-		m := optOutPattern.FindStringSubmatch(strings.TrimSpace(string(source[c.start:c.end])))
-		if m == nil {
+		text := string(source[c.start:c.end])
+		if !strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(text, "#")), optOutMarker) {
 			continue
 		}
 		o := OptOut{File: file, Line: c.line, Col: c.col}
-		o.Rule, o.Reason, o.Problem = rs.parseOptOut(m[1])
+		o.Rule, o.Reason, o.Problem = rs.parseOptOut(text)
 		out = append(out, o)
 	}
 	return out
@@ -280,28 +278,30 @@ func (rs *RuleSet) optOuts(file string, source []byte, cs []comment) []OptOut {
 
 const optOutSyntax = "write # june: ignore[RULE] reason"
 
-// parseOptOut parses what follows `june:`.
-func (rs *RuleSet) parseOptOut(body string) (rule, reason, problem string) {
-	rest, ok := strings.CutPrefix(body, "ignore[")
+func (rs *RuleSet) parseOptOut(text string) (rule, reason, problem string) {
+	rest, ok := strings.CutPrefix(text, "# june: ignore[")
 	if !ok {
-		return "", "", "the comment is not `ignore[RULE] reason`. Fix: " + optOutSyntax
+		return "", "", "the comment must start with `# june: ignore[`. Fix: " + optOutSyntax
 	}
 	rule, reason, ok = strings.Cut(rest, "]")
 	if !ok {
 		return "", "", "the rule bracket is not closed. Fix: " + optOutSyntax
 	}
-	rule, reason = strings.TrimSpace(rule), strings.TrimSpace(reason)
 	switch {
 	case rule == "":
 		return "", "", "no rule is named. Fix: " + optOutSyntax
+	case rule != strings.TrimSpace(rule):
+		return "", "", "the rule must not have surrounding whitespace. Fix: " + optOutSyntax
 	case strings.ContainsAny(rule, ", \t"):
 		return "", "", "an opt-out names exactly one rule. Fix: name a single rule in brackets"
 	case !rs.ids[rule]:
 		return rule, "", "rule " + rule + " does not exist. Fix: name a rule from the rules directory"
-	case reason == "":
+	case strings.TrimSpace(reason) == "":
 		return rule, "", "the reason is required. Fix: " + optOutSyntax
+	case !strings.HasPrefix(reason, " "):
+		return rule, "", "a space is required before the reason. Fix: " + optOutSyntax
 	}
-	return rule, reason, ""
+	return rule, strings.TrimSpace(reason), ""
 }
 
 // ruleFiles lists the rule files directly inside dir, sorted.
