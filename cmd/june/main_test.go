@@ -1,14 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"bytes"
-	"github.com/vicolby/june/internal/check"
 	"testing"
+
+	"github.com/vicolby/june/internal/check"
 )
 
 func TestVersion(t *testing.T) {
@@ -68,7 +68,7 @@ func TestChangedLinesFileFindingExitsOne(t *testing.T) {
 	}
 	var out, errOut bytes.Buffer
 	code := run(context.Background(), []string{"--changed-lines", list}, strings.NewReader(""), &out, &errOut, env)
-	if code != 1 || out.String() != "app.py:2:7: "+py012 || errOut.Len() != 0 {
+	if code != 1 || out.String() != "app.py:2:9: "+py012 || errOut.Len() != 0 {
 		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
 	}
 }
@@ -100,9 +100,12 @@ func TestBadListExitsTwo(t *testing.T) {
 }
 
 func TestMissingListFileExitsTwo(t *testing.T) {
-	var out, errOut bytes.Buffer
-	code := run(context.Background(), []string{"--changed-lines", "absent.txt"}, strings.NewReader(""), &out, &errOut, project(t))
-	if code != 2 || !strings.HasPrefix(errOut.String(), "june: error: the changed-lines file cannot be read") || !strings.Contains(errOut.String(), ". Fix: ") {
-		t.Errorf("exit = %d, stderr = %q", code, errOut.String())
+	for _, file := range []string{"absent.txt", filepath.Join(t.TempDir(), "absent.txt")} {
+		var out, errOut bytes.Buffer
+		code := run(context.Background(), []string{"--changed-lines", file}, strings.NewReader(""), &out, &errOut, project(t))
+		want := "june: error: the changed-lines file cannot be read. Fix: pass an existing file to --changed-lines\n"
+		if code != 2 || errOut.String() != want || out.Len() != 0 {
+			t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+		}
 	}
 }

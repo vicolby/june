@@ -4,14 +4,17 @@ severity: error
 message: "Mutable default argument. Fix: default the parameter to None and create the value inside the function."
 rule:
   any:
-    - kind: default_parameter
-    - kind: typed_default_parameter
-  has:
+    - kind: list
+    - kind: dictionary
+    - kind: set
+    - kind: list_comprehension
+    - kind: dictionary_comprehension
+    - kind: set_comprehension
+  inside:
     field: value
     any:
-      - kind: list
-      - kind: dictionary
-      - kind: set
-      - kind: list_comprehension
-      - kind: dictionary_comprehension
-      - kind: set_comprehension
+      - kind: default_parameter
+      - kind: typed_default_parameter
+    stopBy:
+      not:
+        kind: parenthesized_expression

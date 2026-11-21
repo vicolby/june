@@ -118,11 +118,17 @@ func resolve(dir, path string) string {
 func faultMessages(display string, faults []rules.Fault) []string {
 	msgs := make([]string, len(faults))
 	for i, f := range faults {
-		where := filepath.ToSlash(filepath.Clean(display))
-		if f.Path != "" {
-			where = filepath.ToSlash(filepath.Join(display, f.Path))
+		where := filepath.Clean(display)
+		if filepath.IsAbs(where) {
+			where = filepath.Base(where)
+			if filepath.IsAbs(where) {
+				where = "."
+			}
 		}
-		msgs[i] = where + ": " + f.Cause + ". Fix: " + f.Fix
+		if f.Path != "" {
+			where = filepath.Join(where, f.Path)
+		}
+		msgs[i] = filepath.ToSlash(where) + ": " + f.Cause + ". Fix: " + f.Fix
 	}
 	return msgs
 }

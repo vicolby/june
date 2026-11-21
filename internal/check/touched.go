@@ -54,18 +54,18 @@ func readTouched(env Env, r io.Reader) (touchedSet, *string) {
 	set := touchedSet{}
 	sc := bufio.NewScanner(r)
 	for n := 1; sc.Scan(); n++ {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
+		line := sc.Text()
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
 		file, sp, err := parseEntry(line)
 		if err != nil {
-			return fail("changed-lines line %d, %q, is not valid: %v. Fix: %s", n, line, err, listFix)
+			return fail("changed-lines line %d is not valid: %v. Fix: %s", n, err, listFix)
 		}
 		set[file] = append(set[file], sp)
 	}
 	if err := sc.Err(); err != nil {
-		return fail("the changed-lines list cannot be read (%v). Fix: %s", err, listFix)
+		return fail("the changed-lines list cannot be read. Fix: %s", listFix)
 	}
 	for _, f := range set.pythonFiles() {
 		if !fileExists(env.Dir, f) {
@@ -85,18 +85,18 @@ func parseEntry(line string) (string, span, error) {
 	from, to, isRange := strings.Cut(lines, "-")
 	a, err := strconv.Atoi(from)
 	if err != nil || a < 1 {
-		return "", span{}, fmt.Errorf("%q is not a line number from 1", from)
+		return "", span{}, fmt.Errorf("expected a line number from 1")
 	}
 	b := a
 	if isRange {
 		if b, err = strconv.Atoi(to); err != nil || b < a {
-			return "", span{}, fmt.Errorf("%q is not a line number from %d", to, a)
+			return "", span{}, fmt.Errorf("expected a line number from %d", a)
 		}
 	}
 
 	clean := path.Clean(filepath.ToSlash(file))
 	if path.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
-		return "", span{}, fmt.Errorf("the path %q is not inside the repository", file)
+		return "", span{}, fmt.Errorf("the path is not inside the repository")
 	}
 	return clean, span{a, b}, nil
 }

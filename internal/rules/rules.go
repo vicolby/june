@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -61,6 +63,7 @@ type ruleDoc struct {
 }
 
 type exampleDoc struct {
+	ID      string   `yaml:"id"`
 	Valid   []string `yaml:"valid"`
 	Invalid []string `yaml:"invalid"`
 }
@@ -79,7 +82,7 @@ func Load(ctx context.Context, dir string) (*RuleSet, []Fault) {
 
 	files, err := ruleFiles(dir)
 	if err != nil {
-		return nil, []Fault{{Cause: fmt.Sprintf("the rules directory cannot be read (%v)", err), Fix: "make the rules directory readable"}}
+		return nil, []Fault{{Cause: "the rules directory cannot be read", Fix: "make the rules directory readable"}}
 	}
 	if len(files) == 0 {
 		return nil, []Fault{{Cause: "the rules directory holds no rules", Fix: "add a rule file such as PY012.yml with its rule-tests/PY012-test.yml, or point --rules elsewhere"}}
@@ -87,15 +90,22 @@ func Load(ctx context.Context, dir string) (*RuleSet, []Fault) {
 
 	var faults []Fault
 	var docs []string
+	var examples []string
+	ids := map[string]bool{}
 	for _, name := range files {
-		doc, fs := readRule(dir, name)
+		doc, id, fs := readRule(dir, name)
+		if id != "" && ids[id] {
+			fs = append(fs, Fault{Path: name, Cause: "the rule id is duplicated", Fix: "give every rule a unique id"})
+		}
+		ids[id] = true
+		examples = append(examples, filepath.Join(testsDir, id+"-test.yml"))
 		faults = append(faults, fs...)
 		docs = append(docs, doc)
 	}
 	if len(faults) > 0 {
 		return nil, faults
 	}
-	if faults := verify(ctx, bin, dir, files); len(faults) > 0 {
+	if faults := verify(ctx, bin, dir, files, examples); len(faults) > 0 {
 		return nil, faults
 	}
 	return &RuleSet{bin: bin, inline: strings.Join(docs, "\n---\n")}, nil
@@ -104,57 +114,94 @@ func Load(ctx context.Context, dir string) (*RuleSet, []Fault) {
 // Scan runs the rules over the given files and keeps only Python files.
 // Matches are anchored at their first line. File is reported as given.
 func (rs *RuleSet) Scan(ctx context.Context, files []string) (Scanned, error) {
-	var py []string
-	for _, f := range files {
-		if filepath.Ext(f) == pythonExtension {
-			py = append(py, f)
-		}
-	}
-	if len(py) == 0 {
-		return Scanned{}, nil
-	}
-
-	args := append([]string{"scan", "--inline-rules", rs.inline, "--json=stream"}, py...)
-	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, rs.bin, args...)
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err := cmd.Run()
-	if err != nil {
-		var exit *exec.ExitError
-		// ast-grep exits 1 when it reports error-severity matches.
-		if ctx.Err() != nil || !errors.As(err, &exit) || exit.ExitCode() != 1 {
-			if ctx.Err() != nil {
-				return Scanned{}, ctx.Err()
-			}
-			return Scanned{}, fmt.Errorf("ast-grep scan: %w: %s", err, strings.TrimSpace(stderr.String()))
-		}
-	}
-
 	var out Scanned
-	dec := json.NewDecoder(&stdout)
-	for dec.More() {
-		var m struct {
-			File     string `json:"file"`
-			RuleID   string `json:"ruleId"`
-			Severity string `json:"severity"`
-			Message  string `json:"message"`
-			Range    struct {
-				Start struct{ Line, Column int } `json:"start"`
-			} `json:"range"`
+	for _, f := range files {
+		if filepath.Ext(f) != pythonExtension {
+			continue
 		}
-		if err := dec.Decode(&m); err != nil {
-			return Scanned{}, fmt.Errorf("ast-grep scan: unreadable output: %w", err)
+		source, err := os.ReadFile(f)
+		if err != nil {
+			return Scanned{}, errors.New("a Python file cannot be read")
 		}
-		out.Matches = append(out.Matches, Match{
-			File:     m.File,
-			Line:     m.Range.Start.Line + 1,
-			Col:      m.Range.Start.Column + 1,
-			Rule:     m.RuleID,
-			Severity: m.Severity,
-			Msg:      m.Message,
-		})
+		if !utf8.Valid(source) || bytes.IndexByte(source, 0) >= 0 {
+			return Scanned{}, errors.New("a Python file is not UTF-8 text")
+		}
+		if err := rs.disableSuppressions(ctx, source); err != nil {
+			return Scanned{}, err
+		}
+		stdout, err := runASTGrep(ctx, rs.bin, source, "scan", "--inline-rules", rs.inline, "--json=stream")
+		if err != nil {
+			return Scanned{}, err
+		}
+		dec := json.NewDecoder(bytes.NewReader(stdout))
+		for {
+			var m struct {
+				RuleID   string `json:"ruleId"`
+				Severity string `json:"severity"`
+				Message  string `json:"message"`
+				Range    struct {
+					Start struct{ Line, Column int } `json:"start"`
+				} `json:"range"`
+			}
+			if err := dec.Decode(&m); err != nil {
+				if err == io.EOF {
+					break
+				}
+				return Scanned{}, errors.New("ast-grep scan returned unreadable output")
+			}
+			out.Matches = append(out.Matches, Match{
+				File: f, Line: m.Range.Start.Line + 1, Col: m.Range.Start.Column + 1,
+				Rule: m.RuleID, Severity: m.Severity, Msg: m.Message,
+			})
+		}
 	}
 	return out, nil
+}
+
+func runASTGrep(ctx context.Context, bin string, source []byte, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, bin, append(args, "--stdin", "--color=never")...)
+	cmd.Stdin = bytes.NewReader(source)
+	stdout, err := cmd.Output()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+			return nil, errors.New("ast-grep could not complete the scan")
+		}
+	}
+	return stdout, nil
+}
+
+func (rs *RuleSet) disableSuppressions(ctx context.Context, source []byte) error {
+	if !bytes.Contains(source, []byte("ast-grep-ignore")) {
+		return nil
+	}
+	stdout, err := runASTGrep(ctx, rs.bin, source, "run", "--lang", "python", "--kind", "comment", "--json=stream")
+	if err != nil {
+		return err
+	}
+	dec := json.NewDecoder(bytes.NewReader(stdout))
+	for {
+		var m struct {
+			Range struct {
+				ByteOffset struct{ Start, End int }
+			}
+		}
+		if err := dec.Decode(&m); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return errors.New("ast-grep returned unreadable comment ranges")
+		}
+		start, end := m.Range.ByteOffset.Start, m.Range.ByteOffset.End
+		if start < 0 || end <= start || end > len(source) {
+			return errors.New("ast-grep returned invalid comment ranges")
+		}
+		comment := source[start:end]
+		copy(comment, bytes.ReplaceAll(comment, []byte("ast-grep-ignore"), []byte("ast_grep_ignore")))
+	}
 }
 
 // ruleFiles lists the rule files directly inside dir, sorted.
@@ -175,35 +222,56 @@ func ruleFiles(dir string) ([]string, error) {
 }
 
 // readRule returns the rule text and the faults that make it unusable.
-func readRule(dir, name string) (string, []Fault) {
+func readRule(dir, name string) (string, string, []Fault) {
 	raw, err := os.ReadFile(filepath.Join(dir, name))
 	if err != nil {
-		return "", []Fault{{Path: name, Cause: fmt.Sprintf("the rule cannot be read (%v)", err), Fix: "make the rule file readable"}}
+		return "", "", []Fault{{Path: name, Cause: "the rule cannot be read", Fix: "make the rule file readable"}}
 	}
 	var doc ruleDoc
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		return "", []Fault{{Path: name, Cause: "the rule is not valid YAML", Fix: "fix the YAML syntax of the rule"}}
+	if err := decodeDocument(raw, &doc); err != nil {
+		return "", "", []Fault{{Path: name, Cause: "the rule must be one valid YAML document", Fix: "keep exactly one valid YAML document in the rule file"}}
 	}
 	if doc.ID == "" {
-		return "", []Fault{{Path: name, Cause: "the rule has no id", Fix: "add an id such as PY012"}}
+		return "", "", []Fault{{Path: name, Cause: "the rule has no id", Fix: "add an id such as PY012"}}
+	}
+	if doc.ID == "." || doc.ID == ".." || strings.ContainsAny(doc.ID, "/\\") {
+		return "", "", []Fault{{Path: name, Cause: "the rule id is not a filename", Fix: "use a rule id without path separators"}}
+	}
+	if !strings.EqualFold(doc.Language, "python") {
+		return "", "", []Fault{{Path: name, Cause: "the rule language is not Python", Fix: "set language to python"}}
 	}
 	if strings.TrimSpace(doc.Message) == "" {
-		return "", []Fault{{Path: name, Cause: fmt.Sprintf("rule %s has an empty message", doc.ID), Fix: "write the corrective instruction in the message"}}
+		return "", "", []Fault{{Path: name, Cause: fmt.Sprintf("rule %s has an empty message", doc.ID), Fix: "write the corrective instruction in the message"}}
 	}
 
 	sidecar := filepath.Join(testsDir, doc.ID+"-test.yml")
 	rawEx, err := os.ReadFile(filepath.Join(dir, sidecar))
 	if err != nil {
-		return "", []Fault{{Path: name, Cause: fmt.Sprintf("rule %s has no examples", doc.ID), Fix: fmt.Sprintf("add %s with valid and invalid examples", sidecar)}}
+		return "", "", []Fault{{Path: name, Cause: fmt.Sprintf("rule %s has no examples", doc.ID), Fix: fmt.Sprintf("add %s with valid and invalid examples", sidecar)}}
 	}
 	var ex exampleDoc
-	if err := yaml.Unmarshal(rawEx, &ex); err != nil {
-		return "", []Fault{{Path: sidecar, Cause: "the examples are not valid YAML", Fix: "fix the YAML syntax of the examples"}}
+	if err := decodeDocument(rawEx, &ex); err != nil {
+		return "", "", []Fault{{Path: sidecar, Cause: "the examples must be one valid YAML document", Fix: "keep exactly one valid YAML document in the examples file"}}
+	}
+	if ex.ID != doc.ID {
+		return "", "", []Fault{{Path: sidecar, Cause: "the examples id does not match the rule id", Fix: "set the examples id to " + doc.ID}}
 	}
 	if len(ex.Valid) == 0 || len(ex.Invalid) == 0 {
-		return "", []Fault{{Path: sidecar, Cause: fmt.Sprintf("rule %s needs both valid and invalid examples", doc.ID), Fix: "add at least one of each"}}
+		return "", "", []Fault{{Path: sidecar, Cause: fmt.Sprintf("rule %s needs both valid and invalid examples", doc.ID), Fix: "add at least one of each"}}
 	}
-	return strings.TrimRight(string(raw), "\n"), nil
+	return strings.TrimRight(string(raw), "\n"), doc.ID, nil
+}
+
+func decodeDocument(raw []byte, out any) error {
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	if err := dec.Decode(out); err != nil {
+		return err
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return errors.New("expected exactly one YAML document")
+	}
+	return nil
 }
 
 var (
@@ -212,22 +280,22 @@ var (
 )
 
 // verify runs the examples of every rule through ast-grep in a scratch copy of the directory.
-func verify(ctx context.Context, bin, dir string, files []string) []Fault {
+func verify(ctx context.Context, bin, dir string, files, examples []string) []Fault {
 	scratch, err := os.MkdirTemp("", "june-rules-")
 	if err != nil {
-		return []Fault{{Cause: fmt.Sprintf("the examples cannot be run (%v)", err), Fix: "make the temporary directory writable"}}
+		return []Fault{{Cause: "the examples cannot be run", Fix: "make the temporary directory writable"}}
 	}
 	defer os.RemoveAll(scratch)
 	if real, err := filepath.EvalSymlinks(scratch); err == nil {
 		scratch = real
 	}
 
-	if err := stage(scratch, dir, files); err != nil {
-		return []Fault{{Cause: fmt.Sprintf("the examples cannot be run (%v)", err), Fix: "make the rules directory readable"}}
+	if err := stage(scratch, dir, files, examples); err != nil {
+		return []Fault{{Cause: "the examples cannot be run", Fix: "make the rules directory readable"}}
 	}
 
 	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, bin, "test", "--config", filepath.Join(scratch, "sgconfig.yml"), "--skip-snapshot-tests")
+	cmd := exec.CommandContext(ctx, bin, "test", "--config", filepath.Join(scratch, "sgconfig.yml"), "--skip-snapshot-tests", "--color=never")
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err = cmd.Run()
 	if err == nil {
@@ -253,11 +321,11 @@ func verify(ctx context.Context, bin, dir string, files []string) []Fault {
 		path := strings.TrimPrefix(m[1], "rules"+string(filepath.Separator))
 		return []Fault{{Path: path, Cause: "ast-grep cannot parse the rule (" + oneLine(failureReason(text)) + ")", Fix: "fix the rule so ast-grep accepts it"}}
 	}
-	return []Fault{{Cause: "the examples cannot be run (" + oneLine(text) + ")", Fix: "run ast-grep test on the rules directory to see why"}}
+	return []Fault{{Cause: "the examples cannot be run", Fix: "run ast-grep test on the rules directory to see why"}}
 }
 
 // stage lays rule files and examples out the way ast-grep test expects them.
-func stage(scratch, dir string, files []string) error {
+func stage(scratch, dir string, files, examples []string) error {
 	for _, d := range []string{"rules", testsDir} {
 		if err := os.MkdirAll(filepath.Join(scratch, d), 0o755); err != nil {
 			return err
@@ -268,15 +336,8 @@ func stage(scratch, dir string, files []string) error {
 			return err
 		}
 	}
-	entries, err := os.ReadDir(filepath.Join(dir, testsDir))
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		if err := copyFile(filepath.Join(dir, testsDir, e.Name()), filepath.Join(scratch, testsDir, e.Name())); err != nil {
+	for _, name := range examples {
+		if err := copyFile(filepath.Join(dir, name), filepath.Join(scratch, name)); err != nil {
 			return err
 		}
 	}

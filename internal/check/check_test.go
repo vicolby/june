@@ -2,10 +2,12 @@ package check_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/vicolby/june/internal/check"
 )
@@ -75,13 +77,13 @@ func expect(t *testing.T, res check.Result, exit int, out string) {
 
 func TestMatchOnTouchedLineFails(t *testing.T) {
 	env := tree(t, map[string]string{"app.py": "import os\n\ndef f(a, b=[]):\n    return a\n"})
-	expect(t, change(t, env, "app.py:3\n"), 1, "app.py:3:10: "+py012)
+	expect(t, change(t, env, "app.py:3\n"), 1, "app.py:3:12: "+py012)
 }
 
 func TestRangeTouchesEveryLineInIt(t *testing.T) {
 	env := tree(t, map[string]string{"app.py": "x = 1\ndef f(a=[]):\n    pass\n"})
-	expect(t, change(t, env, "app.py:1-2\n"), 1, "app.py:2:7: "+py012)
-	expect(t, change(t, env, "app.py:2-2\n"), 1, "app.py:2:7: "+py012)
+	expect(t, change(t, env, "app.py:1-2\n"), 1, "app.py:2:9: "+py012)
+	expect(t, change(t, env, "app.py:2-2\n"), 1, "app.py:2:9: "+py012)
 }
 
 func TestMatchOnUntouchedLineNeverFails(t *testing.T) {
@@ -90,10 +92,10 @@ func TestMatchOnUntouchedLineNeverFails(t *testing.T) {
 }
 
 func TestMatchIsJudgedOnItsFirstLineOnly(t *testing.T) {
-	env := tree(t, map[string]string{"app.py": "def f(\n    a=[\n        1,\n        2,\n    ],\n):\n    pass\n"})
-	// The mutable default starts on line 2. Touching its later lines is not enough.
-	expect(t, change(t, env, "app.py:3-5\n"), 0, "")
-	expect(t, change(t, env, "app.py:2\n"), 1, "app.py:2:5: "+py012)
+	env := tree(t, map[string]string{"app.py": "def f(\n    a=\n    [\n        1,\n        2,\n    ],\n):\n    pass\n"})
+	expect(t, change(t, env, "app.py:4-6\n"), 0, "")
+	expect(t, change(t, env, "app.py:2\n"), 0, "")
+	expect(t, change(t, env, "app.py:3\n"), 1, "app.py:3:5: "+py012)
 }
 
 func TestOutputIsSortedAndPortable(t *testing.T) {
@@ -102,7 +104,7 @@ func TestOutputIsSortedAndPortable(t *testing.T) {
 		"pkg/a.py": "x = 1\ndef g(b={}): pass\ndef h(c=[]): pass\n",
 	})
 	res := change(t, env, "z.py:1\npkg/a.py:3\npkg/a.py:2\n")
-	want := "pkg/a.py:2:7: " + py012 + "pkg/a.py:3:7: " + py012 + "z.py:1:7: " + py012
+	want := "pkg/a.py:2:9: " + py012 + "pkg/a.py:3:9: " + py012 + "z.py:1:9: " + py012
 	expect(t, res, 1, want)
 	if strings.Contains(string(res.Out), env.Dir) || strings.Contains(string(res.Out), "\x1b") {
 		t.Errorf("Out has an absolute path or ANSI: %q", res.Out)
@@ -120,7 +122,7 @@ func TestOnlyPythonFilesAreRead(t *testing.T) {
 
 func TestPathSpellingsAgree(t *testing.T) {
 	env := tree(t, map[string]string{"pkg/app.py": "def f(a=[]): pass\n"})
-	expect(t, change(t, env, "./pkg/../pkg/app.py:1\n"), 1, "pkg/app.py:1:7: "+py012)
+	expect(t, change(t, env, "./pkg/../pkg/app.py:1\n"), 1, "pkg/app.py:1:9: "+py012)
 }
 
 func TestRulesFlagOverridesDefault(t *testing.T) {
@@ -130,12 +132,12 @@ func TestRulesFlagOverridesDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expect(t, res, 1, "app.py:1:7: "+py012)
+	expect(t, res, 1, "app.py:1:9: "+py012)
 	if err := os.RemoveAll(filepath.Join(env.Dir, ".june")); err != nil {
 		t.Fatal(err)
 	}
 	res, _ = check.Change(context.Background(), env, check.Request{Changed: strings.NewReader("app.py:1\n"), Rules: "elsewhere"})
-	expect(t, res, 1, "app.py:1:7: "+py012)
+	expect(t, res, 1, "app.py:1:9: "+py012)
 }
 
 func TestRuleSetExistsOnlyIfEveryExampleBehaved(t *testing.T) {
@@ -167,12 +169,12 @@ func TestRefusals(t *testing.T) {
 		out   string
 	}{
 		{name: "no list", out: "june: error: the touched lines are unknown. Fix: pass --changed-lines FILE, or - to read the list from stdin\n"},
-		{name: "not an entry", list: ptr("app.py\n"), out: "june: error: changed-lines line 1, \"app.py\", is not valid: expected path:N or path:N-M. Fix: " + listFix + "\n"},
-		{name: "line zero", list: ptr("app.py:0\n"), out: "june: error: changed-lines line 1, \"app.py:0\", is not valid: \"0\" is not a line number from 1. Fix: " + listFix + "\n"},
-		{name: "reversed range", list: ptr("\napp.py:9-3\n"), out: "june: error: changed-lines line 2, \"app.py:9-3\", is not valid: \"3\" is not a line number from 9. Fix: " + listFix + "\n"},
-		{name: "words", list: ptr("app.py:x\n"), out: "june: error: changed-lines line 1, \"app.py:x\", is not valid: \"x\" is not a line number from 1. Fix: " + listFix + "\n"},
-		{name: "absolute path", list: ptr("/etc/app.py:1\n"), out: "june: error: changed-lines line 1, \"/etc/app.py:1\", is not valid: the path \"/etc/app.py\" is not inside the repository. Fix: " + listFix + "\n"},
-		{name: "escaping path", list: ptr("../app.py:1\n"), out: "june: error: changed-lines line 1, \"../app.py:1\", is not valid: the path \"../app.py\" is not inside the repository. Fix: " + listFix + "\n"},
+		{name: "not an entry", list: ptr("app.py\n"), out: "june: error: changed-lines line 1 is not valid: expected path:N or path:N-M. Fix: " + listFix + "\n"},
+		{name: "line zero", list: ptr("app.py:0\n"), out: "june: error: changed-lines line 1 is not valid: expected a line number from 1. Fix: " + listFix + "\n"},
+		{name: "reversed range", list: ptr("\napp.py:9-3\n"), out: "june: error: changed-lines line 2 is not valid: expected a line number from 9. Fix: " + listFix + "\n"},
+		{name: "words", list: ptr("app.py:x\n"), out: "june: error: changed-lines line 1 is not valid: expected a line number from 1. Fix: " + listFix + "\n"},
+		{name: "absolute path", list: ptr("/etc/app.py:1\n"), out: "june: error: changed-lines line 1 is not valid: the path is not inside the repository. Fix: " + listFix + "\n"},
+		{name: "escaping path", list: ptr("../app.py:1\n"), out: "june: error: changed-lines line 1 is not valid: the path is not inside the repository. Fix: " + listFix + "\n"},
 		{name: "missing file", list: ptr("nope.py:1\n"), out: "june: error: changed-lines names nope.py, which is not a file in the tree. Fix: regenerate the list from the current tree\n"},
 		{name: "missing rules", list: ptr("app.py:1\n"), rules: "absent", out: "june: error: absent: the rules directory does not exist. Fix: create it or point --rules at an existing rules directory\n"},
 		{name: "missing ast-grep", list: ptr("app.py:1\n"), path: "none", out: "june: error: .june/rules: ast-grep was not found. Fix: install ast-grep and put it on PATH, for example npm install --global @ast-grep/cli\n"},
@@ -206,5 +208,101 @@ func TestCancelledContextIsAnError(t *testing.T) {
 	cancel()
 	if _, err := check.Change(ctx, env, check.Request{Changed: strings.NewReader("app.py:1\n")}); err == nil {
 		t.Error("Change with a cancelled context returned no error")
+	}
+}
+
+func TestMutableDefaultForms(t *testing.T) {
+	values := []string{"[]", "{}", "{1}", "[x for x in ()]", "{x: x for x in ()}", "{x for x in ()}"}
+	for _, parameter := range []string{"def f(a=", "def f(a: object =", "f = (lambda a="} {
+		for _, value := range values {
+			for _, depth := range []int{0, 1, 3} {
+				t.Run(fmt.Sprintf("%s%s/%d", parameter, value, depth), func(t *testing.T) {
+					ending := "): pass\n"
+					if strings.Contains(parameter, "lambda") {
+						ending = ": a)\n"
+					}
+					source := parameter + strings.Repeat("(", depth) + value + strings.Repeat(")", depth) + ending
+					env := tree(t, map[string]string{"app.py": source})
+					column := len(parameter) + depth + 1
+					expect(t, change(t, env, "app.py:1\n"), 1, fmt.Sprintf("app.py:1:%d: %s", column, py012))
+				})
+			}
+		}
+	}
+}
+
+func TestOnlyMutableDefaultValuesMatch(t *testing.T) {
+	for _, value := range []string{"(None)", "((1))", "([],)", "tuple([])", "([] or None)", "([] if condition else None)", "(lambda: [])"} {
+		env := tree(t, map[string]string{"app.py": "def f(a=" + value + "): pass\n"})
+		expect(t, change(t, env, "app.py:1\n"), 0, "")
+	}
+}
+
+func TestMultilineMutableValueAnchors(t *testing.T) {
+	for _, parameter := range []string{"a", "a: list"} {
+		env := tree(t, map[string]string{"app.py": "def f(\n    " + parameter + "=\n    ((\n        []\n    )),\n): pass\n"})
+		expect(t, change(t, env, "app.py:2-3\n"), 0, "")
+		expect(t, change(t, env, "app.py:4\n"), 1, "app.py:4:9: "+py012)
+	}
+	env := tree(t, map[string]string{"app.py": "f = (lambda a=\n    ((\n        []\n    )): a)\n"})
+	expect(t, change(t, env, "app.py:1-2\n"), 0, "")
+	expect(t, change(t, env, "app.py:3\n"), 1, "app.py:3:9: "+py012)
+}
+
+func TestNativeSuppressionsDoNotHideFindings(t *testing.T) {
+	for _, directive := range []string{"ast-grep-ignore", "ast-grep-ignore: PY012", "ast-grep-ignore: OTHER, PY012"} {
+		for _, tc := range []struct {
+			source string
+			line   int
+		}{
+			{"# " + directive + "\n\ndef f(a=[]): pass\n", 3},
+			{"# " + directive + "\ndef f(a=[]): pass\n", 2},
+			{"def f(a=[]): pass # " + directive + "\n", 1},
+			{"# é " + directive + "\ndef f(a=[]): pass # " + directive + "\n", 2},
+		} {
+			env := tree(t, map[string]string{"app.py": tc.source})
+			expect(t, change(t, env, fmt.Sprintf("app.py:%d\n", tc.line)), 1, fmt.Sprintf("app.py:%d:9: %s", tc.line, py012))
+		}
+	}
+}
+
+func TestChangedLinesPreservesPathWhitespace(t *testing.T) {
+	env := tree(t, map[string]string{" app.py": "def f(a=[]): pass\n", "app.py": "x = 1\n", "\tapp.py": "def f(a=[]): pass\n"})
+	for _, list := range []string{" app.py:1\n", "\n \t\n app.py:1-1\r\n"} {
+		expect(t, change(t, env, list), 1, " app.py:1:9: "+py012)
+	}
+	expect(t, change(t, env, "\tapp.py:1\n"), 1, "\tapp.py:1:9: "+py012)
+	expect(t, change(t, env, "app.py:1\n"), 0, "")
+}
+
+func TestFailureOutputHasNoAbsolutePaths(t *testing.T) {
+	for _, failure := range []string{"rules directory", "rule file", "reader", "scan", "temporary directory"} {
+		t.Run(failure, func(t *testing.T) {
+			env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\n"})
+			req := check.Request{Changed: strings.NewReader("app.py:1\n")}
+			switch failure {
+			case "rules directory":
+				req.Rules = filepath.Join(env.Dir, "missing", "rules")
+			case "rule file":
+				file := filepath.Join(env.Dir, ".june", "rules", "PY012.yml")
+				if err := os.Chmod(file, 0); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.Chmod(file, 0o644) })
+			case "reader":
+				req.Changed = iotest.ErrReader(&os.PathError{Op: "read", Path: filepath.Join(env.Dir, "changed.txt"), Err: os.ErrPermission})
+			case "scan":
+				write(t, filepath.Join(env.Dir, "app.py"), "# coding: latin-1\nx = '\xe9'\ndef f(a=[]): pass\n")
+			case "temporary directory":
+				t.Setenv("TMPDIR", filepath.Join(env.Dir, "missing"))
+			}
+			res, err := check.Change(context.Background(), env, req)
+			if err != nil || res.Exit != 2 {
+				t.Fatalf("Change = %+v, %v, want refusal", res, err)
+			}
+			if strings.Contains(string(res.Out), env.Dir) || strings.Contains(string(res.Out), "\x1b") {
+				t.Errorf("output exposes an absolute path or ANSI: %s", res.Out)
+			}
+		})
 	}
 }

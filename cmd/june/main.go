@@ -61,7 +61,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	default:
 		f, err := os.Open(*changedLines)
 		if err != nil {
-			return fail(stderr, fmt.Sprintf("the changed-lines file cannot be read (%v). Fix: pass an existing file to --changed-lines", err))
+			return fail(stderr, "the changed-lines file cannot be read. Fix: pass an existing file to --changed-lines")
 		}
 		defer f.Close()
 		req.Changed = f
