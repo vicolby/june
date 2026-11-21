@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -107,5 +108,26 @@ func TestMissingListFileExitsTwo(t *testing.T) {
 		if code != 2 || errOut.String() != want || out.Len() != 0 {
 			t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
 		}
+	}
+}
+
+func TestInterruptedRunExplainsItself(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out, errOut bytes.Buffer
+	code := run(ctx, []string{"--changed-lines", "-"}, strings.NewReader("app.py:2\n"), &out, &errOut, project(t))
+	want := "june: error: june was interrupted before it reached a verdict. Fix: run june again and let it finish\n"
+	if code != 2 || errOut.String() != want || out.Len() != 0 {
+		t.Errorf("exit = %d, stderr = %q, stdout = %q, want 2 and %q", code, errOut.String(), out.String(), want)
+	}
+}
+
+func TestMissingWorkingDirectoryExplainsItself(t *testing.T) {
+	getwd := func() (string, error) { return "", errors.New("getwd: no such file or directory") }
+	var out, errOut bytes.Buffer
+	code := start(context.Background(), []string{"--changed-lines", "-"}, strings.NewReader("app.py:2\n"), &out, &errOut, getwd)
+	want := "june: error: the working directory cannot be determined (getwd: no such file or directory). Fix: run june from an existing directory\n"
+	if code != 2 || out.Len() != 0 || errOut.String() != want {
+		t.Errorf("exit = %d, stderr = %q, stdout = %q, want 2 and %q", code, errOut.String(), out.String(), want)
 	}
 }

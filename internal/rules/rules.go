@@ -25,6 +25,10 @@ const (
 	astGrepFindFix  = "install ast-grep and put it on PATH, for example npm install --global @ast-grep/cli"
 	exampleFixHint  = "make the rule and its examples in %s agree"
 	pythonExtension = ".py"
+
+	// isolatedConfig is the only ast-grep configuration june ever uses, so a run depends on the
+	// shipped rules and the touched files and never on an sgconfig.yml found in the working directory.
+	isolatedConfig = "ruleDirs: [rules]\ntestConfigs:\n  - testDir: " + testsDir + "\n"
 )
 
 // Fault is one reason a rule directory cannot be trusted.
@@ -115,6 +119,7 @@ func Load(ctx context.Context, dir string) (*RuleSet, []Fault) {
 // Matches are anchored at their first line. File is reported as given.
 func (rs *RuleSet) Scan(ctx context.Context, files []string) (Scanned, error) {
 	var out Scanned
+	var config string
 	for _, f := range files {
 		if filepath.Ext(f) != pythonExtension {
 			continue
@@ -126,10 +131,20 @@ func (rs *RuleSet) Scan(ctx context.Context, files []string) (Scanned, error) {
 		if !utf8.Valid(source) || bytes.IndexByte(source, 0) >= 0 {
 			return Scanned{}, errors.New("a Python file is not UTF-8 text")
 		}
-		if err := rs.disableSuppressions(ctx, source); err != nil {
+		if config == "" {
+			dir, err := os.MkdirTemp("", "june-scan-")
+			if err != nil {
+				return Scanned{}, errors.New("the scan cannot create its configuration")
+			}
+			defer os.RemoveAll(dir)
+			if config, err = writeConfig(dir); err != nil {
+				return Scanned{}, errors.New("the scan cannot create its configuration")
+			}
+		}
+		if err := rs.disableSuppressions(ctx, config, source); err != nil {
 			return Scanned{}, err
 		}
-		stdout, err := runASTGrep(ctx, rs.bin, source, "scan", "--inline-rules", rs.inline, "--json=stream")
+		stdout, err := runASTGrep(ctx, rs.bin, config, source, "scan", "--inline-rules", rs.inline, "--json=stream")
 		if err != nil {
 			return Scanned{}, err
 		}
@@ -158,8 +173,18 @@ func (rs *RuleSet) Scan(ctx context.Context, files []string) (Scanned, error) {
 	return out, nil
 }
 
-func runASTGrep(ctx context.Context, bin string, source []byte, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, bin, append(args, "--stdin", "--color=never")...)
+// writeConfig lays out the isolated ast-grep configuration in dir and returns its path.
+func writeConfig(dir string) (string, error) {
+	if err := os.MkdirAll(filepath.Join(dir, "rules"), 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "sgconfig.yml")
+	return path, os.WriteFile(path, []byte(isolatedConfig), 0o644)
+}
+
+func runASTGrep(ctx context.Context, bin, config string, source []byte, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, bin, append(args, "--config", config, "--stdin", "--color=never")...)
+	cmd.Dir = filepath.Dir(config)
 	cmd.Stdin = bytes.NewReader(source)
 	stdout, err := cmd.Output()
 	if ctx.Err() != nil {
@@ -174,11 +199,11 @@ func runASTGrep(ctx context.Context, bin string, source []byte, args ...string) 
 	return stdout, nil
 }
 
-func (rs *RuleSet) disableSuppressions(ctx context.Context, source []byte) error {
+func (rs *RuleSet) disableSuppressions(ctx context.Context, config string, source []byte) error {
 	if !bytes.Contains(source, []byte("ast-grep-ignore")) {
 		return nil
 	}
-	stdout, err := runASTGrep(ctx, rs.bin, source, "run", "--lang", "python", "--kind", "comment", "--json=stream")
+	stdout, err := runASTGrep(ctx, rs.bin, config, source, "run", "--lang", "python", "--kind", "comment", "--json=stream")
 	if err != nil {
 		return err
 	}
@@ -296,6 +321,7 @@ func verify(ctx context.Context, bin, dir string, files, examples []string) []Fa
 
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, bin, "test", "--config", filepath.Join(scratch, "sgconfig.yml"), "--skip-snapshot-tests", "--color=never")
+	cmd.Dir = scratch
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err = cmd.Run()
 	if err == nil {
@@ -326,10 +352,11 @@ func verify(ctx context.Context, bin, dir string, files, examples []string) []Fa
 
 // stage lays rule files and examples out the way ast-grep test expects them.
 func stage(scratch, dir string, files, examples []string) error {
-	for _, d := range []string{"rules", testsDir} {
-		if err := os.MkdirAll(filepath.Join(scratch, d), 0o755); err != nil {
-			return err
-		}
+	if _, err := writeConfig(scratch); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(scratch, testsDir), 0o755); err != nil {
+		return err
 	}
 	for _, name := range files {
 		if err := copyFile(filepath.Join(dir, name), filepath.Join(scratch, "rules", name)); err != nil {
@@ -341,8 +368,7 @@ func stage(scratch, dir string, files, examples []string) error {
 			return err
 		}
 	}
-	cfg := "ruleDirs: [rules]\ntestConfigs:\n  - testDir: " + testsDir + "\n"
-	return os.WriteFile(filepath.Join(scratch, "sgconfig.yml"), []byte(cfg), 0o644)
+	return nil
 }
 
 func copyFile(src, dst string) error {

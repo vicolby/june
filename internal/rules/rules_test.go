@@ -279,3 +279,20 @@ func TestScanUnavailableEngine(t *testing.T) {
 		t.Fatalf("Scan = %+v, %v, want a refusal without absolute paths", got, err)
 	}
 }
+
+func TestRunIgnoresProjectConfigInWorkingDirectory(t *testing.T) {
+	rs := loadGood(t)
+	cwd := t.TempDir()
+	write(t, filepath.Join(cwd, "sgconfig.yml"), "ruleDirs: [rules]\nutilDirs: [missing]\n")
+	t.Chdir(cwd)
+
+	py := filepath.Join(t.TempDir(), "a.py")
+	write(t, py, "x = [1]  # ast-grep-ignore\ny = [2]\n")
+	got, err := rs.Scan(context.Background(), []string{py})
+	if err != nil {
+		t.Fatalf("Scan with a project sgconfig.yml in the working directory: %v", err)
+	}
+	if len(got.Matches) != 2 {
+		t.Errorf("matches = %+v, want both lists", got.Matches)
+	}
+}

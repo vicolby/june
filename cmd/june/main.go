@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -18,14 +19,23 @@ var version = "dev"
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	os.Exit(run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, snapshotEnv()))
+	os.Exit(start(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, os.Getwd))
+}
+
+// start snapshots the environment and runs june.
+func start(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, getwd func() (string, error)) int {
+	env, err := snapshotEnv(getwd)
+	if err != nil {
+		return fail(stderr, fmt.Sprintf("the working directory cannot be determined (%v). Fix: run june from an existing directory", err))
+	}
+	return run(ctx, args, stdin, stdout, stderr, env)
 }
 
 // snapshotEnv captures the caller's working directory and environment for check.
-func snapshotEnv() check.Env {
-	dir, err := os.Getwd()
+func snapshotEnv(getwd func() (string, error)) (check.Env, error) {
+	dir, err := getwd()
 	if err != nil {
-		dir = ""
+		return check.Env{}, err
 	}
 	vars := map[string]string{}
 	for _, kv := range os.Environ() {
@@ -33,7 +43,7 @@ func snapshotEnv() check.Env {
 			vars[k] = v
 		}
 	}
-	return check.Env{Dir: dir, Vars: vars}
+	return check.Env{Dir: dir, Vars: vars}, nil
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, env check.Env) int {
@@ -68,6 +78,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 
 	res, err := check.Change(ctx, env, req)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return fail(stderr, "june was interrupted before it reached a verdict. Fix: run june again and let it finish")
+	}
 	if err != nil {
 		return fail(stderr, fmt.Sprintf("%v. Fix: report this as a june bug", err))
 	}
