@@ -105,7 +105,9 @@ go run ./cmd/june --rules rules/python --changed-lines changed.txt
 
 The list contains one `path:7` or `path:7-12` entry per line, with one-based, inclusive line ranges and paths relative to the working directory.
 Blank lines are ignored; whitespace in filenames is preserved, and only `.py` files are checked.
-The current check requires this list and emits plain text; git scope inference, `verify`, and CI-specific formats remain planned.
+The current check requires this list and emits plain text. Completed checks (exit 0 or 1) end with a summary line, `june: 1 error, 0 warnings, 0 opt-outs; checked 2 files, 5 changed lines`; refusals (exit 2) have no summary.
+Coverage counts distinct listed Python files and changed lines, counting overlapping ranges only once; the opt-out count is every opt-out printed on a touched line, honoured or not.
+Git scope inference, `verify`, and CI-specific formats remain planned.
 
 `cmd/june` is a shell and owns no decision.
 It maps flags to a `Request`, snapshots the environment, writes `Out` and `Files`, and returns `Exit`.

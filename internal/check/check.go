@@ -4,6 +4,7 @@ package check
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 
@@ -96,6 +97,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 
 	var ds []diag.Diagnostic
 	exit := 0
+	var errs, warns, optOutCount int
 	type site struct {
 		file string
 		line int
@@ -124,6 +126,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 			d.Msg = "opt-out: " + o.Reason + " (suppresses nothing: no " + o.Rule + " finding on this line)"
 		}
 		ds = append(ds, d)
+		optOutCount++
 	}
 	for _, m := range scanned.Matches {
 		path := byAbs[m.File]
@@ -134,10 +137,31 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		if m.Severity == "error" {
 			sev = diag.Error
 			exit = 1
+			errs++
+		} else {
+			warns++
 		}
 		ds = append(ds, diag.Diagnostic{File: path, Line: m.Line, Col: m.Col, Code: m.Rule, Sev: sev, Kind: diag.Finding, Msg: m.Msg})
 	}
-	return render(req, exit, ds), nil
+	lines := 0
+	for _, f := range files {
+		lines += touched.lineCount(f)
+	}
+	return render(req, exit, ds, summary(errs, warns, optOutCount, len(files), lines)), nil
+}
+
+// summary is the closing line of a verdict: finding counts and the scope that was covered.
+func summary(errs, warns, optOuts, files, lines int) string {
+	return fmt.Sprintf("june: %s, %s, %s; checked %s, %s",
+		count(errs, "error"), count(warns, "warning"), count(optOuts, "opt-out"),
+		count(files, "file"), count(lines, "changed line"))
+}
+
+func count(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 func refuse(req Request, msgs ...string) Result {
@@ -145,11 +169,11 @@ func refuse(req Request, msgs ...string) Result {
 	for i, m := range msgs {
 		ds[i] = diag.Diagnostic{Kind: diag.Failure, Sev: diag.Error, Msg: m}
 	}
-	return render(req, 2, ds)
+	return render(req, 2, ds, "")
 }
 
-func render(req Request, exit int, ds []diag.Diagnostic) Result {
-	out, files := diag.Render(ds, "", req.Format)
+func render(req Request, exit int, ds []diag.Diagnostic, summary string) Result {
+	out, files := diag.Render(ds, summary, req.Format)
 	return Result{Exit: exit, Out: out, Files: files, Diags: ds}
 }
 

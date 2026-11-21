@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -69,14 +70,34 @@ func change(t *testing.T, env check.Env, list string) check.Result {
 	return res
 }
 
-func expect(t *testing.T, res check.Result, exit int, out string) {
+var summaryLine = regexp.MustCompile(`^june: \d+ errors?, \d+ warnings?, \d+ opt-outs?; checked \d+ files?, \d+ changed lines?\n$`)
+
+// expect compares the findings in Out; the summary line has its own tests, so here it only has to close the output.
+func expect(t *testing.T, res check.Result, exit int, findings string) {
 	t.Helper()
 	if res.Exit != exit {
 		t.Errorf("Exit = %d, want %d", res.Exit, exit)
 	}
-	if string(res.Out) != out {
-		t.Errorf("Out =\n%s\nwant\n%s", res.Out, out)
+	if got := findingsOf(t, res); got != findings {
+		t.Errorf("findings =\n%s\nwant\n%s", got, findings)
 	}
+}
+
+// findingsOf returns Out without its summary line, failing if the summary is missing.
+func findingsOf(t *testing.T, res check.Result) string {
+	t.Helper()
+	out := string(res.Out)
+	i := strings.LastIndex(strings.TrimSuffix(out, "\n"), "\n") + 1
+	if !summaryLine.MatchString(out[i:]) {
+		t.Errorf("Out does not end with a summary line:\n%s", out)
+		return out
+	}
+	return out[:i]
+}
+
+func summaryOf(res check.Result) string {
+	out := strings.TrimSuffix(string(res.Out), "\n")
+	return out[strings.LastIndex(out, "\n")+1:]
 }
 
 func TestMatchOnTouchedLineFails(t *testing.T) {
@@ -197,7 +218,9 @@ func TestRefusals(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			expect(t, res, 2, tt.out)
+			if res.Exit != 2 || string(res.Out) != tt.out {
+				t.Errorf("Exit = %d, Out =\n%s\nwant 2 and\n%s", res.Exit, res.Out, tt.out)
+			}
 		})
 	}
 }
@@ -341,6 +364,92 @@ func TestFailureOutputHasNoAbsolutePaths(t *testing.T) {
 	}
 }
 
+const warnRule = `id: LST02
+language: python
+severity: warning
+message: "Name the variable. Fix: rename it."
+rule:
+  pattern: tmp = $V
+`
+
+const warnExample = `id: LST02
+valid:
+  - "value = 1"
+invalid:
+  - "tmp = 1"
+`
+
+func withWarningRule(t *testing.T, env check.Env) check.Env {
+	t.Helper()
+	write(t, filepath.Join(env.Dir, ".june", "rules", "LST02.yml"), warnRule)
+	write(t, filepath.Join(env.Dir, ".june", "rules", "rule-tests", "LST02-test.yml"), warnExample)
+	return env
+}
+
+const lst02 = "LST02 Name the variable. Fix: rename it.\n"
+
+func TestWarningOnTouchedLinePrintsAndExitsZero(t *testing.T) {
+	env := withWarningRule(t, tree(t, map[string]string{"app.py": "x = 1\ntmp = 2\n"}))
+	res := change(t, env, "app.py:2\n")
+	expect(t, res, 0, "app.py:2:1: "+lst02)
+	if got, want := summaryOf(res), "june: 0 errors, 1 warning, 0 opt-outs; checked 1 file, 1 changed line"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+}
+
+func TestSeverityComesFromTheRule(t *testing.T) {
+	env := withWarningRule(t, tree(t, map[string]string{"app.py": "tmp = 1\ndef f(a=[]): pass\n"}))
+	res := change(t, env, "app.py:1-2\n")
+	expect(t, res, 1, "app.py:1:1: "+lst02+"app.py:2:9: "+py012)
+	if got, want := summaryOf(res), "june: 1 error, 1 warning, 0 opt-outs; checked 1 file, 2 changed lines"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+
+	// Raising the same rule to an error is the only thing that makes it fail.
+	write(t, filepath.Join(env.Dir, ".june", "rules", "LST02.yml"), strings.Replace(warnRule, "warning", "error", 1))
+	res = change(t, env, "app.py:1\n")
+	expect(t, res, 1, "app.py:1:1: "+lst02)
+	if got, want := summaryOf(res), "june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 1 changed line"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+}
+
+func TestSummaryCountsCoverage(t *testing.T) {
+	env := tree(t, map[string]string{"a.py": "x = 1\ny = 2\nz = 3\n", "b.py": "x = 1\n", "notes.md": "text\n"})
+	cases := []struct{ list, want string }{
+		{"", "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines"},
+		{"a.py:1-2\na.py:2-3\na.py:3\n", "june: 0 errors, 0 warnings, 0 opt-outs; checked 1 file, 3 changed lines"},
+		{"a.py:1\nb.py:1\nnotes.md:1\n", "june: 0 errors, 0 warnings, 0 opt-outs; checked 2 files, 2 changed lines"},
+	}
+	for _, tc := range cases {
+		res := change(t, env, tc.list)
+		expect(t, res, 0, "")
+		if got := summaryOf(res); got != tc.want {
+			t.Errorf("list %q: summary = %q, want %q", tc.list, got, tc.want)
+		}
+	}
+}
+
+func TestSummaryIsTheLastLineAndDoesNotChangeFindings(t *testing.T) {
+	env := tree(t, map[string]string{"a.py": "def f(a=[]): pass\n", "b.py": "def g(b={}): pass\n"})
+	res := change(t, env, "a.py:1\nb.py:1\n")
+	lines := strings.Split(strings.TrimSuffix(string(res.Out), "\n"), "\n")
+	if len(lines) != 3 || !strings.HasPrefix(lines[2], "june: 2 errors") {
+		t.Fatalf("Out = %q, want two findings then the summary", res.Out)
+	}
+	if res.Exit != 1 || len(res.Diags) != 2 {
+		t.Errorf("Exit = %d, Diags = %d, want 1 and 2", res.Exit, len(res.Diags))
+	}
+}
+
+func TestRefusalHasNoSummary(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "x = 1\n"})
+	res := change(t, env, "app.py\n")
+	if res.Exit != 2 || strings.Contains(string(res.Out), "checked") {
+		t.Errorf("Exit = %d, Out = %q, want a refusal with no summary", res.Exit, res.Out)
+	}
+}
+
 func TestOptOuts(t *testing.T) {
 	const body = `def a(x=[]):  # june: ignore[PY012] shared on purpose
     pass
@@ -433,4 +542,12 @@ func TestOptOutNearMissesSuppressNothing(t *testing.T) {
 func TestOptOutOffTouchedLineIsSilent(t *testing.T) {
 	env := tree(t, map[string]string{"a.py": "def a(x=[]):  # june: ignore[PY012] why\n    pass\n"})
 	expect(t, change(t, env, "a.py:2\n"), 0, "")
+}
+
+func TestSummaryCountsOptOutsOnTouchedLines(t *testing.T) {
+	env := tree(t, map[string]string{"a.py": "def a(x=[]):  # june: ignore[PY012] why\n    pass\ndef b(x=1):  # june: ignore[PY012]\n    pass\ndef c(x=1):  # june: ignore[PY012] untouched\n"})
+	res := change(t, env, "a.py:1-4\n")
+	if got, want := summaryOf(res), "june: 0 errors, 0 warnings, 2 opt-outs; checked 1 file, 4 changed lines"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
 }
