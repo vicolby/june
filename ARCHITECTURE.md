@@ -57,10 +57,11 @@ Scope inference, first hit wins: `Changed`, `Base`, pre-commit refs, GitHub pull
 The summary line prints the base and where it came from.
 
 Errors:
-- `error` is returned only when june cannot produce an explanation.
-- Every outcome june can explain, such as a shallow clone, a missing merge base, a push event with no base, a rule fault, a missing ast-grep or a bad list, comes back as a diagnostic with Exit 2.
+- `Change` returns an `error` for cancellation or when june cannot produce an explanation.
+- Other outcomes june can explain, such as a shallow clone, a missing merge base, a push event with no base, a rule fault, a missing ast-grep or a bad list, come back as a diagnostic with Exit 2.
+- `cmd/june` explains cancellation and a working-directory lookup failure as Exit 2 diagnostics, preserving the lookup cause; it reserves the june-bug message for unexplained errors.
 - Each reads `june: error: <cause>. Fix: <instruction>`.
-- A cancelled context kills child processes.
+- A cancelled context abandons changed-list reads and kills child processes.
 
 It hides: repo discovery, CI detection and the inference table, merge-base and shallow handling, diff parsing, renames, untracked and binary files, the list parser, the touched filter and anchor rule, opt-out matching, severity to exit code, sorting, which files get scanned.
 
