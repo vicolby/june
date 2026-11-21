@@ -78,8 +78,9 @@ func TestMergedResultScopeIsTheMergeCommitFirstParent(t *testing.T) {
 	}{
 		{"merged result", "merged_result", target, target},
 		{"merge train", "merge_train", target, target},
-		{"merged result without target sha", "merged_result", "", "HEAD^1"},
-		{"merge train without target sha", "merge_train", "", "HEAD^1"},
+		{"merged result without target sha", "merged_result", "", target},
+		{"merge train without target sha", "merge_train", "", target},
+		{"merged result with a stale target sha", "merged_result", diffBase, target},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			vars := map[string]string{
@@ -97,6 +98,40 @@ func TestMergedResultScopeIsTheMergeCommitFirstParent(t *testing.T) {
 				t.Errorf("summary = %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// A two-car merge train: car 1 lands a violation on a.py, then car 2's pipeline checks out the merge of car 1's result with its own branch.
+// GitLab sets CI_MERGE_REQUEST_TARGET_BRANCH_SHA to the real target tip, which is not the merge commit's first parent.
+func TestMergeTrainSecondCarIsNotBlamedForTheFirst(t *testing.T) {
+	env := repo(t, map[string]string{"a.py": "x = 1\n", "b.py": "y = 1\n"})
+	git(t, env.Dir, "checkout", "-q", "main")
+	realTarget := head(t, env.Dir, "HEAD")
+	git(t, env.Dir, "checkout", "-q", "-b", "car1")
+	write(t, filepath.Join(env.Dir, "a.py"), "x = 1\n"+old)
+	commit(t, env)
+	git(t, env.Dir, "checkout", "-q", "-b", "car2", "main")
+	write(t, filepath.Join(env.Dir, "b.py"), "y = 1\ndef g(b={}): pass\n")
+	commit(t, env)
+	diffBase := head(t, env.Dir, "main")
+	git(t, env.Dir, "checkout", "-q", "-b", "train", "main")
+	git(t, env.Dir, "merge", "-q", "--no-ff", "-m", "car 1", "car1")
+	car1 := head(t, env.Dir, "HEAD")
+	git(t, env.Dir, "merge", "-q", "--no-ff", "-m", "car 2", "car2")
+	if got := head(t, env.Dir, "HEAD^1"); got != car1 {
+		t.Fatalf("HEAD^1 = %s, want car 1's result %s", got, car1)
+	}
+	vars := map[string]string{
+		"GITLAB_CI":                          "true",
+		"CI_MERGE_REQUEST_EVENT_TYPE":        "merge_train",
+		"CI_MERGE_REQUEST_DIFF_BASE_SHA":     diffBase,
+		"CI_MERGE_REQUEST_TARGET_BRANCH_SHA": realTarget,
+	}
+	res := bare(t, check.Env{Dir: env.Dir, Vars: vars})
+	expect(t, res, 1, "b.py:2:9: "+py012)
+	want := "june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 1 changed line; base " + car1 + " (merge request diff base)"
+	if got := summaryOf(res); got != want {
+		t.Errorf("summary = %q, want %q", got, want)
 	}
 }
 

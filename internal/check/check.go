@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 
 	"github.com/vicolby/june/internal/diag"
 	"github.com/vicolby/june/internal/rules"
@@ -243,7 +244,7 @@ func findTouched(ctx context.Context, env Env, req Request) (touchedSet, scope, 
 		if req.Base != "" {
 			return gitTouched(ctx, env, req.Base, sourceFlag)
 		}
-		if base := mergeRequestBase(env); base != "" {
+		if base := mergeRequestBase(ctx, env); base != "" {
 			return gitTouched(ctx, env, base, sourceMR)
 		}
 		return gitTouched(ctx, env, "", "")
@@ -272,14 +273,19 @@ func gitlab(env Env) bool { return env.Vars["GITLAB_CI"] == "true" }
 // mergeRequestBase is the commit a GitLab merge request pipeline judges from, or "" outside one.
 // Detached pipelines use the diff base. Merged results and merge trains check out a merge commit,
 // so the merge request's own changes are that commit's first parent through HEAD.
-func mergeRequestBase(env Env) string {
+// CI_MERGE_REQUEST_TARGET_BRANCH_SHA is never used for this: it is the target branch tip, which on a later
+// merge train car sits behind the first parent and would blame this merge request for the cars ahead of it.
+// An unresolvable first parent comes back as "HEAD^1", which the git adapter refuses with a named fix.
+func mergeRequestBase(ctx context.Context, env Env) string {
 	if !gitlab(env) {
 		return ""
 	}
 	switch env.Vars["CI_MERGE_REQUEST_EVENT_TYPE"] {
 	case "merged_result", "merge_train":
-		if sha := env.Vars["CI_MERGE_REQUEST_TARGET_BRANCH_SHA"]; sha != "" {
-			return sha
+		if out, err := git(ctx, env, "", "rev-parse", "--verify", "--quiet", "HEAD^1^{commit}"); err == nil {
+			if sha := strings.TrimSpace(out); sha != "" {
+				return sha
+			}
 		}
 		return "HEAD^1"
 	default:

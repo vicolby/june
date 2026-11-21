@@ -26,7 +26,7 @@ To adopt them in a repo, copy `$(brew --prefix)/share/june/rules/python` to `.ju
 
 In a merge request pipeline, june judges the lines this merge request changed and writes a GitLab Code Quality report, `gl-code-quality-report.json`, beside the plain text.
 A detached pipeline takes the merge request diff base (`CI_MERGE_REQUEST_DIFF_BASE_SHA`).
-A merged results or merge train pipeline checks out a merge commit, so it takes that commit's first parent (`CI_MERGE_REQUEST_TARGET_BRANCH_SHA`, or `HEAD^1` when the variable is unset).
+A merged results or merge train pipeline checks out a merge commit, so it takes that commit's first parent (`HEAD^1`); `CI_MERGE_REQUEST_TARGET_BRANCH_SHA` is not used, because on a later merge train car it sits behind the first parent.
 The findings and the exit code match any other run of those same lines.
 The job needs full clone depth so the base is in the clone; with a shallow clone june exits 2 and names the fix.
 

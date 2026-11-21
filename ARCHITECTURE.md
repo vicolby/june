@@ -121,7 +121,7 @@ On a check in a GitLab CI job (`GITLAB_CI=true`) the format is inferred as GitLa
 Findings are `major` for an error and `minor` for a warning, opt-outs are `info`, and legacy matches stay out; each fingerprint hashes file, rule, message and the ordinal among identical ones.
 A merge request pipeline takes its base after `--base` and before local inference, and names it `merge request diff base` in the summary.
 A detached pipeline (`CI_MERGE_REQUEST_DIFF_BASE_SHA` set) uses that sha.
-A merged results or merge train pipeline (`CI_MERGE_REQUEST_EVENT_TYPE` of `merged_result` or `merge_train`) uses the merge commit's first parent: `CI_MERGE_REQUEST_TARGET_BRANCH_SHA`, or `HEAD^1` when that variable is unset.
+A merged results or merge train pipeline (`CI_MERGE_REQUEST_EVENT_TYPE` of `merged_result` or `merge_train`) uses the merge commit's first parent, `HEAD^1`, resolved to its sha for the summary; `CI_MERGE_REQUEST_TARGET_BRANCH_SHA` is ignored, since on a later merge train car it is the target tip and not the first parent.
 A clone too shallow to hold the base exits 2 pointing at `GIT_DEPTH: 0`.
 Pre-commit refs, the GitHub pull request base, staged diffs and the GitHub format remain planned.
 
