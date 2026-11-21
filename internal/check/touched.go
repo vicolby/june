@@ -38,6 +38,21 @@ func (t touchedSet) pythonFiles() []string {
 	return files
 }
 
+// lineCount is the number of distinct touched lines in file, however the spans overlap.
+func (t touchedSet) lineCount(file string) int {
+	spans := append([]span(nil), t[file]...)
+	sort.Slice(spans, func(i, j int) bool { return spans[i].from < spans[j].from })
+	n, next := 0, 0
+	for _, s := range spans {
+		from := max(s.from, next)
+		if s.to >= from {
+			n += s.to - from + 1
+			next = s.to + 1
+		}
+	}
+	return n
+}
+
 const listFix = "write one path:7 or path:7-12 per line, with paths relative to the repository root"
 
 // readTouched parses the supplied list. A nil reader means the touched set is unknowable.

@@ -71,7 +71,7 @@ func TestChangedLinesFileFindingExitsOne(t *testing.T) {
 	}
 	var out, errOut bytes.Buffer
 	code := run(context.Background(), []string{"--changed-lines", list}, strings.NewReader(""), &out, &errOut, env)
-	if code != 1 || out.String() != "app.py:2:9: "+py012 || errOut.Len() != 0 {
+	if code != 1 || out.String() != "app.py:2:9: "+py012+"june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 2 changed lines\n" || errOut.Len() != 0 {
 		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
 	}
 }
@@ -79,7 +79,7 @@ func TestChangedLinesFileFindingExitsOne(t *testing.T) {
 func TestChangedLinesStdinUntouchedExitsZero(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := run(context.Background(), []string{"--changed-lines", "-"}, strings.NewReader("app.py:1\n"), &out, &errOut, project(t))
-	if code != 0 || out.Len() != 0 || errOut.Len() != 0 {
+	if code != 0 || out.String() != "june: 0 errors, 0 warnings, 0 opt-outs; checked 1 file, 1 changed line\n" || errOut.Len() != 0 {
 		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
 	}
 }
