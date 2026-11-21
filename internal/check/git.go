@@ -114,7 +114,35 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, *string,
 
 	// -M forces rename detection whatever diff.renames says, so a pure rename shows no hunk.
 	// --no-textconv and --no-ext-diff keep the diff a pure function of the trees.
-	patch, err := git(ctx, env, "", "-c", "core.quotepath=off", "diff", "--text", "--no-relative", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "-M", "--unified=0", "--inter-hunk-context=0", strings.TrimSpace(mb), "--")
+	changes, err := git(ctx, env, "", "diff", "--name-status", "--diff-filter=d", "-z", "--no-relative", "--no-color", "--no-ext-diff", "--no-textconv", "-M", strings.TrimSpace(mb), "--")
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+		return refuse("git could not diff against the merge base with %q (%v). Fix: run git diff %s to see why", base, err, base)
+	}
+	var paths []string
+	for records := strings.Split(changes, "\x00"); len(records) >= 2; {
+		status, source := records[0], records[1]
+		records = records[2:]
+		destination := source
+		if strings.HasPrefix(status, "R") {
+			destination = records[0]
+			records = records[1:]
+		}
+		if path.Ext(destination) != ".py" || !strings.HasPrefix(destination, prefix) {
+			continue
+		}
+		paths = append(paths, ":(top,literal)"+source)
+		if destination != source {
+			paths = append(paths, ":(top,literal)"+destination)
+		}
+	}
+	if len(paths) == 0 {
+		return touchedSet{}, nil, ctx.Err()
+	}
+	args := []string{"-c", "core.quotepath=off", "diff", "--text", "--no-relative", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "-M", "--unified=0", "--inter-hunk-context=0", strings.TrimSpace(mb), "--"}
+	patch, err := git(ctx, env, "", append(args, paths...)...)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, nil, ctx.Err()
