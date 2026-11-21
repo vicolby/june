@@ -35,22 +35,18 @@ rule:
         - inside:
             kind: assert_statement
             stopBy: neighbor
-    - all:
-        - inside:
-            kind: assert_statement
-            stopBy:
-              not:
-                kind: parenthesized_expression
-        - inside:
+    - inside:
+        kind: parenthesized_expression
+        inside:
+          kind: assert_statement
+          stopBy: neighbor
+        nthChild:
+          position: 1
+          ofRule:
+            not:
+              any:
+                - kind: line_continuation
+                - kind: comment
+        stopBy:
+          not:
             kind: parenthesized_expression
-            nthChild:
-              position: 1
-              ofRule:
-                not:
-                  any:
-                    - kind: line_continuation
-                    - kind: comment
-            stopBy:
-              inside:
-                kind: assert_statement
-                stopBy: neighbor

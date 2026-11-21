@@ -562,7 +562,7 @@ func TestRulesVerifiesEveryExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "june: verified 5 rules, 120 examples\n"; res.Exit != 0 || string(res.Out) != want {
+	if want := "june: verified 5 rules, 129 examples\n"; res.Exit != 0 || string(res.Out) != want {
 		t.Errorf("Exit = %d, Out = %q, want 0 and %q", res.Exit, res.Out, want)
 	}
 }
