@@ -37,7 +37,7 @@ type Format string
 
 const (
 	Text Format = "text"
-	// GitHub is the plain text followed by one GitHub Actions workflow command per diagnostic.
+	// GitHub is one GitHub Actions workflow command per diagnostic, followed by the plain text.
 	GitHub Format = "github"
 )
 
