@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -243,5 +244,34 @@ func TestLegacyFlag(t *testing.T) {
 	want := "legacy: app.py:2:9: " + py012 + "june: 0 errors, 0 warnings, 0 opt-outs; checked 1 file, 1 changed line; 1 legacy violation listed\n"
 	if code != 0 || out.String() != want || errOut.Len() != 0 {
 		t.Errorf("--legacy: exit = %d, stdout = %q, want 0 and %q", code, out.String(), want)
+	}
+}
+
+func TestBaseFlagJudgesGitChanges(t *testing.T) {
+	env := project(t)
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.name", "june"},
+		{"config", "user.email", "june@example.com"},
+		{"config", "commit.gpgsign", "false"},
+		{"add", "-A"},
+		{"commit", "-q", "-m", "base"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = env.Dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"--base", "main"}, strings.NewReader(""), &out, &errOut, env); code != 0 || out.Len() != 0 || errOut.Len() != 0 {
+		t.Fatalf("unchanged tree: exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+	if err := os.WriteFile(filepath.Join(env.Dir, "new.py"), []byte("def g(b={}): pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code := run(context.Background(), []string{"--base", "main"}, strings.NewReader(""), &out, &errOut, env)
+	if code != 1 || out.String() != "new.py:1:9: "+py012 || errOut.Len() != 0 {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
 	}
 }
