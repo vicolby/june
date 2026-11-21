@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vicolby/june/internal/check"
 )
@@ -119,6 +121,33 @@ func TestInterruptedRunExplainsItself(t *testing.T) {
 	want := "june: error: june was interrupted before it reached a verdict. Fix: run june again and let it finish\n"
 	if code != 2 || errOut.String() != want || out.Len() != 0 {
 		t.Errorf("exit = %d, stderr = %q, stdout = %q, want 2 and %q", code, errOut.String(), out.String(), want)
+	}
+}
+
+func TestInterruptedOpenStdinExplainsItself(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	env := project(t)
+	var out, errOut bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- run(ctx, []string{"--changed-lines", "-"}, reader, &out, &errOut, env)
+	}()
+	if _, err := io.WriteString(writer, "app.py:2\n"); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case code := <-done:
+		want := "june: error: june was interrupted before it reached a verdict. Fix: run june again and let it finish\n"
+		if code != 2 || errOut.String() != want || out.Len() != 0 {
+			t.Errorf("exit = %d, stderr = %q, stdout = %q, want 2 and %q", code, errOut.String(), out.String(), want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run stayed blocked on open stdin after cancellation")
 	}
 }
 

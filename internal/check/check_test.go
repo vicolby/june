@@ -2,12 +2,15 @@ package check_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"testing/iotest"
+	"time"
 
 	"github.com/vicolby/june/internal/check"
 )
@@ -206,8 +209,34 @@ func TestCancelledContextIsAnError(t *testing.T) {
 	env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\n"})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := check.Change(ctx, env, check.Request{Changed: strings.NewReader("app.py:1\n")}); err == nil {
-		t.Error("Change with a cancelled context returned no error")
+	if _, err := check.Change(ctx, env, check.Request{Changed: strings.NewReader("app.py:1\n")}); !errors.Is(err, context.Canceled) {
+		t.Errorf("Change error = %v, want context.Canceled", err)
+	}
+}
+
+func TestCancellationAbandonsOpenChangedLines(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	env := check.Env{Dir: t.TempDir()}
+	done := make(chan error, 1)
+	go func() {
+		_, err := check.Change(ctx, env, check.Request{Changed: reader})
+		done <- err
+	}()
+	if _, err := io.WriteString(writer, "app.py:1\n"); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Change error = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Change stayed blocked on the open changed-lines reader after cancellation")
 	}
 }
 

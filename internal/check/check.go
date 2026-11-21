@@ -39,13 +39,30 @@ type Result struct {
 
 // Change judges one change. Exit is 1 if and only if an error-severity match is anchored on a touched line.
 // Exit 2 means june could not produce a verdict and Out says why.
-// An empty Env.Dir or cancellation during rule verification or scanning returns an error.
+// An empty Env.Dir or cancellation returns an error.
 func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	if env.Dir == "" {
 		return Result{}, errors.New("check: Env.Dir is empty")
 	}
 
-	touched, bad := readTouched(env, req.Changed)
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
+	var touched touchedSet
+	var bad *string
+	read := make(chan struct{})
+	go func() {
+		touched, bad = readTouched(env, req.Changed)
+		close(read)
+	}()
+	select {
+	case <-ctx.Done():
+		return Result{}, ctx.Err()
+	case <-read:
+	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
 	if bad != nil {
 		return refuse(req, *bad), nil
 	}
