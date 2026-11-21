@@ -41,9 +41,7 @@ changelog:
 brews:
   - name: june
     ids: [june]
-    # A snapshot is not uploaded, so the GitHub asset URL 404s and brew reports a sha256 mismatch
-    # against the local archive. Snapshots use that archive; a tagged release uses the asset URL.
-    url_template: "{{ if .IsSnapshot }}file://{{ abs .ArtifactPath }}{{ else }}https://github.com/vicolby/june/releases/download/{{ urlPathEscape .Tag }}/{{ .ArtifactName }}{{ end }}"
+    url_template: "https://github.com/vicolby/june/releases/download/{{ urlPathEscape .Tag }}/{{ .ArtifactName }}"
     repository:
       owner: vicolby
       name: homebrew-tap

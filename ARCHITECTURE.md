@@ -136,8 +136,6 @@ Each archive holds the `june` binary and `rules/`; the formula installs the bina
 The workflow needs the repository secret `HOMEBREW_TAP_TOKEN`, a token with contents write access to the tap.
 The formula takes the Homebrew `ast-grep`, not the version pinned in `.ast-grep-version` for tests.
 Check the config with `goreleaser check`; it reports `brews` as deprecated, but that is the only block that generates a Formula, and GoReleaser removes deprecated options only in a major version.
-Try a release without publishing: `HOMEBREW_TAP_TOKEN=x goreleaser release --snapshot --clean --skip=publish`.
-A snapshot formula points its `url` at the local archive, so the sha256 is the file `brew install` fetches. A tagged release uses the GitHub release asset URL.
 
 ## Seams
 
