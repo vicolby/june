@@ -92,7 +92,7 @@ Output is text by default and carries no ANSI.
 
 ## cmd/june
 
-The current scaffold supports only `june --version`, runnable locally with `go run ./cmd/june --version`.
+The current build supports `june --version` and `june [--rules DIR] --changed-lines FILE`, runnable locally with `go run ./cmd/june`.
 An unstamped build prints `june dev`.
 The checking commands and module interfaces in this document describe the target design.
 
