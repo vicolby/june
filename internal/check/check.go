@@ -30,7 +30,7 @@ type Request struct {
 	// Rules lists the rules directories, merged into one set; empty means ./.june/rules.
 	// A directory named twice counts once, and a rule id defined in two files is a rule fault.
 	Rules []string
-	// Format is the output format; "" means text.
+	// Format is the output format; empty is inferred, and is plain text outside GitLab CI.
 	Format diag.Format
 	// Legacy also lists rule matches on untouched lines of the checked files, as information only.
 	// They never change Exit; off by default.
