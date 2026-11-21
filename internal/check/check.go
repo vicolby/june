@@ -68,16 +68,12 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		return refuse(req, *bad), nil
 	}
 
-	rulesDir := req.Rules
-	if rulesDir == "" {
-		rulesDir = defaultRules
+	rs, refusal, err := load(ctx, env, req.Rules, req)
+	if refusal != nil {
+		return *refusal, nil
 	}
-	rs, faults := rules.Load(ctx, resolve(env.Dir, rulesDir))
-	if len(faults) > 0 {
-		if err := ctx.Err(); err != nil {
-			return Result{}, err
-		}
-		return refuse(req, faultMessages(rulesDir, faults)...), nil
+	if err != nil {
+		return Result{}, err
 	}
 
 	files := touched.pythonFiles()
@@ -148,6 +144,39 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		lines += touched.lineCount(f)
 	}
 	return render(req, exit, ds, summary(errs, warns, optOutCount, len(files), lines)), nil
+}
+
+// Rules verifies every example of every rule in dir, "" meaning ./.june/rules.
+// Exit 0 means every example behaved. Any rule fault is Exit 2.
+func Rules(ctx context.Context, env Env, dir string) (Result, error) {
+	if env.Dir == "" {
+		return Result{}, errors.New("check: Env.Dir is empty")
+	}
+	rs, refusal, err := load(ctx, env, dir, Request{})
+	if refusal != nil {
+		return *refusal, nil
+	}
+	if err != nil {
+		return Result{}, err
+	}
+	return render(Request{}, 0, nil, fmt.Sprintf("june: verified %s, %s", count(rs.Rules(), "rule"), count(rs.Examples(), "example"))), nil
+}
+
+// load verifies the rules in dir. A rule fault comes back as a refusal.
+// Cancellation comes back as an error, and wins over a fault that cancellation caused.
+func load(ctx context.Context, env Env, dir string, req Request) (*rules.RuleSet, *Result, error) {
+	if dir == "" {
+		dir = defaultRules
+	}
+	rs, faults := rules.Load(ctx, resolve(env.Dir, dir))
+	if err := ctx.Err(); err != nil && len(faults) > 0 {
+		return nil, nil, err
+	}
+	if len(faults) > 0 {
+		res := refuse(req, faultMessages(dir, faults)...)
+		return nil, &res, nil
+	}
+	return rs, nil, nil
 }
 
 // summary is the closing line of a verdict: finding counts and the scope that was covered.

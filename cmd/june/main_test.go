@@ -160,3 +160,34 @@ func TestMissingWorkingDirectoryExplainsItself(t *testing.T) {
 		t.Errorf("exit = %d, stderr = %q, stdout = %q, want 2 and %q", code, errOut.String(), out.String(), want)
 	}
 }
+
+func TestVerifyPrintsCounts(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"verify"}, strings.NewReader(""), &out, &errOut, project(t))
+	if code != 0 || out.String() != "june: verified 1 rule, 19 examples\n" || errOut.Len() != 0 {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+}
+
+func TestVerifyFaultExitsTwo(t *testing.T) {
+	env := project(t)
+	sidecar := filepath.Join(env.Dir, ".june", "rules", "rule-tests", "PY012-test.yml")
+	if err := os.WriteFile(sidecar, []byte("id: PY012\nvalid:\n  - \"def f(a=[]): pass\"\ninvalid:\n  - \"def f(a=[]): pass\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"verify"}, strings.NewReader(""), &out, &errOut, env)
+	want := "june: error: .june/rules/rule-tests/PY012-test.yml: rule PY012 valid example \"def f(a=[]): pass\" is reported by the rule. Fix: make the rule and its examples in rule-tests/PY012-test.yml agree\n"
+	if code != 2 || out.String() != want {
+		t.Errorf("exit = %d, stdout = %q, want 2 and %q", code, out.String(), want)
+	}
+}
+
+func TestVerifyArguments(t *testing.T) {
+	for _, args := range [][]string{{"verify", "extra"}, {"verify", "--changed-lines", "-"}} {
+		var out, errOut bytes.Buffer
+		if code := run(context.Background(), args, strings.NewReader(""), &out, &errOut, project(t)); code != 2 || out.Len() != 0 || !strings.Contains(errOut.String(), ". Fix: usage is") {
+			t.Errorf("%v: exit = %d, stdout = %q, stderr = %q", args, code, out.String(), errOut.String())
+		}
+	}
+}

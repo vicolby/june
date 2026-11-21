@@ -27,13 +27,40 @@ func TestLoadGood(t *testing.T) {
 	}
 }
 
+func TestLoadCountsRulesAndExamples(t *testing.T) {
+	rs, _ := rules.Load(context.Background(), fixture("good"))
+	if rs == nil {
+		t.Fatal("Load returned no rule set")
+	}
+	if rs.Rules() != 1 || rs.Examples() != 2 {
+		t.Errorf("Rules, Examples = %d, %d, want 1, 2", rs.Rules(), rs.Examples())
+	}
+}
+
+// Every misbehaving example is its own fault, so an author sees all of them at once.
+func TestLoadNamesEveryMisbehavingExample(t *testing.T) {
+	_, faults := rules.Load(context.Background(), fixture("bad_example"))
+	if len(faults) != 2 {
+		t.Fatalf("faults = %v, want 2", faults)
+	}
+	want := []string{
+		`rule LST01 valid example "x = [1]" is reported by the rule`,
+		`rule LST01 invalid example "x = (1,)" is not reported by the rule`,
+	}
+	for i, f := range faults {
+		if f.Path != "rule-tests/LST01-test.yml" || f.Cause != want[i] {
+			t.Errorf("fault %d = %+v, want path rule-tests/LST01-test.yml and cause %q", i, f, want[i])
+		}
+	}
+}
+
 func TestLoadRefusesUnverifiedRules(t *testing.T) {
 	tests := []struct {
 		dir       string
 		wantPath  string
 		wantCause string
 	}{
-		{"bad_example", "rule-tests/LST01-test.yml", "example of rule LST01 misbehaves"},
+		{"bad_example", "rule-tests/LST01-test.yml", "valid example \"x = [1]\" is reported"},
 		{"empty_message", "LST01.yml", "empty message"},
 		{"no_examples", "LST01.yml", "no examples"},
 		{"one_sided", "rule-tests/LST01-test.yml", "both valid and invalid"},
@@ -283,6 +310,100 @@ func TestScanUnavailableEngine(t *testing.T) {
 	if err == nil || len(got.Matches) != 0 || strings.Contains(err.Error(), dir) {
 		t.Fatalf("Scan = %+v, %v, want a refusal without absolute paths", got, err)
 	}
+}
+
+func TestLoadQuotesEachExampleWhenAnotherRulePasses(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "rule-tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "AAA.yml"), "id: AAA\nlanguage: python\nseverity: warning\nmessage: 'Fix: use a tuple'\nrule:\n  kind: list\n")
+	write(t, filepath.Join(dir, "rule-tests", "AAA-test.yml"), "id: AAA\nvalid:\n  - \"x = (1,)\"\ninvalid:\n  - \"x = [1]\"\n")
+	write(t, filepath.Join(dir, "ZZZ.yml"), "id: ZZZ\nlanguage: python\nseverity: error\nmessage: 'Fix: use a tuple'\nrule:\n  kind: list\n")
+	write(t, filepath.Join(dir, "rule-tests", "ZZZ-test.yml"), "id: ZZZ\nvalid:\n  - \"x = [1]\"\ninvalid:\n  - \"x = (1,)\"\n")
+
+	rs, faults := rules.Load(context.Background(), dir)
+	if rs != nil {
+		t.Fatal("Load returned a rule set")
+	}
+	want := []string{
+		`rule ZZZ valid example "x = [1]" is reported by the rule`,
+		`rule ZZZ invalid example "x = (1,)" is not reported by the rule`,
+	}
+	if len(faults) != len(want) {
+		t.Fatalf("faults = %+v, want %d", faults, len(want))
+	}
+	for i, f := range faults {
+		if f.Path != "rule-tests/ZZZ-test.yml" || f.Cause != want[i] {
+			t.Errorf("fault %d = %+v, want path rule-tests/ZZZ-test.yml and cause %q", i, f, want[i])
+		}
+	}
+}
+
+func TestLoadExecutesSeverityOffRules(t *testing.T) {
+	const draft = "id: DRAFT\nlanguage: python\nseverity: off\nmessage: 'Fix: use a tuple'\nrule:\n  kind: list\n"
+	const py = "id: PY012\nlanguage: python\nseverity: error\nmessage: 'Fix: use a tuple'\nrule:\n  kind: list\n"
+	const pyExamples = "id: PY012\nvalid:\n  - \"x = (1,)\"\ninvalid:\n  - \"x = [1]\"\n"
+	goodDraft := "id: DRAFT\nvalid:\n  - \"x = (1,)\"\ninvalid:\n  - \"x = [1]\"\n"
+	badDraft := "id: DRAFT\nvalid:\n  - \"x = [1]\"\ninvalid:\n  - \"x = (1,)\"\n"
+
+	t.Run("failing example", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, "rule-tests"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(dir, "PY012.yml"), py)
+		write(t, filepath.Join(dir, "rule-tests", "PY012-test.yml"), pyExamples)
+		write(t, filepath.Join(dir, "DRAFT.yml"), draft)
+		write(t, filepath.Join(dir, "rule-tests", "DRAFT-test.yml"), badDraft)
+
+		rs, faults := rules.Load(context.Background(), dir)
+		if rs != nil {
+			t.Fatal("Load returned a rule set")
+		}
+		want := []string{
+			`rule DRAFT valid example "x = [1]" is reported by the rule`,
+			`rule DRAFT invalid example "x = (1,)" is not reported by the rule`,
+		}
+		if len(faults) != len(want) {
+			t.Fatalf("faults = %+v, want %d", faults, len(want))
+		}
+		for i, f := range faults {
+			if f.Path != "rule-tests/DRAFT-test.yml" || f.Cause != want[i] {
+				t.Errorf("fault %d = %+v, want path rule-tests/DRAFT-test.yml and cause %q", i, f, want[i])
+			}
+		}
+	})
+
+	t.Run("passing example", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, "rule-tests"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(dir, "PY012.yml"), py)
+		write(t, filepath.Join(dir, "rule-tests", "PY012-test.yml"), pyExamples)
+		write(t, filepath.Join(dir, "DRAFT.yml"), draft)
+		write(t, filepath.Join(dir, "rule-tests", "DRAFT-test.yml"), goodDraft)
+
+		rs, faults := rules.Load(context.Background(), dir)
+		if len(faults) != 0 || rs == nil || rs.Rules() != 2 || rs.Examples() != 4 {
+			t.Fatalf("Load = %v, %v, want 2 rules and 4 examples", rs, faults)
+		}
+	})
+
+	t.Run("passing alone", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, "rule-tests"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(dir, "DRAFT.yml"), draft)
+		write(t, filepath.Join(dir, "rule-tests", "DRAFT-test.yml"), goodDraft)
+
+		rs, faults := rules.Load(context.Background(), dir)
+		if len(faults) != 0 || rs == nil || rs.Rules() != 1 || rs.Examples() != 2 {
+			t.Fatalf("Load = %v, %v, want 1 rule and 2 examples", rs, faults)
+		}
+	})
 }
 
 func TestRunIgnoresProjectConfigInWorkingDirectory(t *testing.T) {

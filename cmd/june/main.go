@@ -51,6 +51,9 @@ func snapshotEnv(getwd func() (string, error)) (check.Env, error) {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, env check.Env) int {
+	if len(args) > 0 && args[0] == "verify" {
+		return verify(ctx, args[1:], stdout, stderr, env)
+	}
 	fs := flag.NewFlagSet("june", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	showVersion := fs.Bool("version", false, "print the version")
@@ -82,6 +85,26 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 
 	res, err := check.Change(ctx, env, req)
+	return finish(stdout, stderr, res, err)
+}
+
+// verify is `june verify [--rules DIR]`: every example of every rule behaves, or the run is refused.
+func verify(ctx context.Context, args []string, stdout, stderr io.Writer, env check.Env) int {
+	fs := flag.NewFlagSet("june verify", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	rulesDir := fs.String("rules", "", "rules directory (default ./.june/rules)")
+	if err := fs.Parse(args); err != nil {
+		return usageError(stderr, err.Error())
+	}
+	if fs.NArg() > 0 {
+		return usageError(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
+	}
+	res, err := check.Rules(ctx, env, *rulesDir)
+	return finish(stdout, stderr, res, err)
+}
+
+// finish writes a verdict, or explains why there is none, and returns the exit code.
+func finish(stdout, stderr io.Writer, res check.Result, err error) int {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return fail(stderr, "june was interrupted before it reached a verdict. Fix: run june again and let it finish")
 	}
@@ -93,7 +116,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 }
 
 func usageError(stderr io.Writer, cause string) int {
-	return fail(stderr, cause+". Fix: usage is june [--rules DIR] --changed-lines FILE, or june --version")
+	return fail(stderr, cause+". Fix: usage is june [--rules DIR] --changed-lines FILE, june verify [--rules DIR], or june --version")
 }
 
 func fail(stderr io.Writer, msg string) int {
