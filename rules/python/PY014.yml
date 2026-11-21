@@ -3,8 +3,24 @@ language: python
 severity: error
 message: "Comparison to None with == or !=. Fix: use is None or is not None."
 rule:
-  any:
-    - pattern: $A == None
-    - pattern: None == $A
-    - pattern: $A != None
-    - pattern: None != $A
+  kind: comparison_operator
+  has:
+    all:
+      - any:
+          - kind: none
+          - all:
+              - kind: parenthesized_expression
+              - has:
+                  kind: none
+                  stopBy:
+                    not:
+                      kind: parenthesized_expression
+      - any:
+          - follows:
+              regex: '^==$'
+          - follows:
+              regex: '^!=$'
+          - precedes:
+              regex: '^==$'
+          - precedes:
+              regex: '^!=$'

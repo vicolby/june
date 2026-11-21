@@ -104,7 +104,7 @@ With ast-grep on PATH, run the shipped Python fundamentals and their sidecar exa
 go run ./cmd/june --rules rules/python --changed-lines changed.txt
 ```
 
-`rules/python` holds the shipped fundamentals, an opt-in directory a repo adopts by pointing `--rules` at it or copying it to `.june/rules`: PY012 mutable default argument, PY013 bare `except`, PY014 comparison to `None` with `==` or `!=`, PY015 `except` block that only passes, PY016 `assert` on a tuple.
+`rules/python` is the opt-in directory for the shipped fundamentals until a pip package and a container image exist (issues #14 and #15). A repo adopts it by pointing `--rules` at `rules/python` or copying it to `.june/rules`. The rules are PY012 mutable default argument, PY013 bare `except`, PY014 comparison to `None` with `==` or `!=`, PY015 `except` block that only passes, and PY016 `assert` on a tuple.
 Each is an error with a corrective message and its own valid and invalid examples.
 
 The list contains one `path:7` or `path:7-12` entry per line, with one-based, inclusive line ranges and paths relative to the working directory.
@@ -116,7 +116,7 @@ The current check emits plain text. Completed checks (exit 0 or 1) end with a su
 Coverage counts distinct touched Python files and changed lines, counting overlapping ranges only once; the opt-out count is every opt-out printed on a touched line, honoured or not.
 `--legacy` also lists matches on untouched lines of the checked files, one `legacy: file:line:col: CODE message` line each after the findings, and the summary gains `; 2 legacy violations listed`.
 Legacy lines never change the exit code, are off by default, and a valid opt-out on the untouched line hides its legacy line.
-`june verify` runs every example of every rule and prints `june: verified 1 rule, 19 examples` on success. Any fault exits 2, as it does for a normal run, and each fault is one line naming the rules directory, the rule file, or the sidecar, and, for a failing example, the example.
+`june verify` runs every example of every rule and prints `june: verified 5 rules, 83 examples` on success. Any fault exits 2, as it does for a normal run, and each fault is one line naming the rules directory, the rule file, or the sidecar, and, for a failing example, the example.
 CI base inference (pre-commit refs, pull and merge request bases, staged diffs) and CI-specific formats remain planned.
 
 `cmd/june` is a shell and owns no decision.
