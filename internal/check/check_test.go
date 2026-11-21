@@ -775,7 +775,7 @@ func TestRulesRepeatedSameDirectoryCountsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "june: verified 1 rule, 19 examples\n"; verified.Exit != 0 || string(verified.Out) != want {
+	if want := "june: verified 5 rules, 135 examples\n"; verified.Exit != 0 || string(verified.Out) != want {
 		t.Errorf("Exit = %d, Out = %q, want 0 and %q", verified.Exit, verified.Out, want)
 	}
 }
@@ -787,7 +787,7 @@ func TestRulesCountsSumAcrossDirectories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "june: verified 2 rules, 21 examples\n"; res.Exit != 0 || string(res.Out) != want {
+	if want := "june: verified 6 rules, 137 examples\n"; res.Exit != 0 || string(res.Out) != want {
 		t.Errorf("Exit = %d, Out = %q, want 0 and %q", res.Exit, res.Out, want)
 	}
 }
