@@ -4,8 +4,13 @@ valid:
   - "try:\n    pass\nexcept Exception:\n    pass"
   - "try:\n    pass\nexcept (A, B) as e:\n    pass"
   - "try:\n    pass\nexcept* ValueError:\n    pass"
+  - "try:\n    pass\nexcept*:\n    pass"
+  - "try:\n    pass\nexcept \\\n ValueError:\n    pass"
   - "x = 'except:'"
 invalid:
   - "try:\n    pass\nexcept:\n    pass"
   - "try:\n    pass\nexcept :\n    pass"
+  - "try:\n    pass\nexcept \\\n:\n    pass"
+  - "try:\n    pass\nexcept\\\n:\n    pass"
+  - "try:\n    pass\nexcept \\\n \\\n:\n    pass"
   - "try:\n    pass\nexcept ValueError:\n    pass\nexcept:\n    raise"
