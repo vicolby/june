@@ -271,7 +271,7 @@ Check the config with `goreleaser check`; it reports `brews` as deprecated, but 
 - **ast-grep, hypothetical:** one engine, VISION refuses a second, no interface.
 - **Language, hypothetical:** Python lives in rule data and the `.py` filter.
 - A second language is the moment to cut a seam.
-- **Network, model, clock:** none exist.
+- **Network, model, clock:** none on the check path. The planned `review` module owns the model seam; see [Version 2: review (planned)](#version-2-review-planned).
 
 ## Tests
 
