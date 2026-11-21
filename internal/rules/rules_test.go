@@ -202,7 +202,11 @@ func TestScanRefusesIncompleteInput(t *testing.T) {
 				if err := os.Chmod(bad, 0); err != nil {
 					t.Fatal(err)
 				}
-				t.Cleanup(func() { os.Chmod(bad, 0o644) })
+				t.Cleanup(func() {
+					if err := os.Chmod(bad, 0o644); err != nil {
+						t.Error(err)
+					}
+				})
 			case "invalid UTF-8":
 				write(t, bad, "# coding: latin-1\nx = '\xe9'\ny = []\n")
 			case "NUL":

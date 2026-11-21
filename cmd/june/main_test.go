@@ -128,8 +128,8 @@ func TestInterruptedOpenStdinExplainsItself(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	reader, writer := io.Pipe()
-	defer reader.Close()
-	defer writer.Close()
+	defer func() { _ = reader.Close() }() // io.Pipe closes always return nil.
+	defer func() { _ = writer.Close() }()
 	env := project(t)
 	var out, errOut bytes.Buffer
 	done := make(chan int, 1)

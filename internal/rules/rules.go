@@ -136,7 +136,7 @@ func (rs *RuleSet) Scan(ctx context.Context, files []string) (Scanned, error) {
 			if err != nil {
 				return Scanned{}, errors.New("the scan cannot create its configuration")
 			}
-			defer os.RemoveAll(dir)
+			defer func() { _ = os.RemoveAll(dir) }() // Best-effort scratch cleanup cannot change the scan result.
 			if config, err = writeConfig(dir); err != nil {
 				return Scanned{}, errors.New("the scan cannot create its configuration")
 			}
@@ -159,7 +159,7 @@ func (rs *RuleSet) Scan(ctx context.Context, files []string) (Scanned, error) {
 				} `json:"range"`
 			}
 			if err := dec.Decode(&m); err != nil {
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) {
 					break
 				}
 				return Scanned{}, errors.New("ast-grep scan returned unreadable output")
@@ -215,7 +215,7 @@ func (rs *RuleSet) disableSuppressions(ctx context.Context, config string, sourc
 			}
 		}
 		if err := dec.Decode(&m); err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			return errors.New("ast-grep returned unreadable comment ranges")
@@ -293,7 +293,7 @@ func decodeDocument(raw []byte, out any) error {
 		return err
 	}
 	var extra any
-	if err := dec.Decode(&extra); err != io.EOF {
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return errors.New("expected exactly one YAML document")
 	}
 	return nil
@@ -310,7 +310,7 @@ func verify(ctx context.Context, bin, dir string, files, examples []string) []Fa
 	if err != nil {
 		return []Fault{{Cause: "the examples cannot be run", Fix: "make the temporary directory writable"}}
 	}
-	defer os.RemoveAll(scratch)
+	defer func() { _ = os.RemoveAll(scratch) }() // Best-effort scratch cleanup cannot change verification.
 	if real, err := filepath.EvalSymlinks(scratch); err == nil {
 		scratch = real
 	}

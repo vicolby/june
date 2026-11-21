@@ -77,7 +77,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		if err != nil {
 			return fail(stderr, "the changed-lines file cannot be read. Fix: pass an existing file to --changed-lines")
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }() // Read-only file; closing cannot change the verdict.
 		req.Changed = f
 	}
 
@@ -88,7 +88,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if err != nil {
 		return fail(stderr, fmt.Sprintf("%v. Fix: report this as a june bug", err))
 	}
-	stdout.Write(res.Out)
+	_, _ = stdout.Write(res.Out) // Output write failures have no recovery path, as with fail.
 	return res.Exit
 }
 

@@ -218,8 +218,8 @@ func TestCancellationAbandonsOpenChangedLines(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	reader, writer := io.Pipe()
-	defer reader.Close()
-	defer writer.Close()
+	defer func() { _ = reader.Close() }() // io.Pipe closes always return nil.
+	defer func() { _ = writer.Close() }()
 	env := check.Env{Dir: t.TempDir()}
 	done := make(chan error, 1)
 	go func() {
@@ -317,7 +317,11 @@ func TestFailureOutputHasNoAbsolutePaths(t *testing.T) {
 				if err := os.Chmod(file, 0); err != nil {
 					t.Fatal(err)
 				}
-				t.Cleanup(func() { os.Chmod(file, 0o644) })
+				t.Cleanup(func() {
+					if err := os.Chmod(file, 0o644); err != nil {
+						t.Error(err)
+					}
+				})
 			case "reader":
 				req.Changed = iotest.ErrReader(&os.PathError{Op: "read", Path: filepath.Join(env.Dir, "changed.txt"), Err: os.ErrPermission})
 			case "scan":
