@@ -3,6 +3,7 @@ package check_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,6 +52,140 @@ func against(t *testing.T, env check.Env, base string) check.Result {
 }
 
 const old = "def f(a=[]): pass\n"
+
+func TestGitScopeIgnoresContextSettings(t *testing.T) {
+	for _, setting := range []string{"inter-hunk", "environment", "both"} {
+		t.Run(setting, func(t *testing.T) {
+			env := repo(t, map[string]string{"app.py": "x = 1\n" + old + "y = 1\n"})
+			if setting != "environment" {
+				git(t, env.Dir, "config", "diff.interHunkContext", "3")
+			}
+			if setting != "inter-hunk" {
+				env.Vars = map[string]string{"GIT_DIFF_OPTS": "-u3"}
+			}
+			write(t, filepath.Join(env.Dir, "app.py"), "x = 2\n"+old+"y = 2\n")
+			expect(t, against(t, env, "main"), 0, "")
+		})
+	}
+}
+
+func TestGitScopePinsPathPrefixes(t *testing.T) {
+	for _, setting := range [][2]string{{"diff.noprefix", "true"}, {"diff.mnemonicPrefix", "true"}, {"diff.dstPrefix", "custom/"}} {
+		t.Run(setting[0], func(t *testing.T) {
+			env := repo(t, map[string]string{"app.py": "x = 1\n", "b/app.py": "x = 1\n"})
+			git(t, env.Dir, "config", setting[0], setting[1])
+			write(t, filepath.Join(env.Dir, "b", "app.py"), old)
+			expect(t, against(t, env, "main"), 1, "b/app.py:1:9: "+py012)
+		})
+	}
+}
+
+func TestGitScopeUnstagedRenames(t *testing.T) {
+	for _, source := range []string{"old.py", "old.txt"} {
+		t.Run(source, func(t *testing.T) {
+			body := "import os\nimport sys\nx = 1\ny = 2\n" + old
+			env := repo(t, map[string]string{source: body, "staged.py": "x = 1\n"})
+			git(t, env.Dir, "config", "diff.renames", "false")
+			if err := os.Mkdir(filepath.Join(env.Dir, "pkg"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(filepath.Join(env.Dir, source), filepath.Join(env.Dir, "pkg", "new.py")); err != nil {
+				t.Fatal(err)
+			}
+			indexPath := filepath.Join(env.Dir, ".git", "index")
+			before, err := os.ReadFile(indexPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expect(t, against(t, env, "main"), 0, "")
+			after, err := os.ReadFile(indexPath)
+			if err != nil || string(after) != string(before) {
+				t.Fatalf("git scope changed the real index: %v", err)
+			}
+			copyDir(t, filepath.Join(env.Dir, ".june", "rules"), filepath.Join(env.Dir, "pkg", ".june", "rules"))
+			sub := check.Env{Dir: filepath.Join(env.Dir, "pkg")}
+			expect(t, against(t, sub, "main"), 0, "")
+			write(t, filepath.Join(env.Dir, "pkg", "new.py"), strings.Replace(body, "x = 1", "x = 1\ndef g(b={}): pass", 1))
+			expect(t, against(t, env, "main"), 1, "pkg/new.py:4:9: "+py012)
+			expect(t, against(t, sub, "main"), 1, "new.py:4:9: "+py012)
+			write(t, filepath.Join(env.Dir, "staged.py"), old)
+			git(t, env.Dir, "add", "staged.py")
+			write(t, filepath.Join(env.Dir, "added.py"), old)
+			git(t, env.Dir, "add", "added.py")
+			expect(t, against(t, env, "main"), 1, "added.py:1:9: "+py012+"pkg/new.py:4:9: "+py012+"staged.py:1:9: "+py012)
+		})
+	}
+}
+
+func TestGitScopeHunkContentCannotChangePaths(t *testing.T) {
+	for _, content := range []string{"++ x\n", "text = '''\n++ fake.py\n'''\n"} {
+		t.Run(content, func(t *testing.T) {
+			body := "x = 1\ny = 2\nz = 3\n"
+			env := repo(t, map[string]string{"app.py": body, "other.py": "x = 1\n"})
+			write(t, filepath.Join(env.Dir, "app.py"), content+body+old)
+			write(t, filepath.Join(env.Dir, "other.py"), old)
+			line := strings.Count(content+body, "\n") + 1
+			expect(t, against(t, env, "main"), 1, fmt.Sprintf("app.py:%d:9: %sother.py:1:9: %s", line, py012, py012))
+		})
+	}
+}
+
+func TestGitScopeUnreadableUntrackedFileIsRefused(t *testing.T) {
+	env := repo(t, nil)
+	file := filepath.Join(env.Dir, "new.py")
+	write(t, file, old)
+	if err := os.Chmod(file, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(file, 0o644) })
+	res := against(t, env, "main")
+	if res.Exit != 2 || !strings.Contains(string(res.Out), "Fix:") {
+		t.Errorf("Exit = %d, Out = %q, want refusal", res.Exit, res.Out)
+	}
+	if strings.Contains(string(res.Out), env.Dir) {
+		t.Errorf("Out has an absolute path: %q", res.Out)
+	}
+}
+
+func TestGitScopeEmptyUntrackedFileTouchesNothing(t *testing.T) {
+	env := repo(t, map[string]string{"legacy.py": old})
+	write(t, filepath.Join(env.Dir, "empty.py"), "")
+	expect(t, against(t, env, "main"), 0, "")
+}
+
+func TestGitScopeTemporaryIndexFailureIsRefused(t *testing.T) {
+	env := repo(t, nil)
+	write(t, filepath.Join(env.Dir, "new.py"), old)
+	t.Setenv("TMPDIR", filepath.Join(env.Dir, "missing"))
+	expect(t, against(t, env, "main"), 2,
+		"june: error: a temporary git index cannot be created. Fix: check temporary directory permissions and run june again\n")
+}
+
+func TestGitScopeSymlinksTouchNothing(t *testing.T) {
+	for _, transition := range []bool{false, true} {
+		t.Run(fmt.Sprint(transition), func(t *testing.T) {
+			files := map[string]string{"legacy.py": old}
+			if transition {
+				files["alias.py"] = "x = 1\n"
+			}
+			env := repo(t, files)
+			alias := filepath.Join(env.Dir, "alias.py")
+			if transition {
+				if err := os.Remove(alias); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink("legacy.py", alias); err != nil {
+				t.Fatal(err)
+			}
+			expect(t, against(t, env, "main"), 0, "")
+			git(t, env.Dir, "add", "alias.py")
+			expect(t, against(t, env, "main"), 0, "")
+			commit(t, env)
+			expect(t, against(t, env, "main"), 0, "")
+		})
+	}
+}
 
 func TestBaseJudgesCommittedEdits(t *testing.T) {
 	env := repo(t, map[string]string{"app.py": old + "x = 1\n"})

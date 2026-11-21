@@ -25,19 +25,19 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, *string,
 		return refuse("the base %q is not a git ref. Fix: pass a branch, tag or commit to --base", base)
 	}
 
-	if _, err := git(ctx, env, "rev-parse", "--is-inside-work-tree"); err != nil {
+	if _, err := git(ctx, env, "", "rev-parse", "--is-inside-work-tree"); err != nil {
 		if ctx.Err() != nil {
 			return nil, nil, ctx.Err()
 		}
 		return refuse("the touched lines cannot be found because %s is not inside a git work tree. Fix: run june inside the repository, or pass --changed-lines FILE", filepath.Base(env.Dir))
 	}
-	if _, err := git(ctx, env, "rev-parse", "--verify", "--quiet", base+"^{commit}"); err != nil {
+	if _, err := git(ctx, env, "", "rev-parse", "--verify", "--quiet", base+"^{commit}"); err != nil {
 		if ctx.Err() != nil {
 			return nil, nil, ctx.Err()
 		}
 		return refuse("the base %q is not a commit in this repository. Fix: fetch it, or pass an existing branch, tag or commit to --base", base)
 	}
-	mb, err := git(ctx, env, "merge-base", base, "HEAD")
+	mb, err := git(ctx, env, "", "merge-base", base, "HEAD")
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, nil, ctx.Err()
@@ -45,30 +45,97 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, *string,
 		return refuse("HEAD and %q have no merge base, so the touched lines are unknowable. Fix: fetch full history (git fetch --unshallow) or pass a base that shares history with HEAD", base)
 	}
 
-	// -M forces rename detection whatever diff.renames says, so a pure rename shows no hunk.
-	// --no-textconv and --no-ext-diff keep the diff a pure function of the trees.
-	patch, err := git(ctx, env, "-c", "core.quotepath=off", "diff", "--relative", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--unified=0", strings.TrimSpace(mb), "--")
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, nil, ctx.Err()
-		}
-		return refuse("git could not diff against the merge base with %q (%v). Fix: run git diff %s to see why", base, err, base)
-	}
-	set := parsePatch(patch)
-
-	untracked, err := git(ctx, env, "ls-files", "--others", "--exclude-standard", "-z", "--")
+	untracked, err := git(ctx, env, "", "ls-files", "--others", "--exclude-standard", "-z", "--")
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, nil, ctx.Err()
 		}
 		return refuse("git could not list untracked files (%v). Fix: run git status to see why", err)
 	}
-	for _, name := range strings.Split(untracked, "\x00") {
-		if path.Ext(name) != ".py" {
+	prefix, err := git(ctx, env, "", "rev-parse", "--show-prefix")
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+		return refuse("git could not locate the working directory. Fix: run git status to see why")
+	}
+	prefix = strings.TrimSuffix(prefix, "\n")
+	var entries strings.Builder
+	if untracked != "" {
+		empty, err := git(ctx, env, "", "hash-object", "--stdin")
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
+			return refuse("git could not prepare untracked files. Fix: run git status to see why")
+		}
+		for _, name := range strings.Split(strings.TrimSuffix(untracked, "\x00"), "\x00") {
+			if path.Ext(name) != ".py" {
+				continue
+			}
+			info, err := os.Lstat(filepath.Join(env.Dir, filepath.FromSlash(name)))
+			if err != nil {
+				return refuse("untracked file %q cannot be inspected. Fix: check its permissions and run june again", name)
+			}
+			if !info.Mode().IsRegular() {
+				continue
+			}
+			mode := "100644"
+			if info.Mode().Perm()&0o111 != 0 {
+				mode = "100755"
+			}
+			fmt.Fprintf(&entries, "%s %s 0\t%s%s\x00", mode, strings.TrimSpace(empty), prefix, name)
+		}
+	}
+	if entries.Len() > 0 {
+		tracked, err := git(ctx, env, "", "ls-files", "--stage", "--full-name", "-z", "--", ":/")
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
+			return refuse("git could not list tracked files. Fix: run git status to see why")
+		}
+		dir, err := os.MkdirTemp("", "june-git-")
+		if err != nil {
+			return refuse("a temporary git index cannot be created. Fix: check temporary directory permissions and run june again")
+		}
+		defer func() { _ = os.RemoveAll(dir) }()
+		vars := make(map[string]string, len(env.Vars)+1)
+		for k, v := range env.Vars {
+			vars[k] = v
+		}
+		vars["GIT_INDEX_FILE"] = filepath.Join(dir, "index")
+		env.Vars = vars
+		if _, err := git(ctx, env, tracked+entries.String(), "update-index", "--no-split-index", "-z", "--index-info"); err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
+			return refuse("a temporary git index cannot be prepared. Fix: run git status and check temporary directory permissions")
+		}
+	}
+
+	// -M forces rename detection whatever diff.renames says, so a pure rename shows no hunk.
+	// --no-textconv and --no-ext-diff keep the diff a pure function of the trees.
+	patch, err := git(ctx, env, "", "-c", "core.quotepath=off", "diff", "--no-relative", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "-M", "--unified=0", "--inter-hunk-context=0", strings.TrimSpace(mb), "--")
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+		return refuse("git could not diff against the merge base with %q (%v). Fix: run git diff %s to see why", base, err, base)
+	}
+	parsed := parsePatch(patch)
+	set := touchedSet{}
+	for _, name := range parsed.pythonFiles() {
+		if !strings.HasPrefix(name, prefix) {
 			continue
 		}
-		if n := countLines(filepath.Join(env.Dir, filepath.FromSlash(name))); n > 0 {
-			set[name] = append(set[name], span{1, n})
+		rel := strings.TrimPrefix(name, prefix)
+		info, err := os.Lstat(filepath.Join(env.Dir, filepath.FromSlash(rel)))
+		if err != nil {
+			return refuse("changed file %q cannot be inspected. Fix: check its permissions and run june again", rel)
+		}
+		if info.Mode().IsRegular() {
+			set[rel] = parsed[name]
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -78,15 +145,16 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, *string,
 }
 
 // git runs git in env.Dir and returns its standard output.
-func git(ctx context.Context, env Env, args ...string) (string, error) {
+func git(ctx context.Context, env Env, input string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = env.Dir
-	cmd.Env = make([]string, 0, len(env.Vars)+3)
+	cmd.Env = make([]string, 0, len(env.Vars)+4)
 	for k, v := range env.Vars {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	// Later entries win, so these fix the language and keep git read-only and non-interactive.
-	cmd.Env = append(cmd.Env, "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(cmd.Env, "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0", "GIT_DIFF_OPTS=")
+	cmd.Stdin = strings.NewReader(input)
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut
@@ -109,13 +177,16 @@ func firstLine(s string) string {
 func parsePatch(patch string) touchedSet {
 	set := touchedSet{}
 	var file string // "" while in a header or a file that does not count
+	inHunk := false
 	for _, line := range strings.Split(patch, "\n") {
 		switch {
 		case strings.HasPrefix(line, "diff --git "):
 			file = ""
-		case strings.HasPrefix(line, "+++ "):
+			inHunk = false
+		case strings.HasPrefix(line, "+++ ") && !inHunk:
 			file = postImagePath(strings.TrimPrefix(line, "+++ "))
 		case strings.HasPrefix(line, "@@ ") && file != "":
+			inHunk = true
 			if sp, ok := parseHunk(line); ok {
 				set[file] = append(set[file], sp)
 			}
@@ -162,21 +233,4 @@ func parseHunk(header string) (span, bool) {
 		return span{}, false
 	}
 	return span{from, from + n - 1}, true
-}
-
-// countLines counts the lines of a text file; a binary, unreadable or non-regular file has none.
-func countLines(name string) int {
-	info, err := os.Lstat(name)
-	if err != nil || !info.Mode().IsRegular() {
-		return 0
-	}
-	b, err := os.ReadFile(name)
-	if err != nil || bytes.IndexByte(b[:min(len(b), 8000)], 0) >= 0 {
-		return 0
-	}
-	n := bytes.Count(b, []byte("\n"))
-	if len(b) > 0 && b[len(b)-1] != '\n' {
-		n++
-	}
-	return n
 }
