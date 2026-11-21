@@ -96,9 +96,38 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 
 	var ds []diag.Diagnostic
 	exit := 0
+	type site struct {
+		file string
+		line int
+		rule string
+	}
+	optedOut := map[site]bool{}
+	found := map[site]bool{}
+	for _, m := range scanned.Matches {
+		found[site{byAbs[m.File], m.Line, m.Rule}] = true
+	}
+	for _, o := range scanned.OptOuts {
+		path := byAbs[o.File]
+		if !touched.has(path, o.Line) {
+			continue
+		}
+		d := diag.Diagnostic{File: path, Line: o.Line, Col: o.Col, Code: o.Rule, Sev: diag.Warning, Kind: diag.OptOut}
+		s := site{path, o.Line, o.Rule}
+		switch {
+		case o.Problem != "":
+			d.Code = "OPTOUT"
+			d.Msg = "malformed opt-out suppresses nothing: " + o.Problem
+		case found[s]:
+			optedOut[s] = true
+			d.Msg = "opt-out: " + o.Reason
+		default:
+			d.Msg = "opt-out: " + o.Reason + " (suppresses nothing: no " + o.Rule + " finding on this line)"
+		}
+		ds = append(ds, d)
+	}
 	for _, m := range scanned.Matches {
 		path := byAbs[m.File]
-		if !touched.has(path, m.Line) {
+		if !touched.has(path, m.Line) || optedOut[site{path, m.Line, m.Rule}] {
 			continue
 		}
 		sev := diag.Warning

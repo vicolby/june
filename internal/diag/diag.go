@@ -23,6 +23,8 @@ const (
 	Finding Kind = iota
 	// Failure is a june outcome that is not a finding, rendered as june: error: <Msg>.
 	Failure
+	// OptOut is an inline opt-out comment on a touched line, honoured or not, rendered like a finding.
+	OptOut
 )
 
 // Format selects the rendering of a diagnostic list.

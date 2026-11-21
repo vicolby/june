@@ -339,3 +339,42 @@ func TestFailureOutputHasNoAbsolutePaths(t *testing.T) {
 		})
 	}
 }
+
+func TestOptOuts(t *testing.T) {
+	const body = `def a(x=[]):  # june: ignore[PY012] shared on purpose
+    pass
+def b(x=[]):  # june: ignore[PY012]
+    pass
+def c(x=[]):  # june: ignore[PY999] typo
+    pass
+def d(x=1):  # june: ignore[PY012] nothing here
+    pass
+def e(x=[]):  # june: ignore PY012 why
+    pass
+def f(x="# june: ignore[PY012] in a string", y=[]):
+    pass
+def g(x=[]):  # june: ignore[PY012] untouched line
+    pass
+`
+	env := tree(t, map[string]string{"a.py": body})
+	res := change(t, env, "a.py:1-12\n")
+	expect(t, res, 1, "a.py:1:15: PY012 opt-out: shared on purpose\n"+
+		"a.py:3:15: OPTOUT malformed opt-out suppresses nothing: the reason is required. Fix: write # june: ignore[RULE] reason\n"+
+		"a.py:5:15: OPTOUT malformed opt-out suppresses nothing: rule PY999 does not exist. Fix: name a rule from the rules directory\n"+
+		"a.py:7:14: PY012 opt-out: nothing here (suppresses nothing: no PY012 finding on this line)\n"+
+		"a.py:9:15: OPTOUT malformed opt-out suppresses nothing: the comment is not `ignore[RULE] reason`. Fix: write # june: ignore[RULE] reason\n"+
+		"a.py:3:9: "+py012+
+		"a.py:5:9: "+py012+
+		"a.py:9:9: "+py012+
+		"a.py:11:48: "+py012)
+}
+
+func TestOptOutHonouredKeepsExitZero(t *testing.T) {
+	env := tree(t, map[string]string{"a.py": "def a(x=[]):  # june: ignore[PY012] shared on purpose\n    pass\n"})
+	expect(t, change(t, env, "a.py:1\n"), 0, "a.py:1:15: PY012 opt-out: shared on purpose\n")
+}
+
+func TestOptOutOffTouchedLineIsSilent(t *testing.T) {
+	env := tree(t, map[string]string{"a.py": "def a(x=[]):  # june: ignore[PY012] why\n    pass\n"})
+	expect(t, change(t, env, "a.py:2\n"), 0, "")
+}

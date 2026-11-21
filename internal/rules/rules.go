@@ -26,6 +26,9 @@ const (
 	exampleFixHint  = "make the rule and its examples in %s agree"
 	pythonExtension = ".py"
 
+	optOutMarker      = "june:"
+	suppressionMarker = "ast-grep-ignore"
+
 	// isolatedConfig is the only ast-grep configuration june ever uses, so a run depends on the
 	// shipped rules and the touched files and never on an sgconfig.yml found in the working directory.
 	isolatedConfig = "ruleDirs: [rules]\ntestConfigs:\n  - testDir: " + testsDir + "\n"
@@ -43,6 +46,7 @@ type Fault struct {
 type RuleSet struct {
 	bin    string
 	inline string
+	ids    map[string]bool
 }
 
 // Match is one rule match anchored at its first line. Line and Col are one-based.
@@ -57,6 +61,17 @@ type Match struct {
 // Scanned is what a scan of files found.
 type Scanned struct {
 	Matches []Match
+	OptOuts []OptOut
+}
+
+// OptOut is one inline `# june: ignore[RULE] reason` comment. Line and Col are one-based.
+// Problem is empty for a well-formed opt-out and otherwise says why it suppresses nothing.
+type OptOut struct {
+	File      string
+	Line, Col int
+	Rule      string
+	Reason    string
+	Problem   string
 }
 
 // ruleDoc is the part of an ast-grep rule that june reads.
@@ -112,7 +127,7 @@ func Load(ctx context.Context, dir string) (*RuleSet, []Fault) {
 	if faults := verify(ctx, bin, dir, files, examples); len(faults) > 0 {
 		return nil, faults
 	}
-	return &RuleSet{bin: bin, inline: strings.Join(docs, "\n---\n")}, nil
+	return &RuleSet{bin: bin, inline: strings.Join(docs, "\n---\n"), ids: ids}, nil
 }
 
 // Scan runs the rules over the given files and keeps only Python files.
@@ -141,9 +156,14 @@ func (rs *RuleSet) Scan(ctx context.Context, files []string) (Scanned, error) {
 				return Scanned{}, errors.New("the scan cannot create its configuration")
 			}
 		}
-		if err := rs.disableSuppressions(ctx, config, source); err != nil {
-			return Scanned{}, err
+		var cs []comment
+		if bytes.Contains(source, []byte(optOutMarker)) || bytes.Contains(source, []byte(suppressionMarker)) {
+			if cs, err = rs.comments(ctx, config, source); err != nil {
+				return Scanned{}, err
+			}
 		}
+		out.OptOuts = append(out.OptOuts, rs.optOuts(f, source, cs)...)
+		disableSuppressions(source, cs)
 		stdout, err := runASTGrep(ctx, rs.bin, config, source, "scan", "--inline-rules", rs.inline, "--json=stream")
 		if err != nil {
 			return Scanned{}, err
@@ -199,34 +219,89 @@ func runASTGrep(ctx context.Context, bin, config string, source []byte, args ...
 	return stdout, nil
 }
 
-func (rs *RuleSet) disableSuppressions(ctx context.Context, config string, source []byte) error {
-	if !bytes.Contains(source, []byte("ast-grep-ignore")) {
-		return nil
-	}
+// comment is a Python comment node. Line and Col are one-based, start and end are byte offsets.
+type comment struct {
+	line, col, start, end int
+}
+
+// comments finds the comment nodes of source, so a marker inside a string literal is never one.
+func (rs *RuleSet) comments(ctx context.Context, config string, source []byte) ([]comment, error) {
 	stdout, err := runASTGrep(ctx, rs.bin, config, source, "run", "--lang", "python", "--kind", "comment", "--json=stream")
 	if err != nil {
-		return err
+		return nil, err
 	}
+	var cs []comment
 	dec := json.NewDecoder(bytes.NewReader(stdout))
 	for {
 		var m struct {
 			Range struct {
 				ByteOffset struct{ Start, End int }
+				Start      struct{ Line, Column int }
 			}
 		}
 		if err := dec.Decode(&m); err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil
+				return cs, nil
 			}
-			return errors.New("ast-grep returned unreadable comment ranges")
+			return nil, errors.New("ast-grep returned unreadable comment ranges")
 		}
 		start, end := m.Range.ByteOffset.Start, m.Range.ByteOffset.End
 		if start < 0 || end <= start || end > len(source) {
-			return errors.New("ast-grep returned invalid comment ranges")
+			return nil, errors.New("ast-grep returned invalid comment ranges")
 		}
-		comment := source[start:end]
-		copy(comment, bytes.ReplaceAll(comment, []byte("ast-grep-ignore"), []byte("ast_grep_ignore")))
+		cs = append(cs, comment{line: m.Range.Start.Line + 1, col: m.Range.Start.Column + 1, start: start, end: end})
 	}
+}
+
+// disableSuppressions defuses ast-grep's own suppression comments in place, so only june opt-outs suppress.
+func disableSuppressions(source []byte, cs []comment) {
+	for _, c := range cs {
+		text := source[c.start:c.end]
+		copy(text, bytes.ReplaceAll(text, []byte(suppressionMarker), []byte("ast_grep_ignore")))
+	}
+}
+
+var optOutPattern = regexp.MustCompile(`^#\s*june:\s*(.*)$`)
+
+// optOuts reads the opt-outs out of the comments of source. A comment is an opt-out when it starts with `june:`.
+func (rs *RuleSet) optOuts(file string, source []byte, cs []comment) []OptOut {
+	var out []OptOut
+	for _, c := range cs {
+		m := optOutPattern.FindStringSubmatch(strings.TrimSpace(string(source[c.start:c.end])))
+		if m == nil {
+			continue
+		}
+		o := OptOut{File: file, Line: c.line, Col: c.col}
+		o.Rule, o.Reason, o.Problem = rs.parseOptOut(m[1])
+		out = append(out, o)
+	}
+	return out
+}
+
+const optOutSyntax = "write # june: ignore[RULE] reason"
+
+// parseOptOut parses what follows `june:`.
+func (rs *RuleSet) parseOptOut(body string) (rule, reason, problem string) {
+	rest, ok := strings.CutPrefix(body, "ignore[")
+	if !ok {
+		return "", "", "the comment is not `ignore[RULE] reason`. Fix: " + optOutSyntax
+	}
+	rule, reason, ok = strings.Cut(rest, "]")
+	if !ok {
+		return "", "", "the rule bracket is not closed. Fix: " + optOutSyntax
+	}
+	rule, reason = strings.TrimSpace(rule), strings.TrimSpace(reason)
+	switch {
+	case rule == "":
+		return "", "", "no rule is named. Fix: " + optOutSyntax
+	case strings.ContainsAny(rule, ", \t"):
+		return "", "", "an opt-out names exactly one rule. Fix: name a single rule in brackets"
+	case !rs.ids[rule]:
+		return rule, "", "rule " + rule + " does not exist. Fix: name a rule from the rules directory"
+	case reason == "":
+		return rule, "", "the reason is required. Fix: " + optOutSyntax
+	}
+	return rule, reason, ""
 }
 
 // ruleFiles lists the rule files directly inside dir, sorted.
