@@ -147,7 +147,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 }
 
 // Rules verifies every example of every rule in dir, "" meaning ./.june/rules.
-// Exit 0 means every example behaved. Any rule fault is Exit 2 and names the rule file and example.
+// Exit 0 means every example behaved. Any rule fault is Exit 2.
 func Rules(ctx context.Context, env Env, dir string) (Result, error) {
 	if env.Dir == "" {
 		return Result{}, errors.New("check: Env.Dir is empty")

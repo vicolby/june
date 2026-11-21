@@ -75,7 +75,7 @@ func Load(ctx context.Context, dir string) (*RuleSet, []Fault) // faults non-emp
 func (*RuleSet) Scan(ctx context.Context, files []string) (Scanned, error)
 ```
 
-A `*RuleSet` exists only if every example behaved, so an unverified rule cannot produce a verdict.
+A `*RuleSet` exists only if every example behaved, including a rule whose severity is off, so an unverified rule cannot produce a verdict.
 Faults: unparseable rule, empty message, failing example, zero rules.
 Scan reads only the given files, anchors each match at its first line, and reports comments so `check` never learns a comment marker.
 
@@ -107,7 +107,7 @@ The list contains one `path:7` or `path:7-12` entry per line, with one-based, in
 Blank lines are ignored; whitespace in filenames is preserved, and only `.py` files are checked.
 The current check requires this list and emits plain text. Completed checks (exit 0 or 1) end with a summary line, `june: 1 error, 0 warnings, 0 opt-outs; checked 2 files, 5 changed lines`; refusals (exit 2) have no summary.
 Coverage counts distinct listed Python files and changed lines, counting overlapping ranges only once; the opt-out count is every opt-out printed on a touched line, honoured or not.
-`june verify` runs every example of every rule and prints `june: verified 1 rule, 19 examples` on success; each rule fault is one line naming the rule file or sidecar and, for a failing example, the example, and any fault exits 2, as it does for a normal run.
+`june verify` runs every example of every rule and prints `june: verified 1 rule, 19 examples` on success. Any fault exits 2, as it does for a normal run, and each fault is one line naming the rules directory, the rule file, or the sidecar, and, for a failing example, the example.
 Git scope inference and CI-specific formats remain planned.
 
 `cmd/june` is a shell and owns no decision.
