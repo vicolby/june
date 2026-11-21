@@ -405,7 +405,7 @@ func verify(ctx context.Context, bin, dir string, files, examples []string) []Fa
 	}
 
 	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, bin, "test", "--config", filepath.Join(scratch, "sgconfig.yml"), "--skip-snapshot-tests", "--color=never")
+	cmd := exec.CommandContext(ctx, bin, "test", "--config", filepath.Join(scratch, "sgconfig.yml"), "--skip-snapshot-tests", "--include-off", "--color=never")
 	cmd.Dir = scratch
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err = cmd.Run()
@@ -483,6 +483,14 @@ type misbehavior struct {
 
 var caseHeader = regexp.MustCompile(`^\[(Noisy|Missing)\] Expect (?:rule )?(\S+) to `)
 
+func closesExample(line string) bool {
+	return strings.HasPrefix(line, "PASS ") || strings.HasPrefix(line, "FAIL ") || strings.HasPrefix(line, "SKIP ") || strings.HasPrefix(line, "Error: ")
+}
+
+func indented(line string) bool {
+	return strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")
+}
+
 // misbehaving reads the individual examples out of the case details of ast-grep test output.
 func misbehaving(text string) []misbehavior {
 	var out []misbehavior
@@ -504,10 +512,11 @@ func misbehaving(text string) []misbehavior {
 			}
 			continue
 		}
-		if strings.HasPrefix(l, "FAIL ") || strings.HasPrefix(l, "Error: ") {
+		if closesExample(l) {
 			flush()
+			continue
 		}
-		if cur != nil {
+		if cur != nil && indented(l) {
 			code = append(code, l)
 		}
 	}
@@ -518,12 +527,19 @@ func misbehaving(text string) []misbehavior {
 // caseDetails extracts the failing example report from ast-grep test output.
 func caseDetails(text string) string {
 	const marker = "-- Case Details -----------"
-	_, after, ok := strings.Cut(text, marker)
-	if !ok {
-		return oneLine(text)
+	if _, after, ok := strings.Cut(text, marker); ok {
+		text = after
 	}
-	block, _, _ := strings.Cut(after, "\nFAIL ")
-	return oneLine(block)
+	var code []string
+	for _, l := range strings.Split(text, "\n") {
+		if closesExample(l) {
+			break
+		}
+		if indented(l) {
+			code = append(code, l)
+		}
+	}
+	return oneLine(strings.Join(code, "\n"))
 }
 
 // failureReason picks the innermost cause out of ast-grep's error output.
