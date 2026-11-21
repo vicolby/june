@@ -153,7 +153,7 @@ func TestPathSpellingsAgree(t *testing.T) {
 func TestRulesFlagOverridesDefault(t *testing.T) {
 	env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\n"})
 	copyDir(t, filepath.Join("..", "..", "rules", "python"), filepath.Join(env.Dir, "elsewhere"))
-	res, err := check.Change(context.Background(), env, check.Request{Changed: strings.NewReader("app.py:1\n"), Rules: "elsewhere"})
+	res, err := check.Change(context.Background(), env, check.Request{Changed: strings.NewReader("app.py:1\n"), Rules: []string{"elsewhere"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestRulesFlagOverridesDefault(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(env.Dir, ".june")); err != nil {
 		t.Fatal(err)
 	}
-	res, _ = check.Change(context.Background(), env, check.Request{Changed: strings.NewReader("app.py:1\n"), Rules: "elsewhere"})
+	res, _ = check.Change(context.Background(), env, check.Request{Changed: strings.NewReader("app.py:1\n"), Rules: []string{"elsewhere"}})
 	expect(t, res, 1, "app.py:1:9: "+py012)
 }
 
@@ -211,7 +211,10 @@ func TestRefusals(t *testing.T) {
 			if tt.path != "" {
 				t.Setenv("PATH", t.TempDir())
 			}
-			req := check.Request{Rules: tt.rules}
+			req := check.Request{}
+			if tt.rules != "" {
+				req.Rules = []string{tt.rules}
+			}
 			if tt.list != nil {
 				req.Changed = strings.NewReader(*tt.list)
 			}
@@ -336,7 +339,7 @@ func TestFailureOutputHasNoAbsolutePaths(t *testing.T) {
 			req := check.Request{Changed: strings.NewReader("app.py:1\n")}
 			switch failure {
 			case "rules directory":
-				req.Rules = filepath.Join(env.Dir, "missing", "rules")
+				req.Rules = []string{filepath.Join(env.Dir, "missing", "rules")}
 			case "rule file":
 				file := filepath.Join(env.Dir, ".june", "rules", "PY012.yml")
 				if err := os.Chmod(file, 0); err != nil {
@@ -555,7 +558,7 @@ func TestSummaryCountsOptOutsOnTouchedLines(t *testing.T) {
 
 func TestRulesVerifiesEveryExample(t *testing.T) {
 	env := tree(t, nil)
-	res, err := check.Rules(context.Background(), env, "")
+	res, err := check.Rules(context.Background(), env, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -611,11 +614,11 @@ func TestRulesFaultsRefuseVerifyAndRunAlike(t *testing.T) {
 			write(t, filepath.Join(dir, "app.py"), "x = [1]\n")
 			env := check.Env{Dir: dir}
 
-			verified, err := check.Rules(context.Background(), env, "rules")
+			verified, err := check.Rules(context.Background(), env, []string{"rules"})
 			if err != nil {
 				t.Fatal(err)
 			}
-			run, err := check.Change(context.Background(), env, check.Request{Rules: "rules", Changed: strings.NewReader("app.py:1\n")})
+			run, err := check.Change(context.Background(), env, check.Request{Rules: []string{"rules"}, Changed: strings.NewReader("app.py:1\n")})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -633,13 +636,205 @@ func TestRulesFaultsRefuseVerifyAndRunAlike(t *testing.T) {
 func TestRulesCancelledContextIsAnError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := check.Rules(ctx, tree(t, nil), ""); !errors.Is(err, context.Canceled) {
+	if _, err := check.Rules(ctx, tree(t, nil), nil); !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }
 
 func TestRulesEmptyEnvDirIsAnError(t *testing.T) {
-	if _, err := check.Rules(context.Background(), check.Env{}, ""); err == nil {
+	if _, err := check.Rules(context.Background(), check.Env{}, nil); err == nil {
 		t.Error("err = nil, want an error")
+	}
+}
+
+// lst01 writes a rule that flags list displays, with examples, as id in dir.
+func lst01(t *testing.T, dir, file, id, msg string) {
+	t.Helper()
+	write(t, filepath.Join(dir, file), "id: "+id+"\nlanguage: python\nseverity: error\nmessage: "+msg+"\nrule:\n  kind: list\n")
+	write(t, filepath.Join(dir, "rule-tests", id+"-test.yml"), "id: "+id+"\nvalid:\n  - \"x = (1,)\"\ninvalid:\n  - \"x = [1]\"\n")
+}
+
+func changeWith(t *testing.T, env check.Env, rules []string, list string) check.Result {
+	t.Helper()
+	res, err := check.Change(context.Background(), env, check.Request{Rules: rules, Changed: strings.NewReader(list)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+func TestRepeatedRulesAreMerged(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "def f(a={}): pass\nx = [1]\n"})
+	lst01(t, filepath.Join(env.Dir, "shared"), "LST01.yml", "LST01", "No lists.")
+	res := changeWith(t, env, []string{".june/rules", "shared"}, "app.py:1-2\n")
+	want := "app.py:1:9: " + py012 + "app.py:2:5: LST01 No lists.\n"
+	if res.Exit != 1 || !strings.HasPrefix(string(res.Out), want) {
+		t.Errorf("Exit = %d, Out = %q, want 1 and prefix %q", res.Exit, res.Out, want)
+	}
+}
+
+// The verdict does not depend on which directory comes first.
+func TestRulesDirectoryOrderDoesNotChangeOutput(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "def f(a={}): pass\nx = [1]\n"})
+	lst01(t, filepath.Join(env.Dir, "shared"), "LST01.yml", "LST01", "No lists.")
+	a := changeWith(t, env, []string{".june/rules", "shared"}, "app.py:1-2\n")
+	b := changeWith(t, env, []string{"shared", ".june/rules"}, "app.py:1-2\n")
+	if a.Exit != 1 || b.Exit != 1 || string(a.Out) != string(b.Out) {
+		t.Errorf("orders differ:\n%d %q\n%d %q", a.Exit, a.Out, b.Exit, b.Out)
+	}
+}
+
+func TestRulesAcrossDirectoriesNameBothFilesOnDuplicateID(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "x = [1]\n"})
+	lst01(t, filepath.Join(env.Dir, "one"), "LST01.yml", "LST01", "No lists.")
+	lst01(t, filepath.Join(env.Dir, "two"), "other.yml", "LST01", "Still no lists.")
+	want := "june: error: two/other.yml: the rule id LST01 is duplicated (also defined in one/LST01.yml). Fix: give every rule a unique id\n"
+	res := changeWith(t, env, []string{"one", "two"}, "app.py:1\n")
+	if res.Exit != 2 || string(res.Out) != want {
+		t.Errorf("Exit = %d, Out = %q, want 2 and %q", res.Exit, res.Out, want)
+	}
+	verified, err := check.Rules(context.Background(), env, []string{"one", "two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Exit != 2 || string(verified.Out) != want {
+		t.Errorf("verify Exit = %d, Out = %q, want 2 and %q", verified.Exit, verified.Out, want)
+	}
+}
+
+func TestCaseVariantRuleIDsAreDuplicates(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "x = [1]\n"})
+	// Foo's valid example is a list the rule matches, so skipping its examples would let the rule emit findings.
+	write(t, filepath.Join(env.Dir, "A", "Foo.yml"), "id: Foo\nlanguage: python\nseverity: error\nmessage: No lists.\nrule:\n  kind: list\n")
+	write(t, filepath.Join(env.Dir, "A", "rule-tests", "Foo-test.yml"), "id: Foo\nvalid:\n  - \"x = [1]\"\ninvalid:\n  - \"x = [1]\"\n")
+	lst01(t, filepath.Join(env.Dir, "B"), "foo.yml", "foo", "No lists.")
+	for _, tc := range []struct {
+		dirs []string
+		want string
+	}{
+		{[]string{"A", "B"}, "june: error: B/foo.yml: the rule id foo is duplicated (also defined in A/Foo.yml). Fix: give every rule a unique id\n"},
+		{[]string{"B", "A"}, "june: error: A/Foo.yml: the rule id Foo is duplicated (also defined in B/foo.yml). Fix: give every rule a unique id\n"},
+	} {
+		res := changeWith(t, env, tc.dirs, "app.py:1\n")
+		if res.Exit != 2 || string(res.Out) != tc.want {
+			t.Errorf("dirs %v: Exit = %d, Out = %q, want 2 and %q", tc.dirs, res.Exit, res.Out, tc.want)
+		}
+		verified, err := check.Rules(context.Background(), env, tc.dirs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if verified.Exit != 2 || string(verified.Out) != tc.want {
+			t.Errorf("dirs %v: verify Exit = %d, Out = %q, want 2 and %q", tc.dirs, verified.Exit, verified.Out, tc.want)
+		}
+	}
+}
+
+func TestAbsoluteRulesDirectoriesWithTheSameBaseNameStayDistinct(t *testing.T) {
+	root := t.TempDir()
+	app := filepath.Join(root, "app")
+	if err := os.MkdirAll(app, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(app, "app.py"), "x = [1]\n")
+	env := check.Env{Dir: app}
+	shared := filepath.Join(root, "shared", "rules")
+	local := filepath.Join(app, ".june", "rules")
+	lst01(t, shared, "LST01.yml", "LST01", "No lists.")
+	lst01(t, local, "LST01.yml", "LST01", "Still no lists.")
+	want := "june: error: .june/rules/LST01.yml: the rule id LST01 is duplicated (also defined in ../shared/rules/LST01.yml). Fix: give every rule a unique id\n"
+	res := changeWith(t, env, []string{shared, local}, "app.py:1\n")
+	if res.Exit != 2 || string(res.Out) != want || strings.Contains(string(res.Out), root) {
+		t.Errorf("Exit = %d, Out = %q, want 2 and %q", res.Exit, res.Out, want)
+	}
+	verified, err := check.Rules(context.Background(), env, []string{shared, local})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Exit != 2 || string(verified.Out) != want || strings.Contains(string(verified.Out), root) {
+		t.Errorf("verify Exit = %d, Out = %q, want 2 and %q", verified.Exit, verified.Out, want)
+	}
+}
+
+// Same file names in different directories with different ids must not collide while examples run.
+func TestRulesAcrossDirectoriesMayShareFileNames(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "x = [1]\ny = {1: 2}\n"})
+	lst01(t, filepath.Join(env.Dir, "one"), "rule.yml", "LST01", "No lists.")
+	write(t, filepath.Join(env.Dir, "two", "rule.yml"), "id: DCT01\nlanguage: python\nseverity: error\nmessage: No dicts.\nrule:\n  kind: dictionary\n")
+	write(t, filepath.Join(env.Dir, "two", "rule-tests", "DCT01-test.yml"), "id: DCT01\nvalid:\n  - \"x = 1\"\ninvalid:\n  - \"x = {1: 2}\"\n")
+	res := changeWith(t, env, []string{"one", "two"}, "app.py:1-2\n")
+	if res.Exit != 1 || !strings.HasPrefix(string(res.Out), "app.py:1:5: LST01 No lists.\napp.py:2:5: DCT01 No dicts.\n") {
+		t.Errorf("Exit = %d, Out = %q", res.Exit, res.Out)
+	}
+}
+
+func TestRulesRepeatedSameDirectoryCountsOnce(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\n"})
+	res := changeWith(t, env, []string{".june/rules", "./.june/rules", ".june/../.june/rules"}, "app.py:1\n")
+	expect(t, res, 1, "app.py:1:9: "+py012)
+	verified, err := check.Rules(context.Background(), env, []string{".june/rules", ".june/rules/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "june: verified 1 rule, 19 examples\n"; verified.Exit != 0 || string(verified.Out) != want {
+		t.Errorf("Exit = %d, Out = %q, want 0 and %q", verified.Exit, verified.Out, want)
+	}
+}
+
+func TestRulesCountsSumAcrossDirectories(t *testing.T) {
+	env := tree(t, nil)
+	lst01(t, filepath.Join(env.Dir, "shared"), "LST01.yml", "LST01", "No lists.")
+	res, err := check.Rules(context.Background(), env, []string{".june/rules", "shared"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "june: verified 2 rules, 21 examples\n"; res.Exit != 0 || string(res.Out) != want {
+		t.Errorf("Exit = %d, Out = %q, want 0 and %q", res.Exit, res.Out, want)
+	}
+}
+
+// Every bad directory is reported, each under its own spelling, and no partial set runs.
+func TestRulesAcrossDirectoriesReportEveryBadDirectory(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "x = [1]\n"})
+	write(t, filepath.Join(env.Dir, "hollow", "README.md"), "no rules\n")
+	res := changeWith(t, env, []string{".june/rules", "absent", "hollow"}, "app.py:1\n")
+	want := "june: error: absent: the rules directory does not exist. Fix: create it or point --rules at an existing rules directory\n" +
+		"june: error: hollow: the rules directory holds no rules. Fix: add a rule file such as PY012.yml with its rule-tests/PY012-test.yml, or point --rules elsewhere\n"
+	if res.Exit != 2 || string(res.Out) != want {
+		t.Errorf("Exit = %d, Out = %q, want 2 and %q", res.Exit, res.Out, want)
+	}
+}
+
+func TestFailingExampleNamesItsOwnDirectory(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "x = [1]\n"})
+	lst01(t, filepath.Join(env.Dir, "shared"), "LST01.yml", "LST01", "No lists.")
+	write(t, filepath.Join(env.Dir, "shared", "rule-tests", "LST01-test.yml"), "id: LST01\nvalid:\n  - \"x = [1]\"\ninvalid:\n  - \"x = [1]\"\n")
+	res := changeWith(t, env, []string{".june/rules", "shared"}, "app.py:1\n")
+	want := "june: error: shared/rule-tests/LST01-test.yml: rule LST01 valid example \"x = [1]\" is reported by the rule. Fix: make the rule and its examples in rule-tests/LST01-test.yml agree\n"
+	if res.Exit != 2 || string(res.Out) != want {
+		t.Errorf("Exit = %d, Out = %q, want 2 and %q", res.Exit, res.Out, want)
+	}
+}
+
+func TestUnparseableRuleNamesItsOwnDirectory(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "x = [1]\n"})
+	write(t, filepath.Join(env.Dir, "shared", "rule.yml"), "id: BAD01\nlanguage: python\nmessage: m\nrule:\n  kind: list\nbogus: 1\n")
+	write(t, filepath.Join(env.Dir, "shared", "rule-tests", "BAD01-test.yml"), "id: BAD01\nvalid:\n  - \"x = (1,)\"\ninvalid:\n  - \"x = [1]\"\n")
+	res := changeWith(t, env, []string{".june/rules", "shared"}, "app.py:1\n")
+	if res.Exit != 2 || !strings.HasPrefix(string(res.Out), "june: error: shared/rule.yml: ast-grep cannot parse the rule (") {
+		t.Errorf("Exit = %d, Out = %q", res.Exit, res.Out)
+	}
+}
+
+func TestEmptyRulesEntryMeansDefault(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\n"})
+	expect(t, changeWith(t, env, []string{""}, "app.py:1\n"), 1, "app.py:1:9: "+py012)
+}
+
+func TestOptOutNamesRuleFromAnyDirectory(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "x = [1]  # june: ignore[LST01] fixture\n"})
+	lst01(t, filepath.Join(env.Dir, "shared"), "LST01.yml", "LST01", "No lists.")
+	res := changeWith(t, env, []string{".june/rules", "shared"}, "app.py:1\n")
+	if res.Exit != 0 || !strings.Contains(string(res.Out), "opt-out: fixture") {
+		t.Errorf("Exit = %d, Out = %q, want 0 with the opt-out printed", res.Exit, res.Out)
 	}
 }

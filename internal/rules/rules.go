@@ -34,12 +34,31 @@ const (
 	isolatedConfig = "ruleDirs: [rules]\ntestConfigs:\n  - testDir: " + testsDir + "\n"
 )
 
+// Place is a file inside one of the rules directories given to Load.
+// Dir indexes that argument list and Path is relative to the directory.
+type Place struct {
+	Dir  int
+	Path string
+}
+
 // Fault is one reason a rule directory cannot be trusted.
-// Path is relative to the rules directory, empty when the fault concerns the directory itself.
+// Dir is the index of the directory it concerns in the list given to Load.
+// Path is relative to that directory, empty when the fault concerns the directory itself.
+// Also is the other file involved when two files conflict, such as a rule id defined twice.
 type Fault struct {
+	Dir   int
 	Path  string
 	Cause string
 	Fix   string
+	Also  *Place
+}
+
+// entry is one rule file waiting for its examples to be verified.
+type entry struct {
+	place    Place
+	id       string
+	doc      string
+	examples int
 }
 
 // RuleSet is a set of rules whose examples all behaved.
@@ -95,49 +114,79 @@ type exampleDoc struct {
 	Invalid []string `yaml:"invalid"`
 }
 
-// Load verifies every rule in dir against its sidecar examples.
+// Load verifies every rule in every dir against its sidecar examples and merges them into one set.
+// The same rule id in two files is a fault, wherever the files live. Ids that differ only by case are the same id.
 // Faults non-empty means a nil set, never a partial set.
-func Load(ctx context.Context, dir string) (*RuleSet, []Fault) {
+func Load(ctx context.Context, dirs ...string) (*RuleSet, []Fault) {
 	bin, err := exec.LookPath(astGrepName)
 	if err != nil {
 		return nil, []Fault{{Cause: "ast-grep was not found", Fix: astGrepFindFix}}
 	}
-	info, err := os.Stat(dir)
-	if err != nil || !info.IsDir() {
-		return nil, []Fault{{Cause: "the rules directory does not exist", Fix: "create it or point --rules at an existing rules directory"}}
-	}
-
-	files, err := ruleFiles(dir)
-	if err != nil {
-		return nil, []Fault{{Cause: "the rules directory cannot be read", Fix: "make the rules directory readable"}}
-	}
-	if len(files) == 0 {
-		return nil, []Fault{{Cause: "the rules directory holds no rules", Fix: "add a rule file such as PY012.yml with its rule-tests/PY012-test.yml, or point --rules elsewhere"}}
+	if len(dirs) == 0 {
+		return nil, []Fault{{Cause: "no rules directory was given", Fix: "point --rules at a rules directory"}}
 	}
 
 	var faults []Fault
-	var docs []string
-	var examples []string
-	var total int
-	ids := map[string]bool{}
-	for _, name := range files {
-		doc, id, n, fs := readRule(dir, name)
-		total += n
-		if id != "" && ids[id] {
-			fs = append(fs, Fault{Path: name, Cause: "the rule id is duplicated", Fix: "give every rule a unique id"})
+	var entries []entry
+	places := map[string]Place{}
+	for i, dir := range dirs {
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
+			faults = append(faults, Fault{Dir: i, Cause: "the rules directory does not exist", Fix: "create it or point --rules at an existing rules directory"})
+			continue
 		}
-		ids[id] = true
-		examples = append(examples, filepath.Join(testsDir, id+"-test.yml"))
-		faults = append(faults, fs...)
-		docs = append(docs, doc)
+		files, err := ruleFiles(dir)
+		if err != nil {
+			faults = append(faults, Fault{Dir: i, Cause: "the rules directory cannot be read", Fix: "make the rules directory readable"})
+			continue
+		}
+		if len(files) == 0 {
+			faults = append(faults, Fault{Dir: i, Cause: "the rules directory holds no rules", Fix: "add a rule file such as PY012.yml with its rule-tests/PY012-test.yml, or point --rules elsewhere"})
+			continue
+		}
+		for _, name := range files {
+			doc, id, n, fs := readRule(dir, name)
+			for _, f := range fs {
+				f.Dir = i
+				faults = append(faults, f)
+			}
+			if id == "" {
+				continue
+			}
+			if first, dup := knownID(places, id); dup {
+				faults = append(faults, Fault{Dir: i, Path: name, Cause: fmt.Sprintf("the rule id %s is duplicated", id), Fix: "give every rule a unique id", Also: &first})
+				continue
+			}
+			here := Place{Dir: i, Path: name}
+			places[id] = here
+			entries = append(entries, entry{place: here, id: id, doc: doc, examples: n})
+		}
 	}
 	if len(faults) > 0 {
 		return nil, faults
 	}
-	if faults := verify(ctx, bin, dir, files, examples); len(faults) > 0 {
+	if faults := verify(ctx, bin, dirs, entries); len(faults) > 0 {
 		return nil, faults
 	}
-	return &RuleSet{bin: bin, inline: strings.Join(docs, "\n---\n"), ids: ids, rules: len(files), examples: total}, nil
+	docs := make([]string, len(entries))
+	ids := make(map[string]bool, len(entries))
+	total := 0
+	for i, e := range entries {
+		docs[i] = e.doc
+		ids[e.id] = true
+		total += e.examples
+	}
+	return &RuleSet{bin: bin, inline: strings.Join(docs, "\n---\n"), ids: ids, rules: len(entries), examples: total}, nil
+}
+
+// knownID reports the file that already owns id. Comparison is case-insensitive because staging uses the id as a filename.
+func knownID(places map[string]Place, id string) (Place, bool) {
+	for seen, at := range places {
+		if strings.EqualFold(seen, id) {
+			return at, true
+		}
+	}
+	return Place{}, false
 }
 
 // Scan runs the rules over the given files and keeps only Python files.
@@ -389,8 +438,8 @@ var (
 	parseLine = regexp.MustCompile(`Cannot parse rule (\S+)`)
 )
 
-// verify runs the examples of every rule through ast-grep in a scratch copy of the directory.
-func verify(ctx context.Context, bin, dir string, files, examples []string) []Fault {
+// verify runs the examples of every rule through ast-grep in a scratch directory.
+func verify(ctx context.Context, bin string, dirs []string, entries []entry) []Fault {
 	scratch, err := os.MkdirTemp("", "june-rules-")
 	if err != nil {
 		return []Fault{{Cause: "the examples cannot be run", Fix: "make the temporary directory writable"}}
@@ -400,8 +449,12 @@ func verify(ctx context.Context, bin, dir string, files, examples []string) []Fa
 		scratch = real
 	}
 
-	if err := stage(scratch, dir, files, examples); err != nil {
-		return []Fault{{Cause: "the examples cannot be run", Fix: "make the rules directory readable"}}
+	where := make(map[string]Place, len(entries))
+	for _, e := range entries {
+		where[e.id] = e.place
+	}
+	if faults := stage(scratch, dirs, entries); len(faults) > 0 {
+		return faults
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -421,6 +474,7 @@ func verify(ctx context.Context, bin, dir string, files, examples []string) []Fa
 	for _, c := range misbehaving(text) {
 		path := filepath.Join(testsDir, c.rule+"-test.yml")
 		faults = append(faults, Fault{
+			Dir:   where[c.rule].Dir,
 			Path:  path,
 			Cause: fmt.Sprintf("rule %s %s example %q %s", c.rule, c.kind, c.code, c.problem),
 			Fix:   fmt.Sprintf(exampleFixHint, path),
@@ -432,6 +486,7 @@ func verify(ctx context.Context, bin, dir string, files, examples []string) []Fa
 	for _, m := range failLine.FindAllStringSubmatch(text, -1) {
 		path := filepath.Join(testsDir, m[1]+"-test.yml")
 		faults = append(faults, Fault{
+			Dir:   where[m[1]].Dir,
 			Path:  path,
 			Cause: fmt.Sprintf("an example of rule %s misbehaves (%s)", m[1], caseDetails(text)),
 			Fix:   fmt.Sprintf(exampleFixHint, path),
@@ -441,39 +496,85 @@ func verify(ctx context.Context, bin, dir string, files, examples []string) []Fa
 		return faults
 	}
 	if m := parseLine.FindStringSubmatch(text); m != nil {
-		path := strings.TrimPrefix(m[1], "rules"+string(filepath.Separator))
-		return []Fault{{Path: path, Cause: "ast-grep cannot parse the rule (" + oneLine(failureReason(text)) + ")", Fix: "fix the rule so ast-grep accepts it"}}
+		at := where[strings.TrimSuffix(strings.TrimPrefix(m[1], "rules"+string(filepath.Separator)), ".yml")]
+		return []Fault{{Dir: at.Dir, Path: at.Path, Cause: "ast-grep cannot parse the rule (" + oneLine(failureReason(text)) + ")", Fix: "fix the rule so ast-grep accepts it"}}
 	}
 	return []Fault{{Cause: "the examples cannot be run", Fix: "run ast-grep test on the rules directory to see why"}}
 }
 
+// stagedFile is one file already written into the scratch tree.
+type stagedFile struct {
+	path  string
+	place Place
+}
+
 // stage lays rule files and examples out the way ast-grep test expects them.
-func stage(scratch, dir string, files, examples []string) error {
+// A destination that already exists is a duplicate rule id and is left untouched.
+func stage(scratch string, dirs []string, entries []entry) []Fault {
 	if _, err := writeConfig(scratch); err != nil {
-		return err
+		return []Fault{{Cause: "the examples cannot be run", Fix: "make the rules directory readable"}}
 	}
 	if err := os.MkdirAll(filepath.Join(scratch, testsDir), 0o755); err != nil {
-		return err
+		return []Fault{{Cause: "the examples cannot be run", Fix: "make the rules directory readable"}}
 	}
-	for _, name := range files {
-		if err := copyFile(filepath.Join(dir, name), filepath.Join(scratch, "rules", name)); err != nil {
-			return err
+	var laid []stagedFile
+	for _, e := range entries {
+		dir := dirs[e.place.Dir]
+		ruleDst := filepath.Join(scratch, "rules", e.id+".yml")
+		if fault, bad := lay(filepath.Join(dir, e.place.Path), ruleDst, e, &laid); bad {
+			return []Fault{fault}
 		}
-	}
-	for _, name := range examples {
-		if err := copyFile(filepath.Join(dir, name), filepath.Join(scratch, name)); err != nil {
-			return err
+		side := filepath.Join(testsDir, e.id+"-test.yml")
+		if fault, bad := lay(filepath.Join(dir, side), filepath.Join(scratch, side), e, &laid); bad {
+			return []Fault{fault}
 		}
 	}
 	return nil
 }
 
+// lay copies src to a new file at dst. An existing dst is a duplicate of a rule already staged.
+func lay(src, dst string, e entry, laid *[]stagedFile) (Fault, bool) {
+	if err := copyFile(src, dst); err != nil {
+		if !errors.Is(err, os.ErrExist) {
+			return Fault{Cause: "the examples cannot be run", Fix: "make the rules directory readable"}, true
+		}
+		f := Fault{
+			Dir: e.place.Dir, Path: e.place.Path,
+			Cause: fmt.Sprintf("the rule id %s is duplicated", e.id),
+			Fix:   "give every rule a unique id",
+		}
+		if info, statErr := os.Lstat(dst); statErr == nil {
+			for _, prev := range *laid {
+				pinfo, lerr := os.Lstat(prev.path)
+				if lerr == nil && os.SameFile(info, pinfo) {
+					also := prev.place
+					f.Also = &also
+					break
+				}
+			}
+		}
+		return f, true
+	}
+	*laid = append(*laid, stagedFile{path: dst, place: e.place})
+	return Fault{}, false
+}
+
+// copyFile writes dst as a new file. An existing destination is left untouched.
 func copyFile(src, dst string) error {
 	b, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, b, 0o644)
+	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(b)
+	cerr := f.Close()
+	if werr != nil {
+		return werr
+	}
+	return cerr
 }
 
 // misbehavior is one example that ast-grep test reported.

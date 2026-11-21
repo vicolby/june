@@ -58,7 +58,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	fs.SetOutput(io.Discard)
 	showVersion := fs.Bool("version", false, "print the version")
 	changedLines := fs.String("changed-lines", "", "file of touched lines, path:7 or path:7-12 per line; - reads stdin")
-	rulesDir := fs.String("rules", "", "rules directory (default ./.june/rules)")
+	var rulesDirs dirList
+	fs.Var(&rulesDirs, "rules", "rules directory, repeatable (default ./.june/rules)")
 	if err := fs.Parse(args); err != nil {
 		return usageError(stderr, err.Error())
 	}
@@ -70,7 +71,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return 0
 	}
 
-	req := check.Request{Rules: *rulesDir}
+	req := check.Request{Rules: rulesDirs}
 	switch *changedLines {
 	case "":
 	case "-":
@@ -88,19 +89,30 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	return finish(stdout, stderr, res, err)
 }
 
-// verify is `june verify [--rules DIR]`: every example of every rule behaves, or the run is refused.
+// verify is `june verify [--rules DIR]...`: every example of every rule behaves, or the run is refused.
 func verify(ctx context.Context, args []string, stdout, stderr io.Writer, env check.Env) int {
 	fs := flag.NewFlagSet("june verify", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	rulesDir := fs.String("rules", "", "rules directory (default ./.june/rules)")
+	var rulesDirs dirList
+	fs.Var(&rulesDirs, "rules", "rules directory, repeatable (default ./.june/rules)")
 	if err := fs.Parse(args); err != nil {
 		return usageError(stderr, err.Error())
 	}
 	if fs.NArg() > 0 {
 		return usageError(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
 	}
-	res, err := check.Rules(ctx, env, *rulesDir)
+	res, err := check.Rules(ctx, env, rulesDirs)
 	return finish(stdout, stderr, res, err)
+}
+
+// dirList is a repeatable directory flag that keeps the order given.
+type dirList []string
+
+func (d *dirList) String() string { return strings.Join(*d, ",") }
+
+func (d *dirList) Set(v string) error {
+	*d = append(*d, v)
+	return nil
 }
 
 // finish writes a verdict, or explains why there is none, and returns the exit code.
@@ -116,7 +128,7 @@ func finish(stdout, stderr io.Writer, res check.Result, err error) int {
 }
 
 func usageError(stderr io.Writer, cause string) int {
-	return fail(stderr, cause+". Fix: usage is june [--rules DIR] --changed-lines FILE, june verify [--rules DIR], or june --version")
+	return fail(stderr, cause+". Fix: usage is june [--rules DIR]... --changed-lines FILE, june verify [--rules DIR]..., or june --version")
 }
 
 func fail(stderr io.Writer, msg string) int {

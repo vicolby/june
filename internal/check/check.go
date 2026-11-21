@@ -24,8 +24,9 @@ type Env struct {
 type Request struct {
 	// Changed is the supplied touched-line list, one "path:7" or "path:7-12" per line.
 	Changed io.Reader
-	// Rules is the rules directory; "" means ./.june/rules.
-	Rules string
+	// Rules lists the rules directories, merged into one set; empty means ./.june/rules.
+	// A directory named twice counts once, and a rule id defined in two files is a rule fault.
+	Rules []string
 	// Format is the output format; "" means text.
 	Format diag.Format
 }
@@ -146,13 +147,13 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	return render(req, exit, ds, summary(errs, warns, optOutCount, len(files), lines)), nil
 }
 
-// Rules verifies every example of every rule in dir, "" meaning ./.june/rules.
+// Rules verifies every example of every rule in dirs, none meaning ./.june/rules.
 // Exit 0 means every example behaved. Any rule fault is Exit 2.
-func Rules(ctx context.Context, env Env, dir string) (Result, error) {
+func Rules(ctx context.Context, env Env, dirs []string) (Result, error) {
 	if env.Dir == "" {
 		return Result{}, errors.New("check: Env.Dir is empty")
 	}
-	rs, refusal, err := load(ctx, env, dir, Request{})
+	rs, refusal, err := load(ctx, env, dirs, Request{})
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -162,21 +163,46 @@ func Rules(ctx context.Context, env Env, dir string) (Result, error) {
 	return render(Request{}, 0, nil, fmt.Sprintf("june: verified %s, %s", count(rs.Rules(), "rule"), count(rs.Examples(), "example"))), nil
 }
 
-// load verifies the rules in dir. A rule fault comes back as a refusal.
+// load verifies the rules in dirs. A rule fault comes back as a refusal.
 // Cancellation comes back as an error, and wins over a fault that cancellation caused.
-func load(ctx context.Context, env Env, dir string, req Request) (*rules.RuleSet, *Result, error) {
-	if dir == "" {
-		dir = defaultRules
+func load(ctx context.Context, env Env, dirs []string, req Request) (*rules.RuleSet, *Result, error) {
+	if len(dirs) == 0 {
+		dirs = []string{defaultRules}
 	}
-	rs, faults := rules.Load(ctx, resolve(env.Dir, dir))
+	dirs = distinct(env.Dir, dirs)
+	abs := make([]string, len(dirs))
+	for i, d := range dirs {
+		abs[i] = resolve(env.Dir, d)
+	}
+	rs, faults := rules.Load(ctx, abs...)
 	if err := ctx.Err(); err != nil && len(faults) > 0 {
 		return nil, nil, err
 	}
 	if len(faults) > 0 {
-		res := refuse(req, faultMessages(dir, faults)...)
+		res := refuse(req, faultMessages(env.Dir, dirs, faults)...)
 		return nil, &res, nil
 	}
 	return rs, nil, nil
+}
+
+// distinct drops a directory that an earlier one already names, so the same directory never conflicts with itself.
+func distinct(base string, dirs []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range dirs {
+		if d == "" {
+			d = defaultRules
+		}
+		key := resolve(base, d)
+		if real, err := filepath.EvalSymlinks(key); err == nil {
+			key = real
+		}
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // summary is the closing line of a verdict: finding counts and the scope that was covered.
@@ -214,20 +240,36 @@ func resolve(dir, path string) string {
 }
 
 // faultMessages words rule faults as "<cause>. Fix: <instruction>" with a relative rules-directory label.
-func faultMessages(display string, faults []rules.Fault) []string {
+// display holds the directories as the caller spelled them, indexed like Fault.Dir.
+// base is the working directory an absolute spelling is made relative to.
+func faultMessages(base string, display []string, faults []rules.Fault) []string {
 	msgs := make([]string, len(faults))
 	for i, f := range faults {
-		where := filepath.Clean(display)
-		if filepath.IsAbs(where) {
-			where = filepath.Base(where)
-			if filepath.IsAbs(where) {
-				where = "."
-			}
+		cause := f.Cause
+		if f.Also != nil {
+			cause += " (also defined in " + label(base, display[f.Also.Dir], f.Also.Path) + ")"
 		}
-		if f.Path != "" {
-			where = filepath.Join(where, f.Path)
-		}
-		msgs[i] = filepath.ToSlash(where) + ": " + f.Cause + ". Fix: " + f.Fix
+		msgs[i] = label(base, display[f.Dir], f.Path) + ": " + cause + ". Fix: " + f.Fix
 	}
 	return msgs
+}
+
+// label names a file under a rules directory without leaking an absolute path.
+// An absolute directory is made relative to base, and falls back to its base name when that fails.
+func label(base, display, path string) string {
+	where := filepath.Clean(display)
+	if filepath.IsAbs(where) {
+		rel, err := filepath.Rel(base, where)
+		if err != nil || filepath.IsAbs(rel) {
+			rel = filepath.Base(where)
+			if filepath.IsAbs(rel) {
+				rel = "."
+			}
+		}
+		where = rel
+	}
+	if path != "" {
+		where = filepath.Join(where, path)
+	}
+	return filepath.ToSlash(where)
 }

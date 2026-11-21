@@ -505,3 +505,99 @@ w = []  # june: ignore[	LST01	] why
 	}
 	t.Error("an ast-grep-ignore comment suppressed a match")
 }
+
+func TestLoadMergesDirectories(t *testing.T) {
+	other := t.TempDir()
+	if err := os.Mkdir(filepath.Join(other, "rule-tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(other, "T01.yml"), "id: T01\nlanguage: python\nseverity: error\nmessage: No dicts.\nrule:\n  kind: dictionary\n")
+	write(t, filepath.Join(other, "rule-tests", "T01-test.yml"), "id: T01\nvalid:\n  - \"x = 1\"\ninvalid:\n  - \"x = {}\"\n")
+	rs, faults := rules.Load(context.Background(), fixture("good"), other)
+	if rs == nil || len(faults) != 0 {
+		t.Fatalf("Load = %v, %v, want a rule set", rs, faults)
+	}
+	if rs.Rules() != 2 || rs.Examples() != 4 {
+		t.Errorf("Rules, Examples = %d, %d, want 2, 4", rs.Rules(), rs.Examples())
+	}
+}
+
+func TestLoadDuplicateIDAcrossDirectoriesNamesBothPlaces(t *testing.T) {
+	_, faults := rules.Load(context.Background(), fixture("good"), fixture("good"))
+	if len(faults) != 1 {
+		t.Fatalf("faults = %v, want 1", faults)
+	}
+	f := faults[0]
+	if f.Dir != 1 || f.Path != "LST01.yml" || f.Also == nil || *f.Also != (rules.Place{Dir: 0, Path: "LST01.yml"}) || !strings.Contains(f.Cause, "duplicated") {
+		t.Errorf("fault = %+v, want dir 1 LST01.yml duplicated with Also dir 0 LST01.yml", f)
+	}
+}
+
+func TestLoadCaseVariantIDIsADuplicate(t *testing.T) {
+	one := t.TempDir()
+	two := t.TempDir()
+	// Foo's valid example is a list the rule matches, so admitting it unverified would hide a failing example.
+	writeRule(t, one, "Foo.yml", "Foo", "x = [1]")
+	writeRule(t, two, "foo.yml", "foo", "x = (1,)")
+	rs, faults := rules.Load(context.Background(), one, two)
+	if rs != nil || len(faults) != 1 {
+		t.Fatalf("Load = %v, %v, want one duplicate fault and no rule set", rs, faults)
+	}
+	f := faults[0]
+	if f.Dir != 1 || f.Path != "foo.yml" || f.Also == nil || *f.Also != (rules.Place{Dir: 0, Path: "Foo.yml"}) || !strings.Contains(f.Cause, "duplicated") {
+		t.Errorf("fault = %+v, want dir 1 foo.yml duplicated with Also dir 0 Foo.yml", f)
+	}
+}
+
+func TestLoadRefusesIDsThatShareAScratchFilename(t *testing.T) {
+	const nfc = "Caf\u00e9"
+	const nfd = "Cafe\u0301"
+	probe := t.TempDir()
+	if err := os.WriteFile(filepath.Join(probe, nfc), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(probe, nfd), []byte("2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(probe, nfc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "2" {
+		t.Skip("this filesystem stores the two names as different files")
+	}
+	one := t.TempDir()
+	two := t.TempDir()
+	writeRule(t, one, "rule.yml", nfc, "x = [1]")
+	writeRule(t, two, "rule.yml", nfd, "x = (1,)")
+	rs, faults := rules.Load(context.Background(), one, two)
+	if rs != nil || len(faults) != 1 {
+		t.Fatalf("Load = %v, %v, want one duplicate fault and no rule set", rs, faults)
+	}
+	f := faults[0]
+	if f.Dir != 1 || f.Path != "rule.yml" || f.Also == nil || *f.Also != (rules.Place{Dir: 0, Path: "rule.yml"}) || !strings.Contains(f.Cause, "duplicated") || !strings.Contains(f.Cause, nfd) {
+		t.Errorf("fault = %+v, want dir 1 rule.yml duplicated with Also dir 0 rule.yml", f)
+	}
+}
+
+func writeRule(t *testing.T, dir, file, id, valid string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, "rule-tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, file), "id: "+id+"\nlanguage: python\nseverity: error\nmessage: No lists.\nrule:\n  kind: list\n")
+	write(t, filepath.Join(dir, "rule-tests", id+"-test.yml"), "id: "+id+"\nvalid:\n  - \""+valid+"\"\ninvalid:\n  - \"x = [1]\"\n")
+}
+
+func TestLoadReportsEveryBadDirectory(t *testing.T) {
+	_, faults := rules.Load(context.Background(), fixture("missing"), fixture("good"), fixture("empty"))
+	if len(faults) != 2 || faults[0].Dir != 0 || faults[1].Dir != 2 {
+		t.Fatalf("faults = %+v, want one each for dirs 0 and 2", faults)
+	}
+}
+
+func TestLoadWithoutDirectoriesIsAFault(t *testing.T) {
+	if rs, faults := rules.Load(context.Background()); rs != nil || len(faults) != 1 {
+		t.Fatalf("Load = %v, %v, want one fault", rs, faults)
+	}
+}
