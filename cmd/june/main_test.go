@@ -40,7 +40,7 @@ func TestUnknownArgs(t *testing.T) {
 
 const py012 = "PY012 Mutable default argument. Fix: default the parameter to None and create the value inside the function.\n"
 
-// project builds a temp tree with the shipped rules at .june/rules and one Python file.
+// project builds a temp tree with PY012 at .june/rules and one Python file.
 func project(t *testing.T) check.Env {
 	t.Helper()
 	dir := t.TempDir()
@@ -284,5 +284,38 @@ func TestBareJuneOutsideGitWithoutAListExitsTwo(t *testing.T) {
 	code := run(context.Background(), nil, strings.NewReader(""), &out, &errOut, env)
 	if code != 2 || !strings.Contains(out.String(), "Fix: run june inside the repository, or pass --changed-lines FILE") || strings.Contains(out.String(), "checked") {
 		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+}
+
+func TestShippedFundamentals(t *testing.T) {
+	rulesDir, err := filepath.Abs(filepath.Join("..", "..", "rules", "python"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	src := "def f(a=[]):\n    pass\n" + // 1-2
+		"try:\n    f()\nexcept:\n    pass\n" + // 3-6
+		"if f() == None:\n    pass\n" + // 7-8
+		"assert (f(), 'msg')\n" // 9
+	if err := os.WriteFile(filepath.Join(dir, "app.py"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := check.Env{Dir: dir}
+
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"verify", "--rules", rulesDir}, strings.NewReader(""), &out, &errOut, env); code != 0 || out.String() != "june: verified 5 rules, 135 examples\n" || errOut.Len() != 0 {
+		t.Fatalf("verify exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code := run(context.Background(), []string{"--rules", rulesDir, "--changed-lines", "-"}, strings.NewReader("app.py:1-9\n"), &out, &errOut, env)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1; stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+	for _, id := range []string{"app.py:1:", "PY012", "app.py:5:1: PY013", "app.py:6:5: PY015", "app.py:7:11: PY014", "app.py:9:8: PY016"} {
+		if !strings.Contains(out.String(), id) {
+			t.Errorf("stdout missing %q:\n%s", id, out.String())
+		}
 	}
 }

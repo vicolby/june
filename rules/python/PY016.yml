@@ -1,0 +1,43 @@
+id: PY016
+language: python
+severity: error
+message: "Assert on a tuple is always true. Fix: remove the parentheses and pass the message after a comma, as in assert cond, message."
+rule:
+  kind: tuple
+  has:
+    nthChild:
+      position: "n"
+      ofRule:
+        not:
+          any:
+            - kind: list_splat
+            - kind: parenthesized_list_splat
+            - kind: comment
+            - kind: line_continuation
+  any:
+    - all:
+        - nthChild:
+            position: 1
+            ofRule:
+              not:
+                any:
+                  - kind: line_continuation
+                  - kind: comment
+        - inside:
+            kind: assert_statement
+            stopBy: neighbor
+    - inside:
+        kind: parenthesized_expression
+        inside:
+          kind: assert_statement
+          stopBy: neighbor
+        nthChild:
+          position: 1
+          ofRule:
+            not:
+              any:
+                - kind: line_continuation
+                - kind: comment
+        stopBy:
+          not:
+            kind: parenthesized_expression
