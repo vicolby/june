@@ -1,0 +1,50 @@
+version: "2"
+
+# default "none" so every enabled check below is deliberate; no blanket disables.
+linters:
+  default: none
+  enable:
+    # Correctness baseline.
+    - govet        # suspicious constructs the compiler accepts
+    - staticcheck  # bugs, deprecated APIs, and simplifications
+    # House rule: unused code.
+    - unused       # unused identifiers, fields, and functions
+    - unparam     # unused function parameters and results
+    - ineffassign  # assignments whose value is never read
+    # House rule: error handling.
+    - errcheck     # unchecked errors
+    - errorlint    # errors.Is/As instead of == and type assertions, %w wrapping
+    - nilerr       # returning nil when err is non-nil
+    - errname      # sentinel and error type naming
+    # Check must stay cancellable and deterministic (no clock, no ambient state).
+    - contextcheck # context dropped on a call chain
+    - noctx        # exec and HTTP calls without a context
+    - forbidigo    # ambient state and wall clock; see settings
+  settings:
+    errcheck:
+      # A failed write to the CLI's stdout or stderr has no recovery path.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^os\.(Getenv|Environ|LookupEnv)$
+          msg: read the environment only in cmd/june and pass it in as check.Env
+        - pattern: ^time\.(Now|Since|Until)$
+          msg: june output is a pure function of its input, so no clock
+
+  exclusions:
+    rules:
+      # cmd/june is the shell that snapshots the environment into check.Env.
+      # The clock rule still applies there.
+      - path: ^cmd/june/
+        linters:
+          - forbidigo
+        text: os\.(Getenv|Environ|LookupEnv)
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
