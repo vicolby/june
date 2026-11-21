@@ -14,15 +14,6 @@ rule:
             - kind: parenthesized_list_splat
             - kind: comment
             - kind: line_continuation
-            - all:
-                - kind: parenthesized_expression
-                - has:
-                    any:
-                      - kind: list_splat
-                      - kind: parenthesized_list_splat
-                    stopBy:
-                      not:
-                        kind: parenthesized_expression
   any:
     - all:
         - nthChild:
