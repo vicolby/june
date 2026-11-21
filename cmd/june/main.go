@@ -89,7 +89,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	return finish(stdout, stderr, res, err)
 }
 
-// verify is `june verify [--rules DIR]`: every example of every rule behaves, or the run is refused.
+// verify is `june verify [--rules DIR]...`: every example of every rule behaves, or the run is refused.
 func verify(ctx context.Context, args []string, stdout, stderr io.Writer, env check.Env) int {
 	fs := flag.NewFlagSet("june verify", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)

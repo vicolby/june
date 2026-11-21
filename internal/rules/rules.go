@@ -438,7 +438,7 @@ var (
 	parseLine = regexp.MustCompile(`Cannot parse rule (\S+)`)
 )
 
-// verify runs the examples of every rule through ast-grep in a scratch copy of the directory.
+// verify runs the examples of every rule through ast-grep in a scratch directory.
 func verify(ctx context.Context, bin string, dirs []string, entries []entry) []Fault {
 	scratch, err := os.MkdirTemp("", "june-rules-")
 	if err != nil {

@@ -48,7 +48,7 @@ Invariants:
 - The touched set is unknowable means Exit 2, never 0 and never every line.
 - Out is a pure function of the request, the tree and the diff: sorted, no clock, no absolute path, no ANSI.
 - Exit and finding diagnostics are identical across formats and CI vendors.
-- The opt-out is a same-line Python comment `# june: ignore[PY012] <reason>`, naming exactly one rule from the loaded rules directory. The spaces after `#` and `june:` are literal single spaces, rule IDs have no surrounding whitespace, and a space must separate `]` from the required nonblank reason.
+- The opt-out is a same-line Python comment `# june: ignore[PY012] <reason>`, naming exactly one rule from the loaded rules. The spaces after `#` and `june:` are literal single spaces, rule IDs have no surrounding whitespace, and a space must separate `]` from the required nonblank reason.
 - A comment whose content starts with `june:` after leading whitespace is an opt-out attempt; malformed attempts suppress nothing and explain why with a Fix. The same text in a string literal is not an opt-out.
 - Every opt-out on a touched line is printed, honoured or not. A valid opt-out with no matching finding says it suppresses nothing; opt-outs on untouched lines are silent.
 
@@ -77,7 +77,7 @@ func (*RuleSet) Scan(ctx context.Context, files []string) (Scanned, error)
 
 A `*RuleSet` exists only if every example behaved, including a rule whose severity is off, so an unverified rule cannot produce a verdict.
 Faults: unparseable rule, empty message, failing example, zero rules, a rule id defined in two files.
-A fault names the directory it concerns, and a duplicate id names both files.
+A fault names the directory it concerns, and a duplicate id names both files. Ids that differ only by case are the same id.
 Scan reads only the given files, anchors each match at its first line, and reports comments so `check` never learns a comment marker.
 
 It hides: the location of the ast-grep binary (bundled first, then PATH), the invocation, zero-based to one-based lines, the rule schema, the sidecar example file `rule-tests/<id>-test.yml` with `valid:` and `invalid:` (ast-grep rejects unknown keys inside a rule), and the `.py` filter.
@@ -154,7 +154,7 @@ Each is reversible and lives here until changed.
 - The default rules directory is `./.june/rules`, used when no `--rules` is given.
 - `--rules` repeats, and the directories merge into one rule set, so a team can layer bundled, shared and repo-local rules.
 - Shared rules are supplied by directory path; june never fetches, clones or updates them, and CI checks them out.
-- A rule id defined in two files is a rule fault, exit 2 naming both files, whatever the directory order; the order never changes output.
+- A rule id defined in two files is a rule fault, exit 2 naming both files, in either directory order. A successful verdict does not depend on that order.
 - A directory named twice counts once, after cleaning and symlink resolution, and an empty `--rules` value means the default directory.
 - Every missing or empty directory is reported, and one fault anywhere refuses the whole run.
 - One rule fault refuses the whole run.
