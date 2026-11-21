@@ -27,19 +27,12 @@ rule:
             kind: comparison_operator
             stopBy: neighbor
         - matches: eqOrNe
-    - all:
-        - inside:
-            kind: comparison_operator
-            stopBy:
-              not:
-                kind: parenthesized_expression
-        - inside:
-            matches: eqOrNe
+    - inside:
+        matches: eqOrNe
+        kind: parenthesized_expression
+        inside:
+          kind: comparison_operator
+          stopBy: neighbor
+        stopBy:
+          not:
             kind: parenthesized_expression
-            inside:
-              kind: comparison_operator
-              stopBy: neighbor
-            stopBy:
-              inside:
-                kind: comparison_operator
-                stopBy: neighbor
