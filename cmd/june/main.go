@@ -21,7 +21,7 @@ func main() {
 	os.Exit(run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, snapshotEnv()))
 }
 
-// snapshotEnv is the one place the process environment is read.
+// snapshotEnv captures the caller's working directory and environment for check.
 func snapshotEnv() check.Env {
 	dir, err := os.Getwd()
 	if err != nil {

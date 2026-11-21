@@ -2,6 +2,7 @@
 
 This document applies VISION.md.
 Where the two disagree, VISION.md wins.
+The module interfaces and commands below describe the target design; see [cmd/june](#cmdjune) for current usage.
 Vocabulary: module, interface, implementation, depth, seam, adapter, leverage, locality.
 
 ## Shape
@@ -92,9 +93,17 @@ Output is text by default and carries no ANSI.
 
 ## cmd/june
 
-The current build supports `june --version` and `june [--rules DIR] --changed-lines FILE`, runnable locally with `go run ./cmd/june`.
-An unstamped build prints `june dev`.
-The checking commands and module interfaces in this document describe the target design.
+The current build supports `june --version` and `june [--rules DIR] --changed-lines FILE`; `-` reads the list from stdin.
+An unstamped `june --version` prints `june dev`.
+With ast-grep on PATH, run the shipped Python rule and its sidecar examples from the repository root:
+
+```sh
+go run ./cmd/june --rules rules/python --changed-lines changed.txt
+```
+
+The list contains one `path:7` or `path:7-12` entry per line, with one-based, inclusive line ranges and paths relative to the working directory.
+Blank lines are ignored; whitespace in filenames is preserved, and only `.py` files are checked.
+The current check requires this list and emits plain text; git scope inference, opt-outs, `verify`, and CI-specific formats remain planned.
 
 `cmd/june` is a shell and owns no decision.
 It maps flags to a `Request`, snapshots the environment, writes `Out` and `Files`, and returns `Exit`.

@@ -38,8 +38,8 @@ type Result struct {
 }
 
 // Change judges one change. Exit is 1 if and only if an error-severity match is anchored on a touched line.
-// Exit 2 means june could not produce a verdict and Out says why. An error is returned only when
-// june cannot even explain the failure.
+// Exit 2 means june could not produce a verdict and Out says why.
+// An empty Env.Dir or cancellation during rule verification or scanning returns an error.
 func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	if env.Dir == "" {
 		return Result{}, errors.New("check: Env.Dir is empty")
@@ -114,7 +114,7 @@ func resolve(dir, path string) string {
 	return filepath.Join(dir, path)
 }
 
-// faultMessages words rule faults as "<cause>. Fix: <instruction>", naming files relative to the rules directory as given.
+// faultMessages words rule faults as "<cause>. Fix: <instruction>" with a relative rules-directory label.
 func faultMessages(display string, faults []rules.Fault) []string {
 	msgs := make([]string, len(faults))
 	for i, f := range faults {

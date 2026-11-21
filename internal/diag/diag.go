@@ -47,8 +47,8 @@ type File struct {
 	Data []byte
 }
 
-// Render returns the diagnostics sorted and rendered in f, followed by summary when it is not empty.
-// The text format is the default and carries no ANSI.
+// Render returns sorted plain-text diagnostics, followed by summary when it is not empty.
+// f is reserved for future formats. The output carries no ANSI.
 func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File) {
 	sorted := append([]Diagnostic(nil), ds...)
 	sort.SliceStable(sorted, func(i, j int) bool { return less(sorted[i], sorted[j]) })
