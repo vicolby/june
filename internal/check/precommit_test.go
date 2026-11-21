@@ -2,6 +2,7 @@ package check_test
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -89,7 +90,43 @@ func TestStagedFirstCommitIsJudgedAgainstAnEmptyTree(t *testing.T) {
 	env := tree(t, map[string]string{"app.py": "x = 1\n" + old})
 	git(t, env.Dir, "init", "-q", "-b", "main")
 	git(t, env.Dir, "add", "-A")
-	expect(t, infer(t, hook(env, nil)), 1, "app.py:2:9: "+py012)
+	res := infer(t, hook(env, nil))
+	expect(t, res, 1, "app.py:2:9: "+py012)
+	id := emptyTreeID(t, env.Dir)
+	if got, want := summaryOf(res), "june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 2 changed lines; base "+id+" (staged diff)"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+}
+
+func TestStagedFirstCommitOnSHA256UsesThatEmptyTree(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "x = 1\n" + old})
+	cmd := exec.CommandContext(context.Background(), "git", "init", "-q", "--object-format=sha256", "-b", "main")
+	cmd.Dir = env.Dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("sha256 repositories are unavailable: %v\n%s", err, out)
+	}
+	git(t, env.Dir, "add", "-A")
+	res := infer(t, hook(env, nil))
+	expect(t, res, 1, "app.py:2:9: "+py012)
+	id := emptyTreeID(t, env.Dir)
+	if strings.HasPrefix(id, "4b825dc642cb6eb9a060e54bf8d69288fbee4904") {
+		t.Fatal("sha256 repository reported the sha-1 empty tree")
+	}
+	if got, want := summaryOf(res), "june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 2 changed lines; base "+id+" (staged diff)"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+}
+
+func emptyTreeID(t *testing.T, dir string) string {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", "hash-object", "-t", "tree", "--stdin")
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader("")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git hash-object: %v", err)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func TestStagedDiffFollowsThePartialCommitIndex(t *testing.T) {
@@ -107,6 +144,45 @@ func TestStagedDiffFollowsThePartialCommitIndex(t *testing.T) {
 		t.Fatalf("git add: %v\n%s", err, out)
 	}
 	expect(t, infer(t, staged), 1, "app.py:2:9: "+py012)
+	write(t, filepath.Join(env.Dir, "app.py"), "x = 2\n") // the worktree no longer has the violation; the index still does
+	expect(t, infer(t, staged), 1, "app.py:2:9: "+py012)
+}
+
+func TestStagedViolationStaysWhenTheWorktreeDropsIt(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": "x = 1\n"})
+	write(t, filepath.Join(env.Dir, "app.py"), old)
+	git(t, env.Dir, "add", "app.py")
+	write(t, filepath.Join(env.Dir, "app.py"), "x = 2\n")
+	expect(t, infer(t, hook(env, nil)), 1, "app.py:1:9: "+py012)
+}
+
+func TestStagedFileWithASpaceUsesTheIndexBlob(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": "x = 1\n"})
+	write(t, filepath.Join(env.Dir, "new file.py"), old)
+	git(t, env.Dir, "add", "new file.py")
+	write(t, filepath.Join(env.Dir, "new file.py"), "x = 1\n")
+	expect(t, infer(t, hook(env, nil)), 1, "new file.py:1:9: "+py012)
+}
+
+func TestStagedNULFilterUsesTheIndexBlob(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": "x = 1\n"})
+	write(t, filepath.Join(env.Dir, "app.py"), old+"\x00")
+	git(t, env.Dir, "add", "app.py")
+	write(t, filepath.Join(env.Dir, "app.py"), old)
+	expect(t, infer(t, hook(env, nil)), 0, "")
+}
+
+func TestStagedSymlinkIsNotScannedAsPython(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": "x = 1\n"})
+	path := filepath.Join(env.Dir, "app.py")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(strings.TrimSuffix(old, "\n"), path); err != nil {
+		t.Fatal(err)
+	}
+	git(t, env.Dir, "add", "app.py")
+	expect(t, infer(t, hook(env, nil)), 0, "")
 }
 
 func TestPreCommitRefsJudgeTheRefRange(t *testing.T) {
@@ -149,13 +225,61 @@ func TestPreCommitRefsNeedBothVariables(t *testing.T) {
 	}
 }
 
-func TestPreCommitRefsAreRefusedWhenTheTreeIsNotAtToRef(t *testing.T) {
+func TestPreCommitRefsPassForACleanToRefWhileCheckedOutElsewhere(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": "x = 1\n"})
+	write(t, filepath.Join(env.Dir, "app.py"), "x = 1\n"+old)
+	commit(t, env) // topic, which is checked out, contains the violation; main does not
+	refs := hook(env, map[string]string{"PRE_COMMIT_FROM_REF": "main", "PRE_COMMIT_TO_REF": revParse(t, env.Dir, "main")})
+	expect(t, infer(t, refs), 0, "")
+}
+
+func TestPreCommitRefsReportTheToRefWhileCheckedOutElsewhere(t *testing.T) {
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), "x = 1\n"+old)
 	commit(t, env)
-	refs := hook(env, map[string]string{"PRE_COMMIT_FROM_REF": "main", "PRE_COMMIT_TO_REF": revParse(t, env.Dir, "main")})
+	topic := revParse(t, env.Dir, "HEAD")
+	git(t, env.Dir, "checkout", "-q", "main")
+	write(t, filepath.Join(env.Dir, "app.py"), old) // staged on the checkout, not in the commits being pushed
+	git(t, env.Dir, "add", "app.py")
+	refs := hook(env, map[string]string{"PRE_COMMIT_FROM_REF": "main", "PRE_COMMIT_TO_REF": topic})
+	expect(t, infer(t, refs), 1, "app.py:2:9: "+py012)
+}
+
+func TestPreCommitRefsScanTheCommittedLineWhenTheIndexShiftsIt(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": "x = 1\n"})
+	write(t, filepath.Join(env.Dir, "app.py"), "x = 1\n"+old)
+	commit(t, env)
+	write(t, filepath.Join(env.Dir, "app.py"), "y = 1\n"+"x = 1\n"+old)
+	git(t, env.Dir, "add", "app.py")
+	refs := hook(env, map[string]string{"PRE_COMMIT_FROM_REF": "main", "PRE_COMMIT_TO_REF": revParse(t, env.Dir, "HEAD")})
+	expect(t, infer(t, refs), 1, "app.py:2:9: "+py012)
+}
+
+func TestPreCommitRefsIgnoreAnIndexViolationOnACleanLine(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": "x = 1\n"})
+	write(t, filepath.Join(env.Dir, "app.py"), "y = 1\n")
+	commit(t, env)
+	write(t, filepath.Join(env.Dir, "app.py"), old)
+	git(t, env.Dir, "add", "app.py")
+	refs := hook(env, map[string]string{"PRE_COMMIT_FROM_REF": "main", "PRE_COMMIT_TO_REF": revParse(t, env.Dir, "HEAD")})
+	expect(t, infer(t, refs), 0, "")
+}
+
+func TestPreCommitRefsSkipANULInTheCommittedBlob(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": "x = 1\n"})
+	write(t, filepath.Join(env.Dir, "app.py"), old+"\x00")
+	commit(t, env)
+	write(t, filepath.Join(env.Dir, "app.py"), old)
+	refs := hook(env, map[string]string{"PRE_COMMIT_FROM_REF": "main", "PRE_COMMIT_TO_REF": revParse(t, env.Dir, "HEAD")})
+	expect(t, infer(t, refs), 0, "")
+}
+
+func TestPreCommitRefsWithAnUnknownToRefAreRefused(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": "x = 1\n"})
+	zero := strings.Repeat("0", 40)
+	refs := hook(env, map[string]string{"PRE_COMMIT_FROM_REF": "main", "PRE_COMMIT_TO_REF": zero})
 	refused(t, infer(t, refs),
-		"june: error: the checkout is at HEAD, not at pre-commit's to-ref, so the lines in the ref range cannot be read from disk. Fix: check out the to-ref, or pass --base REF or --changed-lines FILE\n")
+		"june: error: pre-commit's to-ref \""+zero+"\" is not a commit in this repository. Fix: fetch it, or pass --base REF or --changed-lines FILE\n")
 }
 
 func TestPreCommitRefsWithAnUnknownFromRefAreRefused(t *testing.T) {

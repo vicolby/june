@@ -111,10 +111,10 @@ The list contains one `path:7` or `path:7-12` entry per line, with one-based, in
 Blank lines are ignored; whitespace in filenames is preserved, and only `.py` files are checked.
 `--base REF` judges lines added or edited since the merge base with REF, including committed changes, worktree changes and untracked files; the list wins when both are given.
 Without either, a bare `june` infers its scope from the environment and git, first hit wins:
-- Pre-commit refs: `PRE_COMMIT_FROM_REF` and `PRE_COMMIT_TO_REF`, both set, as in `pre-commit run --from-ref A --to-ref B` and the pre-push stage. The touched lines are those the commits add since the merge base with the from-ref; the worktree and untracked files do not join, and the checkout must be at the to-ref, else exit 2.
+- Pre-commit refs: `PRE_COMMIT_FROM_REF` and `PRE_COMMIT_TO_REF`, both set, as in `pre-commit run --from-ref A --to-ref B` and a pre-push that sets those variables. The touched lines are those the commits add since the merge base of the two refs; june reads them from the to-ref in the object store, so the checkout, the index, and untracked files do not join. A first push of a history that includes a root commit gives pre-commit no ref variables, so the pre-push stage judges nothing for it, and CI is where that range is judged.
 - GitHub pull request base: `origin/$GITHUB_BASE_REF` on a `pull_request` or `pull_request_target` run.
 - GitLab merge request diff base, described below.
-- Pre-commit staged diff: `PRE_COMMIT=1` with no refs. The touched lines are those the index adds against HEAD, or against the empty tree before the first commit, read from the index `GIT_INDEX_FILE` names; unstaged edits and untracked files do not count.
+- Pre-commit staged diff: `PRE_COMMIT=1` with no refs. The touched lines are those the index adds against HEAD, or against the repository's empty tree before the first commit. The scan reads those index blobs (the index `GIT_INDEX_FILE` names), so an unstaged edit does not count and untracked files do not join.
 - Local: the upstream branch of HEAD, then the default branch of `origin` (`refs/remotes/origin/HEAD`), with worktree and untracked files.
 
 Nothing is fetched.
@@ -132,7 +132,7 @@ A merge request pipeline takes its base after `--base`, pre-commit refs and the 
 A detached pipeline (`CI_MERGE_REQUEST_DIFF_BASE_SHA` set) uses that sha.
 A merged results or merge train pipeline (`CI_MERGE_REQUEST_EVENT_TYPE` of `merged_result` or `merge_train`) uses the merge commit's first parent, `HEAD^1`, resolved to its sha for the summary; `CI_MERGE_REQUEST_TARGET_BRANCH_SHA` is ignored, since on a later merge train car it is the target tip and not the first parent.
 A clone too shallow to hold the base exits 2 pointing at `GIT_DEPTH: 0`.
-The repo publishes the pre-commit hook `june` in `.pre-commit-hooks.yaml`: `language: system`, `types: [python]` and `pass_filenames: false`, so it runs without filenames, only when Python files are involved, and finds its own scope.
+The repo publishes the pre-commit hook `june` in `.pre-commit-hooks.yaml`: `language: system`, `types: [python]`, `pass_filenames: false`, and `stages: [pre-commit, pre-merge-commit, pre-push, manual]`, so it runs without filenames, only when Python files are involved, only for those stages, and finds its own scope.
 
 `cmd/june` is a shell and owns no decision.
 It maps flags to a `Request`, snapshots the environment, writes `Out` and `Files`, and returns `Exit`.

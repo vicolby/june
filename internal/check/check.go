@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -63,6 +64,9 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	req.Format = formatFor(env, req)
 	req.root = repoPrefix(ctx, env, req.Format)
 	touched, sc, bad, err := findTouched(ctx, env, req)
+	if sc.scanDir != "" {
+		defer func() { _ = os.RemoveAll(sc.scanDir) }()
+	}
 	if err != nil {
 		return Result{}, err
 	}
@@ -78,11 +82,15 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		return Result{}, err
 	}
 
+	root := env.Dir
+	if sc.scanDir != "" {
+		root = sc.scanDir
+	}
 	files := touched.pythonFiles()
 	abs := make([]string, len(files))
 	byAbs := make(map[string]string, len(files))
 	for i, f := range files {
-		abs[i] = filepath.Join(env.Dir, filepath.FromSlash(f))
+		abs[i] = filepath.Join(root, filepath.FromSlash(f))
 		byAbs[abs[i]] = f
 	}
 	scanned, err := rs.Scan(ctx, abs)

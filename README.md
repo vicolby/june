@@ -77,14 +77,17 @@ repos:
 ```
 
 The hook runs without filenames, only when Python files are involved, and judges the staged change against HEAD.
-It reads `.june/rules`; to use the bundled rules, copy them there as above, or point the hook at them:
+It reads `.june/rules`; to use the bundled rules, copy them there as above, or point the hook at them. Paste the path `brew --prefix` prints:
 
 ```yaml
       - id: june
-        args: [--rules, /opt/homebrew/share/june/rules/python]
+        args: [--rules, PREFIX/share/june/rules/python]
 ```
 
-Under `pre-commit run --from-ref A --to-ref B`, and the pre-push stage, it judges the lines the commits in that range add.
+`PREFIX` is the output of `brew --prefix` (`/opt/homebrew` on Apple Silicon, `/usr/local` for Intel Homebrew, `/home/linuxbrew/.linuxbrew` for Linuxbrew). pre-commit does not expand a command such as `$(brew --prefix)`.
+
+Under `pre-commit run --from-ref A --to-ref B`, and on a pre-push that sets those ref variables, it judges the lines the commits in that range add.
+A first push of a history that includes a root commit gives pre-commit no ref variables, so the pre-push stage judges nothing for it. CI is where that range is judged.
 
 ## Usage
 

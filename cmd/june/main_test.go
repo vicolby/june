@@ -370,6 +370,7 @@ type hookDefinition struct {
 	Language      string   `yaml:"language"`
 	Types         []string `yaml:"types"`
 	PassFilenames *bool    `yaml:"pass_filenames"`
+	Stages        []string `yaml:"stages"`
 }
 
 func publishedHook(t *testing.T) hookDefinition {
@@ -398,6 +399,9 @@ func TestPublishedHookRunsWithoutFilenamesAndOnlyForPython(t *testing.T) {
 	}
 	if h.Language != "system" || h.Entry != "june" {
 		t.Errorf("language = %q, entry = %q, want system and june: a brew-installed binary on PATH", h.Language, h.Entry)
+	}
+	if got, want := strings.Join(h.Stages, ","), "pre-commit,pre-merge-commit,pre-push,manual"; got != want {
+		t.Errorf("stages = %v, want pre-commit, pre-merge-commit, pre-push, and manual", h.Stages)
 	}
 }
 
