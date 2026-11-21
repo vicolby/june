@@ -79,6 +79,7 @@ func TestRenderEscapesControls(t *testing.T) {
 	}{
 		{"finding", []diag.Diagnostic{{Kind: diag.Finding, File: text, Line: 1, Col: 2, Code: text, Msg: text}}, "", escaped + ":1:2: " + escaped + " " + escaped + "\n"},
 		{"opt-out", []diag.Diagnostic{{Kind: diag.OptOut, File: text, Line: 1, Col: 2, Code: text, Msg: text}}, "", escaped + ":1:2: " + escaped + " " + escaped + "\n"},
+		{"legacy", []diag.Diagnostic{{Kind: diag.Legacy, File: text, Line: 1, Col: 2, Code: text, Msg: text}}, "", "legacy: " + escaped + ":1:2: " + escaped + " " + escaped + "\n"},
 		{"failure", []diag.Diagnostic{{Kind: diag.Failure, Msg: text}}, "", "june: error: " + escaped + "\n"},
 		{"summary", nil, text, escaped + "\n"},
 	} {
@@ -93,5 +94,18 @@ func TestRenderEscapesControls(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRenderLegacyIsLabelledAndSortsAfterFindings(t *testing.T) {
+	ds := []diag.Diagnostic{
+		{Kind: diag.Legacy, File: "a.py", Line: 1, Col: 2, Code: "PY012", Sev: diag.Warning, Msg: "m"},
+		{Kind: diag.Finding, File: "z.py", Line: 9, Col: 1, Code: "PY012", Sev: diag.Error, Msg: "m"},
+		{Kind: diag.OptOut, File: "z.py", Line: 8, Col: 1, Code: "PY012", Sev: diag.Warning, Msg: "o"},
+	}
+	out, _ := diag.Render(ds, "", diag.Text)
+	want := "z.py:8:1: PY012 o\nz.py:9:1: PY012 m\nlegacy: a.py:1:2: PY012 m\n"
+	if string(out) != want {
+		t.Errorf("out =\n%s\nwant\n%s", out, want)
 	}
 }
