@@ -1,0 +1,23 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install pinned ast-grep
+        run: npm install --global "@ast-grep/cli@$(cat .ast-grep-version)"
+      - name: Check ast-grep version
+        run: test "$(ast-grep --version)" = "ast-grep $(cat .ast-grep-version)"
+      - run: go vet ./...
+      - run: go test ./...

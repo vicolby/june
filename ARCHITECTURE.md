@@ -92,6 +92,10 @@ Output is text by default and carries no ANSI.
 
 ## cmd/june
 
+The current scaffold supports only `june --version`, runnable locally with `go run ./cmd/june --version`.
+An unstamped build prints `june dev`.
+The checking commands and module interfaces in this document describe the target design.
+
 `cmd/june` is a shell and owns no decision.
 It maps flags to a `Request`, snapshots the environment, writes `Out` and `Files`, and returns `Exit`.
 
@@ -124,7 +128,7 @@ june verify                   # rule author: every example behaves, or refused
 - `diag` runs against golden output.
 - Three to five smoke runs go through `cmd/june`.
 - Tests that reach past an interface are disposable.
-- The pinned ast-grep version is required on PATH for tests.
+- The ast-grep version pinned in `.ast-grep-version` is required on PATH for tests.
 
 ## Defaults where VISION is silent
 
