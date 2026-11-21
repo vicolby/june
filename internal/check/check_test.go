@@ -11,6 +11,7 @@ import (
 	"testing"
 	"testing/iotest"
 	"time"
+	"unicode"
 
 	"github.com/vicolby/june/internal/check"
 )
@@ -372,6 +373,22 @@ def g(x=[]):  # june: ignore[PY012] untouched line
 func TestOptOutHonouredKeepsExitZero(t *testing.T) {
 	env := tree(t, map[string]string{"a.py": "def a(x=[]):  # june: ignore[PY012] shared on purpose\n    pass\n"})
 	expect(t, change(t, env, "a.py:1\n"), 0, "a.py:1:15: PY012 opt-out: shared on purpose\n")
+}
+
+func TestOptOutControlCharactersAreEscaped(t *testing.T) {
+	env := tree(t, map[string]string{"a.py": "def a(x=[]): pass # june: ignore[PY012] \x1b[2K\x1b[1Gapproved\n" +
+		"def b(x=1): pass # june: ignore[PY012] café \"quoted\" \\path \x1b[2Kunmatched\n" +
+		"def c(x=[]): pass # june: ignore[NO\x1b[2KPE] typo\n"})
+	res := change(t, env, "a.py:1-3\n")
+	expect(t, res, 1, "a.py:1:19: PY012 opt-out: \\x1b[2K\\x1b[1Gapproved\n"+
+		"a.py:2:18: PY012 opt-out: café \"quoted\" \\path \\x1b[2Kunmatched (suppresses nothing: no PY012 finding on this line)\n"+
+		"a.py:3:19: OPTOUT malformed opt-out suppresses nothing: rule NO\\x1b[2KPE does not exist. Fix: name a rule from the rules directory\n"+
+		"a.py:3:9: "+py012)
+	for _, r := range string(res.Out) {
+		if unicode.IsControl(r) && r != '\n' {
+			t.Errorf("output contains raw control %U: %q", r, res.Out)
+		}
+	}
 }
 
 func TestOptOutNearMissesSuppressNothing(t *testing.T) {

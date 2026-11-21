@@ -5,6 +5,9 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
+	"unicode"
 )
 
 // Severity ranks a diagnostic. Only an Error fails a check.
@@ -59,15 +62,28 @@ func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File
 	for _, d := range sorted {
 		switch d.Kind {
 		case Failure:
-			fmt.Fprintf(&b, "june: error: %s\n", d.Msg)
+			fmt.Fprintf(&b, "june: error: %s\n", escapeControls(d.Msg))
 		default:
-			fmt.Fprintf(&b, "%s:%d:%d: %s %s\n", d.File, d.Line, d.Col, d.Code, d.Msg)
+			fmt.Fprintf(&b, "%s:%d:%d: %s %s\n", escapeControls(d.File), d.Line, d.Col, escapeControls(d.Code), escapeControls(d.Msg))
 		}
 	}
 	if summary != "" {
-		fmt.Fprintf(&b, "%s\n", summary)
+		fmt.Fprintf(&b, "%s\n", escapeControls(summary))
 	}
 	return b.Bytes(), nil
+}
+
+func escapeControls(text string) string {
+	var b strings.Builder
+	for _, r := range text {
+		if unicode.IsControl(r) {
+			quoted := strconv.QuoteRune(r)
+			b.WriteString(quoted[1 : len(quoted)-1])
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func less(a, b Diagnostic) bool {

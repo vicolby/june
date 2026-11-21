@@ -3,6 +3,7 @@ package diag_test
 import (
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/vicolby/june/internal/diag"
 )
@@ -64,5 +65,33 @@ func TestRenderHasNoANSI(t *testing.T) {
 	out, _ := diag.Render(ds, "", "")
 	if strings.Contains(string(out), "\x1b") {
 		t.Errorf("out contains an escape sequence: %q", out)
+	}
+}
+
+func TestRenderEscapesControls(t *testing.T) {
+	const text = "café \"quoted\" \\path \x00\x07\b\t\n\v\f\r\x1b[2K\x7f\u0085\u009b"
+	const escaped = `café "quoted" \path \x00\a\b\t\n\v\f\r\x1b[2K\x7f\u0085\u009b`
+	for _, tc := range []struct {
+		name    string
+		diags   []diag.Diagnostic
+		summary string
+		want    string
+	}{
+		{"finding", []diag.Diagnostic{{Kind: diag.Finding, File: text, Line: 1, Col: 2, Code: text, Msg: text}}, "", escaped + ":1:2: " + escaped + " " + escaped + "\n"},
+		{"opt-out", []diag.Diagnostic{{Kind: diag.OptOut, File: text, Line: 1, Col: 2, Code: text, Msg: text}}, "", escaped + ":1:2: " + escaped + " " + escaped + "\n"},
+		{"failure", []diag.Diagnostic{{Kind: diag.Failure, Msg: text}}, "", "june: error: " + escaped + "\n"},
+		{"summary", nil, text, escaped + "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, _ := diag.Render(tc.diags, tc.summary, diag.Text)
+			if string(out) != tc.want {
+				t.Errorf("out = %q, want %q", out, tc.want)
+			}
+			for _, r := range string(out) {
+				if unicode.IsControl(r) && r != '\n' {
+					t.Errorf("out contains raw control %U: %q", r, out)
+				}
+			}
+		})
 	}
 }
