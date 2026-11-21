@@ -80,7 +80,7 @@ Faults: unparseable rule, empty message, failing example, zero rules, a rule id 
 A fault names the directory it concerns, and a duplicate id names both files. Ids that differ only by case are the same id.
 Scan reads only the given files, anchors each match at its first line, and reports comments so `check` never learns a comment marker.
 
-It hides: the location of the ast-grep binary (bundled first, then PATH), the invocation, zero-based to one-based lines, the rule schema, the sidecar example file `rule-tests/<id>-test.yml` with `valid:` and `invalid:` (ast-grep rejects unknown keys inside a rule), and the `.py` filter.
+It hides: the location of the ast-grep binary on PATH, the invocation, zero-based to one-based lines, the rule schema, the sidecar example file `rule-tests/<id>-test.yml` with `valid:` and `invalid:` (ast-grep rejects unknown keys inside a rule), and the `.py` filter.
 
 ## diag
 
@@ -125,6 +125,16 @@ june --rules shared --rules .june/rules   # shared rules layered under repo rule
 june verify                   # rule author: every example behaves, or refused
 ```
 
+## Release
+
+Distribution is Homebrew only: `brew install vicolby/tap/june`.
+There is no pip package and no container image.
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which runs GoReleaser (`.goreleaser.yaml`) to build darwin and linux binaries for amd64 and arm64, publish a GitHub release, and write `Formula/june.rb` to `vicolby/homebrew-tap`.
+Each archive holds the `june` binary and `rules/`; the formula installs the binary to `bin`, the rules to `share/june/rules`, and depends on Homebrew's `ast-grep`.
+The workflow needs the repository secret `HOMEBREW_TAP_TOKEN`, a token with contents write access to the tap.
+The formula takes the Homebrew `ast-grep`, not the version pinned in `.ast-grep-version` for tests.
+Check the config with `goreleaser check`; it reports `brews` as deprecated, but that is the only block that generates a Formula, and GoReleaser removes deprecated options only in a major version.
+
 ## Seams
 
 - **Touched lines, real, internal to `check`:** two adapters, git and the supplied list.
@@ -156,6 +166,7 @@ Each is reversible and lives here until changed.
 - The opt-out syntax is as above.
 - The default rules directory is `./.june/rules`, used when no `--rules` is given.
 - `--rules` repeats, and the directories merge into one rule set, so a team can layer bundled, shared and repo-local rules.
+- Shared rules ship in the release archive under `rules/` and install to `<prefix>/share/june/rules`. They are opt-in: a repo copies one language directory, such as `python`, to `.june/rules` or passes `--rules`, and june never loads them implicitly.
 - Shared rules are supplied by directory path; june never fetches, clones or updates them, and CI checks them out.
 - A rule id defined in two files is a rule fault, exit 2 naming both files, in either directory order. A successful verdict does not depend on that order.
 - A directory named twice counts once, after cleaning and symlink resolution, and an empty `--rules` value means the default directory.

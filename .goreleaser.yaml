@@ -1,0 +1,60 @@
+# Release config. A version tag (v*) triggers .github/workflows/release.yml, which runs goreleaser.
+# Archives carry the june binary and the bundled rules; the Homebrew formula installs them to
+# <prefix>/share/june/rules.
+version: 2
+
+project_name: june
+
+before:
+  hooks:
+    - go mod verify
+
+builds:
+  - id: june
+    main: ./cmd/june
+    binary: june
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: june
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - src: rules/**/*
+        strip_parent: false
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true
+
+# `brews` is the only block that generates a Formula (homebrew_casks is macOS-only and cannot install
+# shared data or declare the ast-grep dependency). goreleaser check reports it as deprecated; GoReleaser
+# removes deprecated options only in a major version, and the release workflow pins v2.
+brews:
+  - name: june
+    ids: [june]
+    url_template: "https://github.com/vicolby/june/releases/download/{{ urlPathEscape .Tag }}/{{ .ArtifactName }}"
+    repository:
+      owner: vicolby
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/vicolby/june
+    description: Deterministic enforcement of code-guideline rules on the lines a change touches
+    license: ""
+    dependencies:
+      - name: ast-grep
+    install: |
+      bin.install "june"
+      (share/"june").install "rules"
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/june --version")
+      assert_path_exists share/"june/rules"
