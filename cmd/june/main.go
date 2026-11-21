@@ -57,6 +57,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	fs := flag.NewFlagSet("june", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	showVersion := fs.Bool("version", false, "print the version")
+	base := fs.String("base", "", "git ref; judge lines changed since its merge base with HEAD")
 	changedLines := fs.String("changed-lines", "", "file of touched lines, path:7 or path:7-12 per line; - reads stdin")
 	legacy := fs.Bool("legacy", false, "also list violations on untouched lines, information only")
 	var rulesDirs dirList
@@ -72,7 +73,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return 0
 	}
 
-	req := check.Request{Rules: rulesDirs, Legacy: *legacy}
+	req := check.Request{Rules: rulesDirs, Base: *base, Legacy: *legacy}
 	switch *changedLines {
 	case "":
 	case "-":
@@ -129,7 +130,7 @@ func finish(stdout, stderr io.Writer, res check.Result, err error) int {
 }
 
 func usageError(stderr io.Writer, cause string) int {
-	return fail(stderr, cause+". Fix: usage is june [--legacy] [--rules DIR]... --changed-lines FILE, june verify [--rules DIR]..., or june --version")
+	return fail(stderr, cause+". Fix: usage is june [--legacy] [--rules DIR]... (--base REF | --changed-lines FILE), june verify [--rules DIR]..., or june --version")
 }
 
 func fail(stderr io.Writer, msg string) int {
