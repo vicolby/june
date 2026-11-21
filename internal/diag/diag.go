@@ -3,6 +3,7 @@ package diag
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"sort"
 	"strconv"
@@ -42,7 +43,10 @@ const (
 )
 
 type Diagnostic struct {
-	File      string
+	File string
+	// Path is File relative to the repository root, for formats whose consumer reads it that way.
+	// Empty means File already is. Plain text always prints File.
+	Path      string
 	Line, Col int
 	Code      string
 	Sev       Severity
@@ -107,7 +111,7 @@ func annotation(d Diagnostic) string {
 		return fmt.Sprintf("::%s title=june::%s\n", level, commandData(d.Msg))
 	}
 	return fmt.Sprintf("::%s file=%s,line=%d,col=%d,title=%s::%s\n", level,
-		commandProperty(d.File), d.Line, d.Col, commandProperty(d.Code), commandData(d.Msg))
+		commandProperty(cmp.Or(d.Path, d.File)), d.Line, d.Col, commandProperty(d.Code), commandData(d.Msg))
 }
 
 // commandData escapes a workflow command message after control characters are made visible.

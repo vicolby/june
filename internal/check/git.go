@@ -66,7 +66,12 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, scope, *
 		return refuse("the touched lines cannot be found because %s is not inside a git work tree. Fix: run june inside the repository, or pass --changed-lines FILE", filepath.Base(env.Dir))
 	}
 	if base == "" {
-		inferred, source := inferBase(ctx, env)
+		// actions/checkout makes the pushed branch track itself, so an upstream there would be HEAD and judge nothing.
+		pushed := onGitHub(env) && env.Vars["GITHUB_EVENT_NAME"] == "push"
+		inferred, source := "", ""
+		if !pushed {
+			inferred, source = inferBase(ctx, env)
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, scope{}, nil, err
 		}

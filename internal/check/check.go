@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 
 	"github.com/vicolby/june/internal/diag"
 	"github.com/vicolby/june/internal/rules"
@@ -35,6 +36,9 @@ type Request struct {
 	// Legacy also lists rule matches on untouched lines of the checked files, as information only.
 	// They never change Exit; off by default.
 	Legacy bool
+
+	// root is the working directory's path under the repository root, with a trailing slash, for native formats.
+	root string
 }
 
 // Result is the verdict and its rendering.
@@ -57,6 +61,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		return Result{}, err
 	}
 	req.Format = formatFor(env, req)
+	req.root = repoPrefix(ctx, env, req.Format)
 	touched, sc, bad, err := findTouched(ctx, env, req)
 	if err != nil {
 		return Result{}, err
@@ -247,6 +252,19 @@ func formatFor(env Env, req Request) diag.Format {
 	return diag.Text
 }
 
+// repoPrefix is where env.Dir sits under the repository root, "" at the root or outside git.
+// Only GitHub annotations read paths from the root, so no other format asks git.
+func repoPrefix(ctx context.Context, env Env, f diag.Format) string {
+	if f != diag.GitHub {
+		return ""
+	}
+	out, err := git(ctx, env, "", "rev-parse", "--show-prefix")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
 // findTouched picks the touched-line adapter: the supplied list, else git against Base or an inferred base.
 // The scope is zero for a supplied list. The touched set is never "every line": what cannot be known is refused.
 func findTouched(ctx context.Context, env Env, req Request) (touchedSet, scope, *string, error) {
@@ -280,7 +298,17 @@ func refuse(req Request, msgs ...string) Result {
 }
 
 func render(req Request, exit int, ds []diag.Diagnostic, summary string) Result {
-	out, files := diag.Render(ds, summary, req.Format)
+	shown := ds
+	if req.root != "" {
+		shown = make([]diag.Diagnostic, len(ds))
+		for i, d := range ds {
+			if d.File != "" {
+				d.Path = req.root + d.File
+			}
+			shown[i] = d
+		}
+	}
+	out, files := diag.Render(shown, summary, req.Format)
 	return Result{Exit: exit, Out: out, Files: files, Diags: ds}
 }
 

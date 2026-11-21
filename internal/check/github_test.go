@@ -145,3 +145,57 @@ func annotationOf(res check.Result) string {
 	cmd, _, _ := strings.Cut(string(res.Out), "june: error: ")
 	return cmd
 }
+
+// pushCheckout is what actions/checkout leaves on a push event: the branch created from origin/<branch>, tracking it, with HEAD equal to it.
+func pushCheckout(t *testing.T) check.Env {
+	t.Helper()
+	origin := repo(t, map[string]string{"app.py": old})
+	git(t, origin.Dir, "checkout", "-q", "main")
+	write(t, filepath.Join(origin.Dir, "app.py"), old+"def g(b={}): pass\n")
+	commit(t, origin)
+	env := clone(t, origin)
+	git(t, env.Dir, "checkout", "-q", "-b", "feature", "--track", "origin/main")
+	return onGitHub(env, "push", "")
+}
+
+func TestPushEventIsRefusedEvenWhenTheBranchTracksItsOwnRemote(t *testing.T) {
+	env := pushCheckout(t)
+	res := infer(t, env)
+	want := "june: error: a push event has no pull request base, so the touched lines cannot be found. Fix: pass --base REF (for example --base origin/main) with fetch-depth: 0 on actions/checkout, or run june on pull_request\n"
+	if res.Exit != 2 || !strings.HasSuffix(string(res.Out), want) || strings.Contains(string(res.Out), "checked") {
+		t.Errorf("Exit = %d, Out =\n%s\nwant 2 and a refusal ending\n%s", res.Exit, res.Out, want)
+	}
+}
+
+func TestPushEventStillHonoursAnExplicitBaseAndList(t *testing.T) {
+	env := pushCheckout(t)
+	git(t, env.Dir, "branch", "-q", "older", "HEAD~1")
+	if res := against(t, env, "HEAD~1"); res.Exit != 1 {
+		t.Errorf("--base: Exit = %d, want 1\n%s", res.Exit, res.Out)
+	}
+	if res := change(t, env, "app.py:2\n"); res.Exit != 1 {
+		t.Errorf("list: Exit = %d, want 1\n%s", res.Exit, res.Out)
+	}
+}
+
+func TestAnnotationsUseRepositoryRootPathsFromASubdirectory(t *testing.T) {
+	env := repo(t, map[string]string{"keep.py": "x = 1\n"})
+	git(t, env.Dir, "remote", "add", "origin", env.Dir)
+	git(t, env.Dir, "fetch", "-q", "origin")
+	write(t, filepath.Join(env.Dir, "sub", "app.py"), old)
+	copyDir(t, filepath.Join("..", "..", "rules", "python"), filepath.Join(env.Dir, "sub", ".june", "rules"))
+	commit(t, env)
+	sub := onGitHub(check.Env{Dir: filepath.Join(env.Dir, "sub")}, "pull_request", "main")
+	for name, res := range map[string]check.Result{
+		"pull request": infer(t, sub),
+		"list":         change(t, sub, "app.py:1\n"),
+	} {
+		out := string(res.Out)
+		if !strings.Contains(out, "::error file=sub/app.py,line=1,col=9,title=PY012::") {
+			t.Errorf("%s: Out =\n%s\nwant an annotation on sub/app.py", name, out)
+		}
+		if !strings.Contains(out, "\napp.py:1:9: "+py012) {
+			t.Errorf("%s: Out =\n%s\nwant the plain text relative to the working directory", name, out)
+		}
+	}
+}

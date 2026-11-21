@@ -157,3 +157,12 @@ func TestGitHubEscapesWorkflowCommandSyntax(t *testing.T) {
 		t.Errorf("annotation spans several lines: %q", annotation)
 	}
 }
+
+func TestGitHubAnnotatesThePathFromTheRepositoryRoot(t *testing.T) {
+	ds := []diag.Diagnostic{{Kind: diag.Finding, File: "app.py", Path: "sub/app.py", Line: 1, Col: 2, Code: "PY012", Sev: diag.Error, Msg: "m"}}
+	out, _ := diag.Render(ds, "", diag.GitHub)
+	want := "::error file=sub/app.py,line=1,col=2,title=PY012::m\napp.py:1:2: PY012 m\n"
+	if string(out) != want {
+		t.Errorf("out = %q, want %q", out, want)
+	}
+}
