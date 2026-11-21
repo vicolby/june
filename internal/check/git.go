@@ -25,6 +25,11 @@ const (
 	sourceUpstream = "upstream branch"
 	sourceDefault  = "remote default branch"
 	sourcePull     = "pull request base"
+	sourceRefs     = "pre-commit refs"
+	sourceStaged   = "staged diff"
+
+	// emptyTree is the id of git's empty tree, the base of a first commit.
+	emptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 )
 
 // onGitHub reports whether env is a GitHub Actions run.
@@ -47,12 +52,29 @@ func pullRequestBase(env Env) string {
 
 // gitTouched finds the lines added or edited since the merge base of base and HEAD:
 // committed changes, staged and unstaged changes, and untracked files.
-// An empty base is inferred: a GitHub pull request base, else the upstream branch of HEAD, else the remote default branch.
+// An empty base is inferred, first hit wins: pre-commit's from and to refs, a GitHub pull request base,
+// a GitLab merge request base passed in by the caller, pre-commit's staged diff (judged against HEAD,
+// or the empty tree before the first commit), the upstream branch of HEAD, else the remote default branch.
+// Refs and the staged diff are read from the Env, never from the process.
 // source says where a non-empty base came from, so a refusal can name the right fix.
 // Paths are relative to env.Dir. The returned message is a complete "<cause>. Fix: <instruction>" refusal.
 // A cancelled context returns its error.
 func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, scope, *string, error) {
 	sc := scope{base, source}
+	staged := false
+	toRef := ""
+	// An explicit --base wins. Pre-commit refs, then a GitHub pull request base, outrank a merge
+	// request base the caller already resolved. The staged diff comes after that base.
+	if source != sourceFlag {
+		from, to := env.Vars["PRE_COMMIT_FROM_REF"], env.Vars["PRE_COMMIT_TO_REF"]
+		if from != "" && to != "" {
+			base, toRef = from, to
+			sc = scope{base, sourceRefs}
+		} else if pr := pullRequestBase(env); pr != "" {
+			base = pr
+			sc = scope{base, sourcePull}
+		}
+	}
 	refuse := func(format string, a ...any) (touchedSet, scope, *string, error) {
 		msg := fmt.Sprintf(format, a...)
 		return nil, scope{}, &msg, nil
@@ -71,55 +93,74 @@ func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, 
 		return refuse("the touched lines cannot be found because %s is not inside a git work tree. Fix: run june inside the repository, or pass --changed-lines FILE", filepath.Base(env.Dir))
 	}
 	if base == "" {
-		// actions/checkout makes the pushed branch track itself, so an upstream there would be HEAD and judge nothing.
-		pushed := onGitHub(env) && env.Vars["GITHUB_EVENT_NAME"] == "push"
-		inferred, source := "", ""
-		if !pushed {
-			inferred, source = inferBase(ctx, env)
+		if env.Vars["PRE_COMMIT"] == "1" {
+			staged = true
+			sc = scope{"HEAD", sourceStaged}
+		} else {
+			// actions/checkout makes the pushed branch track itself, so an upstream there would be HEAD and judge nothing.
+			pushed := onGitHub(env) && env.Vars["GITHUB_EVENT_NAME"] == "push"
+			inferred, got := "", ""
+			if !pushed {
+				inferred, got = inferBase(ctx, env)
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, scope{}, nil, err
+			}
+			if inferred == "" && onGitHub(env) {
+				event := env.Vars["GITHUB_EVENT_NAME"]
+				return refuse("a %s event has no pull request base, so the touched lines cannot be found. Fix: pass --base REF (for example --base origin/main) with fetch-depth: 0 on actions/checkout, or run june on pull_request", event)
+			}
+			if inferred == "" {
+				return refuse("no base branch can be inferred because the current branch has no upstream and the repository has no remote default branch. Fix: pass --base REF, or --changed-lines FILE")
+			}
+			base = inferred
+			sc = scope{base, got}
 		}
-		if err := ctx.Err(); err != nil {
-			return nil, scope{}, nil, err
-		}
-		if inferred == "" && onGitHub(env) {
-			event := env.Vars["GITHUB_EVENT_NAME"]
-			return refuse("a %s event has no pull request base, so the touched lines cannot be found. Fix: pass --base REF (for example --base origin/main) with fetch-depth: 0 on actions/checkout, or run june on pull_request", event)
-		}
-		if inferred == "" {
-			return refuse("no base branch can be inferred because the current branch has no upstream and the repository has no remote default branch. Fix: pass --base REF, or --changed-lines FILE")
-		}
-		base = inferred
-		sc = scope{base, source}
 	}
-	if _, err := git(ctx, env, "", "rev-parse", "--verify", "--quiet", base+"^{commit}"); err != nil {
-		if ctx.Err() != nil {
+	var mb string
+	if staged {
+		mb = emptyTree
+		if head, err := git(ctx, env, "", "rev-parse", "--verify", "--quiet", "HEAD^{commit}"); err == nil {
+			mb = head
+		} else if ctx.Err() != nil {
 			return nil, scope{}, nil, ctx.Err()
 		}
-		if sc.source == sourcePull {
-			return refuse("the base %q is not a commit in this repository. Fix: set fetch-depth: 0 on actions/checkout so the pull request base is fetched, or pass an existing branch, tag or commit to --base", base)
+	} else {
+		if _, err := git(ctx, env, "", "rev-parse", "--verify", "--quiet", base+"^{commit}"); err != nil {
+			if ctx.Err() != nil {
+				return nil, scope{}, nil, ctx.Err()
+			}
+			if sc.source == sourcePull {
+				return refuse("the base %q is not a commit in this repository. Fix: set fetch-depth: 0 on actions/checkout so the pull request base is fetched, or pass an existing branch, tag or commit to --base", base)
+			}
+			if sc.source == sourceMR {
+				return refuse("the merge request diff base %s is not a commit in this repository. Fix: %s", base, fullDepth)
+			}
+			return refuse("the base %q is not a commit in this repository. Fix: fetch it, or pass an existing branch, tag or commit to --base", base)
 		}
-		if sc.source == sourceMR {
-			return refuse("the merge request diff base %s is not a commit in this repository. Fix: %s", base, fullDepth)
+		if toRef != "" {
+			// The lines are read from disk, so the checkout must be the end of the range.
+			head, _ := git(ctx, env, "", "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+			to, _ := git(ctx, env, "", "rev-parse", "--verify", "--quiet", toRef+"^{commit}")
+			if err := ctx.Err(); err != nil {
+				return nil, scope{}, nil, err
+			}
+			if to == "" || to != head {
+				return refuse("the checkout is at HEAD, not at pre-commit's to-ref, so the lines in the ref range cannot be read from disk. Fix: check out the to-ref, or pass --base REF or --changed-lines FILE")
+			}
 		}
-		return refuse("the base %q is not a commit in this repository. Fix: fetch it, or pass an existing branch, tag or commit to --base", base)
-	}
-	mb, err := git(ctx, env, "", "merge-base", base, "HEAD")
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, scope{}, nil, ctx.Err()
+		var err error
+		if mb, err = git(ctx, env, "", "merge-base", base, "HEAD"); err != nil {
+			if ctx.Err() != nil {
+				return nil, scope{}, nil, ctx.Err()
+			}
+			if sc.source == sourceMR {
+				return refuse("HEAD and the merge request diff base %s have no merge base, so the touched lines are unknowable. Fix: %s", base, fullDepth)
+			}
+			return refuse("HEAD and %q have no merge base, so the touched lines are unknowable. Fix: fetch full history (git fetch --unshallow) or pass a base that shares history with HEAD", base)
 		}
-		if sc.source == sourceMR {
-			return refuse("HEAD and the merge request diff base %s have no merge base, so the touched lines are unknowable. Fix: %s", base, fullDepth)
-		}
-		return refuse("HEAD and %q have no merge base, so the touched lines are unknowable. Fix: fetch full history (git fetch --unshallow) or pass a base that shares history with HEAD", base)
 	}
 
-	untracked, err := git(ctx, env, "", "ls-files", "--others", "--exclude-standard", "-z", "--")
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, scope{}, nil, ctx.Err()
-		}
-		return refuse("git could not list untracked files (%v). Fix: run git status to see why", err)
-	}
 	prefix, err := git(ctx, env, "", "rev-parse", "--show-prefix")
 	if err != nil {
 		if ctx.Err() != nil {
@@ -128,89 +169,108 @@ func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, 
 		return refuse("git could not locate the working directory. Fix: run git status to see why")
 	}
 	prefix = strings.TrimSuffix(prefix, "\n")
-	var entries strings.Builder
-	if untracked != "" {
-		empty, err := git(ctx, env, "", "hash-object", "--stdin")
+	absent := map[string]bool{}
+	if !staged && toRef == "" {
+		untracked, err := git(ctx, env, "", "ls-files", "--others", "--exclude-standard", "-z", "--")
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, scope{}, nil, ctx.Err()
 			}
-			return refuse("git could not prepare untracked files. Fix: run git status to see why")
+			return refuse("git could not list untracked files (%v). Fix: run git status to see why", err)
 		}
-		for _, name := range strings.Split(strings.TrimSuffix(untracked, "\x00"), "\x00") {
-			if path.Ext(name) != ".py" {
-				continue
-			}
-			info, err := os.Lstat(filepath.Join(env.Dir, filepath.FromSlash(name)))
+		var entries strings.Builder
+		if untracked != "" {
+			empty, err := git(ctx, env, "", "hash-object", "--stdin")
 			if err != nil {
-				return refuse("untracked file %q cannot be inspected. Fix: check its permissions and run june again", name)
+				if ctx.Err() != nil {
+					return nil, scope{}, nil, ctx.Err()
+				}
+				return refuse("git could not prepare untracked files. Fix: run git status to see why")
 			}
-			if !info.Mode().IsRegular() {
+			for _, name := range strings.Split(strings.TrimSuffix(untracked, "\x00"), "\x00") {
+				if path.Ext(name) != ".py" {
+					continue
+				}
+				info, err := os.Lstat(filepath.Join(env.Dir, filepath.FromSlash(name)))
+				if err != nil {
+					return refuse("untracked file %q cannot be inspected. Fix: check its permissions and run june again", name)
+				}
+				if !info.Mode().IsRegular() {
+					continue
+				}
+				mode := "100644"
+				if info.Mode().Perm()&0o111 != 0 {
+					mode = "100755"
+				}
+				fmt.Fprintf(&entries, "%s %s 0\t%s%s\x00", mode, strings.TrimSpace(empty), prefix, name)
+			}
+		}
+		tracked, err := git(ctx, env, "", "ls-files", "--stage", "-t", "-z", "--", ":/")
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, scope{}, nil, ctx.Err()
+			}
+			return refuse("git could not list tracked files. Fix: run git status to see why")
+		}
+		var skipped strings.Builder
+		for _, record := range strings.Split(tracked, "\x00") {
+			if record == "" {
 				continue
 			}
-			mode := "100644"
-			if info.Mode().Perm()&0o111 != 0 {
-				mode = "100755"
+			metadata, name, _ := strings.Cut(record[2:], "\t")
+			repoPath := path.Join(prefix, name)
+			fmt.Fprintf(&entries, "%s\t%s\x00", metadata, repoPath)
+			if record[0] != 'S' {
+				continue
 			}
-			fmt.Fprintf(&entries, "%s %s 0\t%s%s\x00", mode, strings.TrimSpace(empty), prefix, name)
+			if _, err := os.Lstat(filepath.Join(env.Dir, filepath.FromSlash(name))); os.IsNotExist(err) {
+				skipped.WriteString(name)
+				skipped.WriteByte(0)
+				absent[repoPath] = true
+			} else if err != nil {
+				return refuse("sparse file %q cannot be inspected. Fix: check its permissions and run june again", name)
+			}
 		}
-	}
-	tracked, err := git(ctx, env, "", "ls-files", "--stage", "-t", "-z", "--", ":/")
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, scope{}, nil, ctx.Err()
+		dir, err := os.MkdirTemp("", "june-git-")
+		if err != nil {
+			return refuse("a temporary git index cannot be created. Fix: check temporary directory permissions and run june again")
 		}
-		return refuse("git could not list tracked files. Fix: run git status to see why")
-	}
-	var skipped strings.Builder
-	absent := map[string]bool{}
-	for _, record := range strings.Split(tracked, "\x00") {
-		if record == "" {
-			continue
+		defer func() { _ = os.RemoveAll(dir) }()
+		vars := make(map[string]string, len(env.Vars)+1)
+		for k, v := range env.Vars {
+			vars[k] = v
 		}
-		metadata, name, _ := strings.Cut(record[2:], "\t")
-		repoPath := path.Join(prefix, name)
-		fmt.Fprintf(&entries, "%s\t%s\x00", metadata, repoPath)
-		if record[0] != 'S' {
-			continue
-		}
-		if _, err := os.Lstat(filepath.Join(env.Dir, filepath.FromSlash(name))); os.IsNotExist(err) {
-			skipped.WriteString(name)
-			skipped.WriteByte(0)
-			absent[repoPath] = true
-		} else if err != nil {
-			return refuse("sparse file %q cannot be inspected. Fix: check its permissions and run june again", name)
-		}
-	}
-	dir, err := os.MkdirTemp("", "june-git-")
-	if err != nil {
-		return refuse("a temporary git index cannot be created. Fix: check temporary directory permissions and run june again")
-	}
-	defer func() { _ = os.RemoveAll(dir) }()
-	vars := make(map[string]string, len(env.Vars)+1)
-	for k, v := range env.Vars {
-		vars[k] = v
-	}
-	vars["GIT_INDEX_FILE"] = filepath.Join(dir, "index")
-	env.Vars = vars
-	if _, err := git(ctx, env, entries.String(), "-c", "core.ignorestat=false", "update-index", "--no-split-index", "-z", "--index-info"); err != nil {
-		if ctx.Err() != nil {
-			return nil, scope{}, nil, ctx.Err()
-		}
-		return refuse("a temporary git index cannot be prepared. Fix: run git status and check temporary directory permissions")
-	}
-	if skipped.Len() > 0 {
-		if _, err := git(ctx, env, skipped.String(), "-c", "core.ignorestat=false", "update-index", "--no-split-index", "--skip-worktree", "-z", "--stdin"); err != nil {
+		vars["GIT_INDEX_FILE"] = filepath.Join(dir, "index")
+		env.Vars = vars
+		if _, err := git(ctx, env, entries.String(), "-c", "core.ignorestat=false", "update-index", "--no-split-index", "-z", "--index-info"); err != nil {
 			if ctx.Err() != nil {
 				return nil, scope{}, nil, ctx.Err()
 			}
 			return refuse("a temporary git index cannot be prepared. Fix: run git status and check temporary directory permissions")
 		}
-	}
+		if skipped.Len() > 0 {
+			if _, err := git(ctx, env, skipped.String(), "-c", "core.ignorestat=false", "update-index", "--no-split-index", "--skip-worktree", "-z", "--stdin"); err != nil {
+				if ctx.Err() != nil {
+					return nil, scope{}, nil, ctx.Err()
+				}
+				return refuse("a temporary git index cannot be prepared. Fix: run git status and check temporary directory permissions")
+			}
+		}
 
+	}
 	// -M forces rename detection whatever diff.renames says, so a pure rename shows no hunk.
 	// --no-textconv and --no-ext-diff keep the diff a pure function of the trees.
-	changes, err := git(ctx, env, "", "diff", "--name-status", "--diff-filter=d", "-z", "--no-relative", "--no-color", "--no-ext-diff", "--no-textconv", "-M", strings.TrimSpace(mb), "--")
+	// A staged run diffs the index itself, which pre-commit points at the tree the commit will hold.
+	// A ref run diffs commits, so neither worktree edits nor untracked files join the range.
+	var cached, tip []string
+	switch {
+	case staged:
+		cached = []string{"--cached"}
+	case toRef != "":
+		tip = []string{"HEAD"}
+	}
+	nameArgs := append(append([]string{"diff"}, cached...), "--name-status", "--diff-filter=d", "-z", "--no-relative", "--no-color", "--no-ext-diff", "--no-textconv", "-M", strings.TrimSpace(mb))
+	changes, err := git(ctx, env, "", append(append(nameArgs, tip...), "--")...)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, scope{}, nil, ctx.Err()
@@ -237,7 +297,8 @@ func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, 
 	if len(paths) == 0 {
 		return touchedSet{}, sc, nil, ctx.Err()
 	}
-	args := []string{"-c", "core.quotepath=off", "diff", "--text", "--no-relative", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "-M", "--unified=0", "--inter-hunk-context=0", strings.TrimSpace(mb), "--"}
+	args := append(append([]string{"-c", "core.quotepath=off", "diff"}, cached...), "--text", "--no-relative", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "-M", "--unified=0", "--inter-hunk-context=0", strings.TrimSpace(mb))
+	args = append(append(args, tip...), "--")
 	patch, err := git(ctx, env, "", append(args, paths...)...)
 	if err != nil {
 		if ctx.Err() != nil {
