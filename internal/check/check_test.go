@@ -301,7 +301,7 @@ func TestChangedLinesPreservesPathWhitespace(t *testing.T) {
 	for _, list := range []string{" app.py:1\n", "\n \t\n app.py:1-1\r\n"} {
 		expect(t, change(t, env, list), 1, " app.py:1:9: "+py012)
 	}
-	expect(t, change(t, env, "\tapp.py:1\n"), 1, "\tapp.py:1:9: "+py012)
+	expect(t, change(t, env, "\tapp.py:1\n"), 1, "\\tapp.py:1:9: "+py012)
 	expect(t, change(t, env, "app.py:1\n"), 0, "")
 }
 
