@@ -702,6 +702,59 @@ func TestRulesAcrossDirectoriesNameBothFilesOnDuplicateID(t *testing.T) {
 	}
 }
 
+func TestCaseVariantRuleIDsAreDuplicates(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "x = [1]\n"})
+	// Foo's valid example is a list the rule matches, so skipping its examples would let the rule emit findings.
+	write(t, filepath.Join(env.Dir, "A", "Foo.yml"), "id: Foo\nlanguage: python\nseverity: error\nmessage: No lists.\nrule:\n  kind: list\n")
+	write(t, filepath.Join(env.Dir, "A", "rule-tests", "Foo-test.yml"), "id: Foo\nvalid:\n  - \"x = [1]\"\ninvalid:\n  - \"x = [1]\"\n")
+	lst01(t, filepath.Join(env.Dir, "B"), "foo.yml", "foo", "No lists.")
+	for _, tc := range []struct {
+		dirs []string
+		want string
+	}{
+		{[]string{"A", "B"}, "june: error: B/foo.yml: the rule id foo is duplicated (also defined in A/Foo.yml). Fix: give every rule a unique id\n"},
+		{[]string{"B", "A"}, "june: error: A/Foo.yml: the rule id Foo is duplicated (also defined in B/foo.yml). Fix: give every rule a unique id\n"},
+	} {
+		res := changeWith(t, env, tc.dirs, "app.py:1\n")
+		if res.Exit != 2 || string(res.Out) != tc.want {
+			t.Errorf("dirs %v: Exit = %d, Out = %q, want 2 and %q", tc.dirs, res.Exit, res.Out, tc.want)
+		}
+		verified, err := check.Rules(context.Background(), env, tc.dirs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if verified.Exit != 2 || string(verified.Out) != tc.want {
+			t.Errorf("dirs %v: verify Exit = %d, Out = %q, want 2 and %q", tc.dirs, verified.Exit, verified.Out, tc.want)
+		}
+	}
+}
+
+func TestAbsoluteRulesDirectoriesWithTheSameBaseNameStayDistinct(t *testing.T) {
+	root := t.TempDir()
+	app := filepath.Join(root, "app")
+	if err := os.MkdirAll(app, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(app, "app.py"), "x = [1]\n")
+	env := check.Env{Dir: app}
+	shared := filepath.Join(root, "shared", "rules")
+	local := filepath.Join(app, ".june", "rules")
+	lst01(t, shared, "LST01.yml", "LST01", "No lists.")
+	lst01(t, local, "LST01.yml", "LST01", "Still no lists.")
+	want := "june: error: .june/rules/LST01.yml: the rule id LST01 is duplicated (also defined in ../shared/rules/LST01.yml). Fix: give every rule a unique id\n"
+	res := changeWith(t, env, []string{shared, local}, "app.py:1\n")
+	if res.Exit != 2 || string(res.Out) != want || strings.Contains(string(res.Out), root) {
+		t.Errorf("Exit = %d, Out = %q, want 2 and %q", res.Exit, res.Out, want)
+	}
+	verified, err := check.Rules(context.Background(), env, []string{shared, local})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Exit != 2 || string(verified.Out) != want || strings.Contains(string(verified.Out), root) {
+		t.Errorf("verify Exit = %d, Out = %q, want 2 and %q", verified.Exit, verified.Out, want)
+	}
+}
+
 // Same file names in different directories with different ids must not collide while examples run.
 func TestRulesAcrossDirectoriesMayShareFileNames(t *testing.T) {
 	env := tree(t, map[string]string{"app.py": "x = [1]\ny = {1: 2}\n"})

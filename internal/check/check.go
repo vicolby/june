@@ -179,7 +179,7 @@ func load(ctx context.Context, env Env, dirs []string, req Request) (*rules.Rule
 		return nil, nil, err
 	}
 	if len(faults) > 0 {
-		res := refuse(req, faultMessages(dirs, faults)...)
+		res := refuse(req, faultMessages(env.Dir, dirs, faults)...)
 		return nil, &res, nil
 	}
 	return rs, nil, nil
@@ -241,26 +241,32 @@ func resolve(dir, path string) string {
 
 // faultMessages words rule faults as "<cause>. Fix: <instruction>" with a relative rules-directory label.
 // display holds the directories as the caller spelled them, indexed like Fault.Dir.
-func faultMessages(display []string, faults []rules.Fault) []string {
+// base is the working directory an absolute spelling is made relative to.
+func faultMessages(base string, display []string, faults []rules.Fault) []string {
 	msgs := make([]string, len(faults))
 	for i, f := range faults {
 		cause := f.Cause
 		if f.Also != nil {
-			cause += " (also defined in " + label(display[f.Also.Dir], f.Also.Path) + ")"
+			cause += " (also defined in " + label(base, display[f.Also.Dir], f.Also.Path) + ")"
 		}
-		msgs[i] = label(display[f.Dir], f.Path) + ": " + cause + ". Fix: " + f.Fix
+		msgs[i] = label(base, display[f.Dir], f.Path) + ": " + cause + ". Fix: " + f.Fix
 	}
 	return msgs
 }
 
 // label names a file under a rules directory without leaking an absolute path.
-func label(display, path string) string {
+// An absolute directory is made relative to base, and falls back to its base name when that fails.
+func label(base, display, path string) string {
 	where := filepath.Clean(display)
 	if filepath.IsAbs(where) {
-		where = filepath.Base(where)
-		if filepath.IsAbs(where) {
-			where = "."
+		rel, err := filepath.Rel(base, where)
+		if err != nil || filepath.IsAbs(rel) {
+			rel = filepath.Base(where)
+			if filepath.IsAbs(rel) {
+				rel = "."
+			}
 		}
+		where = rel
 	}
 	if path != "" {
 		where = filepath.Join(where, path)

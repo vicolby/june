@@ -115,7 +115,7 @@ type exampleDoc struct {
 }
 
 // Load verifies every rule in every dir against its sidecar examples and merges them into one set.
-// The same rule id in two files is a fault, wherever the files live.
+// The same rule id in two files is a fault, wherever the files live. Ids that differ only by case are the same id.
 // Faults non-empty means a nil set, never a partial set.
 func Load(ctx context.Context, dirs ...string) (*RuleSet, []Fault) {
 	bin, err := exec.LookPath(astGrepName)
@@ -153,7 +153,7 @@ func Load(ctx context.Context, dirs ...string) (*RuleSet, []Fault) {
 			if id == "" {
 				continue
 			}
-			if first, dup := places[id]; dup {
+			if first, dup := knownID(places, id); dup {
 				faults = append(faults, Fault{Dir: i, Path: name, Cause: fmt.Sprintf("the rule id %s is duplicated", id), Fix: "give every rule a unique id", Also: &first})
 				continue
 			}
@@ -177,6 +177,16 @@ func Load(ctx context.Context, dirs ...string) (*RuleSet, []Fault) {
 		total += e.examples
 	}
 	return &RuleSet{bin: bin, inline: strings.Join(docs, "\n---\n"), ids: ids, rules: len(entries), examples: total}, nil
+}
+
+// knownID reports the file that already owns id. Comparison is case-insensitive because staging uses the id as a filename.
+func knownID(places map[string]Place, id string) (Place, bool) {
+	for seen, at := range places {
+		if strings.EqualFold(seen, id) {
+			return at, true
+		}
+	}
+	return Place{}, false
 }
 
 // Scan runs the rules over the given files and keeps only Python files.
@@ -443,8 +453,8 @@ func verify(ctx context.Context, bin string, dirs []string, entries []entry) []F
 	for _, e := range entries {
 		where[e.id] = e.place
 	}
-	if err := stage(scratch, dirs, entries); err != nil {
-		return []Fault{{Cause: "the examples cannot be run", Fix: "make the rules directory readable"}}
+	if faults := stage(scratch, dirs, entries); len(faults) > 0 {
+		return faults
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -492,34 +502,79 @@ func verify(ctx context.Context, bin string, dirs []string, entries []entry) []F
 	return []Fault{{Cause: "the examples cannot be run", Fix: "run ast-grep test on the rules directory to see why"}}
 }
 
+// stagedFile is one file already written into the scratch tree.
+type stagedFile struct {
+	path  string
+	place Place
+}
+
 // stage lays rule files and examples out the way ast-grep test expects them.
-// Rules are staged by id, which is unique, so same-named files of different directories never collide.
-func stage(scratch string, dirs []string, entries []entry) error {
+// A destination that already exists is a duplicate rule id and is left untouched.
+func stage(scratch string, dirs []string, entries []entry) []Fault {
 	if _, err := writeConfig(scratch); err != nil {
-		return err
+		return []Fault{{Cause: "the examples cannot be run", Fix: "make the rules directory readable"}}
 	}
 	if err := os.MkdirAll(filepath.Join(scratch, testsDir), 0o755); err != nil {
-		return err
+		return []Fault{{Cause: "the examples cannot be run", Fix: "make the rules directory readable"}}
 	}
+	var laid []stagedFile
 	for _, e := range entries {
 		dir := dirs[e.place.Dir]
-		if err := copyFile(filepath.Join(dir, e.place.Path), filepath.Join(scratch, "rules", e.id+".yml")); err != nil {
-			return err
+		ruleDst := filepath.Join(scratch, "rules", e.id+".yml")
+		if fault, bad := lay(filepath.Join(dir, e.place.Path), ruleDst, e, &laid); bad {
+			return []Fault{fault}
 		}
-		sidecar := filepath.Join(testsDir, e.id+"-test.yml")
-		if err := copyFile(filepath.Join(dir, sidecar), filepath.Join(scratch, sidecar)); err != nil {
-			return err
+		side := filepath.Join(testsDir, e.id+"-test.yml")
+		if fault, bad := lay(filepath.Join(dir, side), filepath.Join(scratch, side), e, &laid); bad {
+			return []Fault{fault}
 		}
 	}
 	return nil
 }
 
+// lay copies src to a new file at dst. An existing dst is a duplicate of a rule already staged.
+func lay(src, dst string, e entry, laid *[]stagedFile) (Fault, bool) {
+	if err := copyFile(src, dst); err != nil {
+		if !errors.Is(err, os.ErrExist) {
+			return Fault{Cause: "the examples cannot be run", Fix: "make the rules directory readable"}, true
+		}
+		f := Fault{
+			Dir: e.place.Dir, Path: e.place.Path,
+			Cause: fmt.Sprintf("the rule id %s is duplicated", e.id),
+			Fix:   "give every rule a unique id",
+		}
+		if info, statErr := os.Lstat(dst); statErr == nil {
+			for _, prev := range *laid {
+				pinfo, lerr := os.Lstat(prev.path)
+				if lerr == nil && os.SameFile(info, pinfo) {
+					also := prev.place
+					f.Also = &also
+					break
+				}
+			}
+		}
+		return f, true
+	}
+	*laid = append(*laid, stagedFile{path: dst, place: e.place})
+	return Fault{}, false
+}
+
+// copyFile writes dst as a new file. An existing destination is left untouched.
 func copyFile(src, dst string) error {
 	b, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, b, 0o644)
+	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(b)
+	cerr := f.Close()
+	if werr != nil {
+		return werr
+	}
+	return cerr
 }
 
 // misbehavior is one example that ast-grep test reported.
