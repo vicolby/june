@@ -53,6 +53,42 @@ func against(t *testing.T, env check.Env, base string) check.Result {
 
 const old = "def f(a=[]): pass\n"
 
+func TestGitScopeNormalizesIndexFlagsWithoutChangingCallerIndex(t *testing.T) {
+	for _, flag := range []string{"core.ignorestat", "assume-unchanged", "skip-worktree"} {
+		t.Run(flag, func(t *testing.T) {
+			env := repo(t, map[string]string{"app.py": old + "x = 1\n"})
+			if flag == "core.ignorestat" {
+				git(t, env.Dir, "config", flag, "true")
+				git(t, env.Dir, "update-index", "--really-refresh")
+			} else {
+				git(t, env.Dir, "update-index", "--"+flag, "--", "app.py")
+			}
+			indexPath := filepath.Join(env.Dir, ".git", "index")
+			before, err := os.ReadFile(indexPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expect(t, against(t, env, "main"), 0, "")
+			write(t, filepath.Join(env.Dir, "app.py"), old+"def g(b={}): pass\n")
+			want := "app.py:2:9: " + py012
+			expect(t, against(t, env, "main"), 1, want)
+			write(t, filepath.Join(env.Dir, "unrelated.py"), "x = 1\n")
+			expect(t, against(t, env, "main"), 1, want)
+			if err := os.Remove(filepath.Join(env.Dir, "unrelated.py")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(env.Dir, "app.py")); err != nil {
+				t.Fatal(err)
+			}
+			expect(t, against(t, env, "main"), 0, "")
+			after, err := os.ReadFile(indexPath)
+			if err != nil || string(after) != string(before) {
+				t.Fatalf("git scope changed the caller's index: %v", err)
+			}
+		})
+	}
+}
+
 func TestGitScopeReconstructedIndexReadsWorktree(t *testing.T) {
 	env := repo(t, map[string]string{"empty.txt": "", "app.py": old + "x = 1\n"})
 	git(t, env.Dir, "config", "core.ignorestat", "true")

@@ -87,31 +87,29 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, *string,
 			fmt.Fprintf(&entries, "%s %s 0\t%s%s\x00", mode, strings.TrimSpace(empty), prefix, name)
 		}
 	}
-	if entries.Len() > 0 {
-		tracked, err := git(ctx, env, "", "ls-files", "--stage", "--full-name", "-z", "--", ":/")
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, nil, ctx.Err()
-			}
-			return refuse("git could not list tracked files. Fix: run git status to see why")
+	tracked, err := git(ctx, env, "", "ls-files", "--stage", "--full-name", "-z", "--", ":/")
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
 		}
-		dir, err := os.MkdirTemp("", "june-git-")
-		if err != nil {
-			return refuse("a temporary git index cannot be created. Fix: check temporary directory permissions and run june again")
+		return refuse("git could not list tracked files. Fix: run git status to see why")
+	}
+	dir, err := os.MkdirTemp("", "june-git-")
+	if err != nil {
+		return refuse("a temporary git index cannot be created. Fix: check temporary directory permissions and run june again")
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	vars := make(map[string]string, len(env.Vars)+1)
+	for k, v := range env.Vars {
+		vars[k] = v
+	}
+	vars["GIT_INDEX_FILE"] = filepath.Join(dir, "index")
+	env.Vars = vars
+	if _, err := git(ctx, env, tracked+entries.String(), "-c", "core.ignorestat=false", "update-index", "--no-split-index", "-z", "--index-info"); err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
 		}
-		defer func() { _ = os.RemoveAll(dir) }()
-		vars := make(map[string]string, len(env.Vars)+1)
-		for k, v := range env.Vars {
-			vars[k] = v
-		}
-		vars["GIT_INDEX_FILE"] = filepath.Join(dir, "index")
-		env.Vars = vars
-		if _, err := git(ctx, env, tracked+entries.String(), "-c", "core.ignorestat=false", "update-index", "--no-split-index", "-z", "--index-info"); err != nil {
-			if ctx.Err() != nil {
-				return nil, nil, ctx.Err()
-			}
-			return refuse("a temporary git index cannot be prepared. Fix: run git status and check temporary directory permissions")
-		}
+		return refuse("a temporary git index cannot be prepared. Fix: run git status and check temporary directory permissions")
 	}
 
 	// -M forces rename detection whatever diff.renames says, so a pure rename shows no hunk.
