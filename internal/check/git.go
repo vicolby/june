@@ -106,7 +106,7 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, *string,
 		}
 		vars["GIT_INDEX_FILE"] = filepath.Join(dir, "index")
 		env.Vars = vars
-		if _, err := git(ctx, env, tracked+entries.String(), "update-index", "--no-split-index", "-z", "--index-info"); err != nil {
+		if _, err := git(ctx, env, tracked+entries.String(), "-c", "core.ignorestat=false", "update-index", "--no-split-index", "-z", "--index-info"); err != nil {
 			if ctx.Err() != nil {
 				return nil, nil, ctx.Err()
 			}
@@ -116,7 +116,7 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, *string,
 
 	// -M forces rename detection whatever diff.renames says, so a pure rename shows no hunk.
 	// --no-textconv and --no-ext-diff keep the diff a pure function of the trees.
-	patch, err := git(ctx, env, "", "-c", "core.quotepath=off", "diff", "--no-relative", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "-M", "--unified=0", "--inter-hunk-context=0", strings.TrimSpace(mb), "--")
+	patch, err := git(ctx, env, "", "-c", "core.quotepath=off", "diff", "--text", "--no-relative", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "-M", "--unified=0", "--inter-hunk-context=0", strings.TrimSpace(mb), "--")
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, nil, ctx.Err()
@@ -130,11 +130,19 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, *string,
 			continue
 		}
 		rel := strings.TrimPrefix(name, prefix)
-		info, err := os.Lstat(filepath.Join(env.Dir, filepath.FromSlash(rel)))
+		abs := filepath.Join(env.Dir, filepath.FromSlash(rel))
+		info, err := os.Lstat(abs)
 		if err != nil {
 			return refuse("changed file %q cannot be inspected. Fix: check its permissions and run june again", rel)
 		}
-		if info.Mode().IsRegular() {
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		content, err := os.ReadFile(abs)
+		if err != nil {
+			return refuse("changed file %q cannot be read. Fix: check its permissions and run june again", rel)
+		}
+		if bytes.IndexByte(content, 0) < 0 {
 			set[rel] = parsed[name]
 		}
 	}
@@ -173,7 +181,7 @@ func firstLine(s string) string {
 }
 
 // parsePatch reads a zero-context unified diff into the post-image lines it adds or edits.
-// Deletions, mode changes, pure renames and binary files carry no added lines and so touch nothing.
+// Deletions, mode changes and pure renames carry no added lines and so touch nothing.
 func parsePatch(patch string) touchedSet {
 	set := touchedSet{}
 	var file string // "" while in a header or a file that does not count

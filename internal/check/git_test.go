@@ -53,6 +53,71 @@ func against(t *testing.T, env check.Env, base string) check.Result {
 
 const old = "def f(a=[]): pass\n"
 
+func TestGitScopeReconstructedIndexReadsWorktree(t *testing.T) {
+	env := repo(t, map[string]string{"empty.txt": "", "app.py": old + "x = 1\n"})
+	git(t, env.Dir, "config", "core.ignorestat", "true")
+	write(t, filepath.Join(env.Dir, "new.py"), old)
+	expect(t, against(t, env, "main"), 1, "new.py:1:9: "+py012)
+	write(t, filepath.Join(env.Dir, "app.py"), old+"def g(b={}): pass\n")
+	expect(t, against(t, env, "main"), 1, "app.py:2:9: "+py012+"new.py:1:9: "+py012)
+}
+
+func TestGitScopeBinaryTransitions(t *testing.T) {
+	lateNUL := strings.Repeat("# padding\n", 900) + "\x00" + old
+	for _, tc := range []struct {
+		name   string
+		before string
+		after  string
+		out    string
+	}{
+		{name: "binary to text", before: "\x00\x01\n", after: old, out: "app.py:1:9: " + py012},
+		{name: "binary to empty", before: "\x00\x01\n", after: ""},
+		{name: "text to binary", before: "x = 1\n", after: "\x00" + old},
+		{name: "text to late binary", before: "x = 1\n", after: lateNUL},
+		{name: "late binary to text", before: lateNUL, after: old, out: "app.py:1:9: " + py012},
+		{name: "binary retains untouched violation", before: old + "x = '\x00'\n", after: old + "x = 'text'\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := repo(t, map[string]string{"app.py": tc.before})
+			write(t, filepath.Join(env.Dir, "app.py"), tc.after)
+			exit := 0
+			if tc.out != "" {
+				exit = 1
+			}
+			expect(t, against(t, env, "main"), exit, tc.out)
+			git(t, env.Dir, "add", "app.py")
+			expect(t, against(t, env, "main"), exit, tc.out)
+			git(t, env.Dir, "commit", "-q", "-m", "replace")
+			expect(t, against(t, env, "main"), exit, tc.out)
+		})
+	}
+}
+
+func TestGitScopeNewBinaryWithLateNULIsSkipped(t *testing.T) {
+	env := repo(t, nil)
+	write(t, filepath.Join(env.Dir, "new.py"), strings.Repeat("# padding\n", 900)+"\x00"+old)
+	expect(t, against(t, env, "main"), 0, "")
+	git(t, env.Dir, "add", "new.py")
+	expect(t, against(t, env, "main"), 0, "")
+	git(t, env.Dir, "commit", "-q", "-m", "add binary")
+	expect(t, against(t, env, "main"), 0, "")
+}
+
+func TestGitScopeBinaryToTextRenameJudgesOnlyEditedLines(t *testing.T) {
+	body := strings.Repeat("x = 1\n", 10) + old
+	env := repo(t, map[string]string{"old.py": body + "data = '\x00'\n"})
+	if err := os.Rename(filepath.Join(env.Dir, "old.py"), filepath.Join(env.Dir, "new file.py")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(env.Dir, "new file.py"), body+"data = 'text'\ndef g(b={}): pass\n")
+	want := "new file.py:13:9: " + py012
+	expect(t, against(t, env, "main"), 1, want)
+	git(t, env.Dir, "add", "-A")
+	expect(t, against(t, env, "main"), 1, want)
+	git(t, env.Dir, "commit", "-q", "-m", "rename and replace")
+	expect(t, against(t, env, "main"), 1, want)
+}
+
 func TestGitScopeIgnoresContextSettings(t *testing.T) {
 	for _, setting := range []string{"inter-hunk", "environment", "both"} {
 		t.Run(setting, func(t *testing.T) {
