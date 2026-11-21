@@ -54,7 +54,7 @@ Invariants:
 
 Order: touched set, then `rules.Load`, then scan changed Python files only, then keep touched anchors, then opt-outs, then severity, then render.
 
-Scope inference, first hit wins: `Changed`, `Base`, pre-commit refs, GitHub pull request base, GitLab merge request base, pre-commit staged diff, then local (merge base with upstream, worktree plus untracked).
+Scope inference, first hit wins: `Changed`, `Base`, pre-commit refs, GitHub pull request base, GitLab merge request base, pre-commit staged diff, then local (merge base with the upstream branch or the remote default branch, worktree plus untracked).
 The summary line prints the base and where it came from.
 
 Errors:
@@ -96,7 +96,7 @@ Output is text by default and carries no ANSI. Rendering escapes control charact
 
 ## cmd/june
 
-The current build supports `june --version`, `june verify [--rules DIR]...`, `june [--legacy] [--rules DIR]... --base REF` and `june [--legacy] [--rules DIR]... --changed-lines FILE`; `-` reads the list from stdin.
+The current build supports `june --version`, `june verify [--rules DIR]...`, `june [--legacy] [--rules DIR]... [--base REF]` and `june [--legacy] [--rules DIR]... --changed-lines FILE`; `-` reads the list from stdin.
 An unstamped `june --version` prints `june dev`.
 With ast-grep on PATH, run the shipped Python rule and its sidecar examples from the repository root:
 
@@ -107,12 +107,14 @@ go run ./cmd/june --rules rules/python --changed-lines changed.txt
 The list contains one `path:7` or `path:7-12` entry per line, with one-based, inclusive line ranges and paths relative to the working directory.
 Blank lines are ignored; whitespace in filenames is preserved, and only `.py` files are checked.
 `--base REF` judges lines added or edited since the merge base with REF, including committed changes, worktree changes and untracked files; the list wins when both are given.
-The current check requires one of the two and emits plain text. Completed checks (exit 0 or 1) end with a summary line, `june: 1 error, 0 warnings, 0 opt-outs; checked 2 files, 5 changed lines`; refusals (exit 2) have no summary.
+Without either, a bare `june` infers the base locally from git, first hit wins: the upstream branch of HEAD, then the default branch of `origin` (`refs/remotes/origin/HEAD`). Nothing is fetched.
+When no base can be inferred, git is missing or the directory is not in a work tree, or the merge base is missing (a shallow clone), june exits 2 naming the fix; the touched set is never every line.
+The current check emits plain text. Completed checks (exit 0 or 1) end with a summary line, `june: 1 error, 0 warnings, 0 opt-outs; checked 2 files, 5 changed lines`; a git run adds `; base origin/main (upstream branch)`, naming the base and its source (`--base`, `upstream branch` or `remote default branch`), and a supplied list adds none; refusals (exit 2) have no summary.
 Coverage counts distinct touched Python files and changed lines, counting overlapping ranges only once; the opt-out count is every opt-out printed on a touched line, honoured or not.
 `--legacy` also lists matches on untouched lines of the checked files, one `legacy: file:line:col: CODE message` line each after the findings, and the summary gains `; 2 legacy violations listed`.
 Legacy lines never change the exit code, are off by default, and a valid opt-out on the untouched line hides its legacy line.
 `june verify` runs every example of every rule and prints `june: verified 1 rule, 19 examples` on success. Any fault exits 2, as it does for a normal run, and each fault is one line naming the rules directory, the rule file, or the sidecar, and, for a failing example, the example.
-The rest of git scope inference and CI-specific formats remain planned.
+CI base inference (pre-commit refs, pull and merge request bases, staged diffs) and CI-specific formats remain planned.
 
 `cmd/june` is a shell and owns no decision.
 It maps flags to a `Request`, snapshots the environment, writes `Out` and `Files`, and returns `Exit`.

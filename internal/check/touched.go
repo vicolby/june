@@ -55,17 +55,13 @@ func (t touchedSet) lineCount(file string) int {
 
 const listFix = "write one path:7 or path:7-12 per line, with paths relative to the repository root"
 
-// readTouched parses the supplied list. A nil reader means the touched set is unknowable.
+// readTouched parses the supplied list.
 // The returned message is a complete "<cause>. Fix: <instruction>" refusal.
 func readTouched(env Env, r io.Reader) (touchedSet, *string) {
 	fail := func(format string, a ...any) (touchedSet, *string) {
 		msg := fmt.Sprintf(format, a...)
 		return nil, &msg
 	}
-	if r == nil {
-		return fail("the touched lines are unknown. Fix: pass --base REF, or --changed-lines FILE (- reads the list from stdin)")
-	}
-
 	set := touchedSet{}
 	sc := bufio.NewScanner(r)
 	for n := 1; sc.Scan(); n++ {

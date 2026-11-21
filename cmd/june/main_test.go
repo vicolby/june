@@ -264,7 +264,7 @@ func TestBaseFlagJudgesGitChanges(t *testing.T) {
 		}
 	}
 	var out, errOut bytes.Buffer
-	if code := run(context.Background(), []string{"--base", "main"}, strings.NewReader(""), &out, &errOut, env); code != 0 || out.String() != "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines\n" || errOut.Len() != 0 {
+	if code := run(context.Background(), []string{"--base", "main"}, strings.NewReader(""), &out, &errOut, env); code != 0 || out.String() != "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; base main (--base)\n" || errOut.Len() != 0 {
 		t.Fatalf("unchanged tree: exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
 	}
 	if err := os.WriteFile(filepath.Join(env.Dir, "new.py"), []byte("def g(b={}): pass\n"), 0o644); err != nil {
@@ -272,7 +272,17 @@ func TestBaseFlagJudgesGitChanges(t *testing.T) {
 	}
 	out.Reset()
 	code := run(context.Background(), []string{"--base", "main"}, strings.NewReader(""), &out, &errOut, env)
-	if code != 1 || out.String() != "new.py:1:9: "+py012+"june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 1 changed line\n" || errOut.Len() != 0 {
+	if code != 1 || out.String() != "new.py:1:9: "+py012+"june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 1 changed line; base main (--base)\n" || errOut.Len() != 0 {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+}
+
+func TestBareJuneOutsideGitWithoutAListExitsTwo(t *testing.T) {
+	dir := t.TempDir()
+	env := check.Env{Dir: dir, Vars: map[string]string{"GIT_CEILING_DIRECTORIES": filepath.Dir(dir)}}
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), nil, strings.NewReader(""), &out, &errOut, env)
+	if code != 2 || !strings.Contains(out.String(), "Fix: run june inside the repository, or pass --changed-lines FILE") || strings.Contains(out.String(), "checked") {
 		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
 	}
 }
