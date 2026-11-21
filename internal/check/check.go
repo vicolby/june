@@ -37,7 +37,7 @@ type Result struct {
 	Diags []diag.Diagnostic
 }
 
-// Change judges one change. Exit is 1 if and only if an error-severity match is anchored on a touched line.
+// Change judges one change. Exit is 1 if and only if an unsuppressed error-severity match is anchored on a touched line.
 // Exit 2 means june could not produce a verdict and Out says why.
 // An empty Env.Dir or cancellation returns an error.
 func Change(ctx context.Context, env Env, req Request) (Result, error) {

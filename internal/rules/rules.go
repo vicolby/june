@@ -64,7 +64,7 @@ type Scanned struct {
 	OptOuts []OptOut
 }
 
-// OptOut is one inline `# june: ignore[RULE] reason` comment. Line and Col are one-based.
+// OptOut is one inline opt-out comment, including malformed attempts. Line and Col are one-based.
 // Problem is empty for a well-formed opt-out and otherwise says why it suppresses nothing.
 type OptOut struct {
 	File      string
