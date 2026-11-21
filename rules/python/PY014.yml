@@ -2,25 +2,44 @@ id: PY014
 language: python
 severity: error
 message: "Comparison to None with == or !=. Fix: use is None or is not None."
+utils:
+  eqOrNe:
+    any:
+      - follows:
+          regex: '^(==|!=)$'
+          stopBy:
+            not:
+              any:
+                - kind: comment
+                - kind: line_continuation
+      - precedes:
+          regex: '^(==|!=)$'
+          stopBy:
+            not:
+              any:
+                - kind: comment
+                - kind: line_continuation
 rule:
-  kind: comparison_operator
-  has:
-    all:
-      - any:
-          - kind: none
-          - all:
-              - kind: parenthesized_expression
-              - has:
-                  kind: none
-                  stopBy:
-                    not:
-                      kind: parenthesized_expression
-      - any:
-          - follows:
-              regex: '^==$'
-          - follows:
-              regex: '^!=$'
-          - precedes:
-              regex: '^==$'
-          - precedes:
-              regex: '^!=$'
+  kind: none
+  any:
+    - all:
+        - inside:
+            kind: comparison_operator
+            stopBy: neighbor
+        - matches: eqOrNe
+    - all:
+        - inside:
+            kind: comparison_operator
+            stopBy:
+              not:
+                kind: parenthesized_expression
+        - inside:
+            matches: eqOrNe
+            kind: parenthesized_expression
+            inside:
+              kind: comparison_operator
+              stopBy: neighbor
+            stopBy:
+              inside:
+                kind: comparison_operator
+                stopBy: neighbor

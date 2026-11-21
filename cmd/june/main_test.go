@@ -303,7 +303,7 @@ func TestShippedFundamentals(t *testing.T) {
 	env := check.Env{Dir: dir}
 
 	var out, errOut bytes.Buffer
-	if code := run(context.Background(), []string{"verify", "--rules", rulesDir}, strings.NewReader(""), &out, &errOut, env); code != 0 || out.String() != "june: verified 5 rules, 87 examples\n" || errOut.Len() != 0 {
+	if code := run(context.Background(), []string{"verify", "--rules", rulesDir}, strings.NewReader(""), &out, &errOut, env); code != 0 || out.String() != "june: verified 5 rules, 94 examples\n" || errOut.Len() != 0 {
 		t.Fatalf("verify exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
 	}
 
@@ -313,7 +313,7 @@ func TestShippedFundamentals(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1; stdout = %q, stderr = %q", code, out.String(), errOut.String())
 	}
-	for _, id := range []string{"app.py:1:", "PY012", "app.py:5:1: PY013", "app.py:6:5: PY015", "app.py:7:4: PY014", "app.py:9:8: PY016"} {
+	for _, id := range []string{"app.py:1:", "PY012", "app.py:5:1: PY013", "app.py:6:5: PY015", "app.py:7:11: PY014", "app.py:9:8: PY016"} {
 		if !strings.Contains(out.String(), id) {
 			t.Errorf("stdout missing %q:\n%s", id, out.String())
 		}

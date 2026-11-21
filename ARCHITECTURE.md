@@ -116,7 +116,7 @@ The current check emits plain text. Completed checks (exit 0 or 1) end with a su
 Coverage counts distinct touched Python files and changed lines, counting overlapping ranges only once; the opt-out count is every opt-out printed on a touched line, honoured or not.
 `--legacy` also lists matches on untouched lines of the checked files, one `legacy: file:line:col: CODE message` line each after the findings, and the summary gains `; 2 legacy violations listed`.
 Legacy lines never change the exit code, are off by default, and a valid opt-out on the untouched line hides its legacy line.
-`june verify` runs every example of every rule and prints `june: verified 5 rules, 87 examples` on success. Any fault exits 2, as it does for a normal run, and each fault is one line naming the rules directory, the rule file, or the sidecar, and, for a failing example, the example.
+`june verify` runs every example of every rule and prints `june: verified 5 rules, 94 examples` on success. Any fault exits 2, as it does for a normal run, and each fault is one line naming the rules directory, the rule file, or the sidecar, and, for a failing example, the example.
 CI base inference (pre-commit refs, pull and merge request bases, staged diffs) and CI-specific formats remain planned.
 
 `cmd/june` is a shell and owns no decision.

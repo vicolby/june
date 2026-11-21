@@ -9,6 +9,7 @@ valid:
   - "f(None)"
   - "a == b is None"
   - "x == (None,)"
+  - "a == b is \\\n None"
 invalid:
   - "x == None"
   - "x != None"
@@ -24,3 +25,9 @@ invalid:
   - "a != b != None"
   - "None == x == y"
   - "a is None == b"
+  - "value == \\\n None"
+  - "None \\\n == x"
+  - "x == # c\n None"
+  - "x == \\\n (None)"
+  - "x != \\\n None"
+  - "None \\\n != x"
