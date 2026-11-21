@@ -13,6 +13,9 @@ valid:
   - "assert x, ((1, 2))"
   - "assert ((*a, *b))"
   - "assert (())"
+  - "assert (\n *items, # maybe empty\n)"
+  - "assert (*a, \\\n*b)"
+  - "assert (( # c\n *a, *b))"
 invalid:
   - "assert (x, 'msg')"
   - "assert (x,)"
@@ -22,3 +25,4 @@ invalid:
   - "assert (((ok, 'failed')))"
   - "assert (ok, *rest)"
   - "assert \\\n    (x, 'msg')"
+  - "assert (ok, # note\n 'failed')"
