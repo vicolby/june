@@ -2,6 +2,7 @@ package rules_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -299,4 +300,87 @@ func TestRunIgnoresProjectConfigInWorkingDirectory(t *testing.T) {
 	if len(got.Matches) != 2 {
 		t.Errorf("matches = %+v, want both lists", got.Matches)
 	}
+}
+
+func TestScanFindsOptOuts(t *testing.T) {
+	rs := loadGood(t)
+	dir := t.TempDir()
+	py := filepath.Join(dir, "a.py")
+	write(t, py, `a = []  # june: ignore[LST01] legacy shape
+b = []  # june:ignore[LST01] no space
+c = []  #june: ignore[LST01] why
+d = []  # june: ignore[LST01]
+e = []  # june: ignore[]  why
+f = []  # june: ignore[LST01, LST02] why
+g = []  # june: ignore[NOPE] why
+h = []  # june: ignore LST01 why
+i = []  # june: ignore[LST01 why
+j = []  # june: suppress[LST01] why
+k = "# june: ignore[LST01] in a string"
+l = []  # note june: ignore[LST01] not at the start
+m = []  # ast-grep-ignore
+n = []  # june: ignore[ LST01] why
+o = []  # june: ignore[LST01 ] why
+p = []  # june: ignore[LST01]why
+q = []  #june:ignore[ LST01 ]why
+r = []  #	june: ignore[LST01] why
+s = []  # june:	ignore[LST01] why
+t = []  # june: ignore[LST01]	why
+u = []  #  june: ignore[LST01] why
+v = []  # june:  ignore[LST01] why
+w = []  # june: ignore[	LST01	] why
+`)
+	got, err := rs.Scan(context.Background(), []string{py})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type row struct {
+		line         int
+		rule, reason string
+		bad          bool
+	}
+	var have []row
+	for _, o := range got.OptOuts {
+		if o.File != py {
+			t.Errorf("opt-out file = %q, want %q", o.File, py)
+		}
+		if o.Col != 9 {
+			t.Errorf("line %d: Col = %d, want 9", o.Line, o.Col)
+		}
+		if (o.Problem != "") && !strings.Contains(o.Problem, "Fix:") {
+			t.Errorf("line %d: Problem %q has no Fix", o.Line, o.Problem)
+		}
+		have = append(have, row{o.Line, o.Rule, o.Reason, o.Problem != ""})
+	}
+	want := []row{
+		{1, "LST01", "legacy shape", false},
+		{2, "", "", true},
+		{3, "", "", true},
+		{4, "LST01", "", true},
+		{5, "", "", true},
+		{6, "", "", true},
+		{7, "NOPE", "", true},
+		{8, "", "", true},
+		{9, "", "", true},
+		{10, "", "", true},
+		{14, "", "", true},
+		{15, "", "", true},
+		{16, "LST01", "", true},
+		{17, "", "", true},
+		{18, "", "", true},
+		{19, "", "", true},
+		{20, "LST01", "", true},
+		{21, "", "", true},
+		{22, "", "", true},
+		{23, "", "", true},
+	}
+	if fmt.Sprint(have) != fmt.Sprint(want) {
+		t.Errorf("opt-outs = %v, want %v", have, want)
+	}
+	for _, m := range got.Matches {
+		if m.Line == 13 {
+			return
+		}
+	}
+	t.Error("an ast-grep-ignore comment suppressed a match")
 }

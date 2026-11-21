@@ -12,6 +12,7 @@ import (
 	"testing"
 	"testing/iotest"
 	"time"
+	"unicode"
 
 	"github.com/vicolby/june/internal/check"
 )
@@ -323,7 +324,7 @@ func TestChangedLinesPreservesPathWhitespace(t *testing.T) {
 	for _, list := range []string{" app.py:1\n", "\n \t\n app.py:1-1\r\n"} {
 		expect(t, change(t, env, list), 1, " app.py:1:9: "+py012)
 	}
-	expect(t, change(t, env, "\tapp.py:1\n"), 1, "\tapp.py:1:9: "+py012)
+	expect(t, change(t, env, "\tapp.py:1\n"), 1, "\\tapp.py:1:9: "+py012)
 	expect(t, change(t, env, "app.py:1\n"), 0, "")
 }
 
@@ -446,5 +447,107 @@ func TestRefusalHasNoSummary(t *testing.T) {
 	res := change(t, env, "app.py\n")
 	if res.Exit != 2 || strings.Contains(string(res.Out), "checked") {
 		t.Errorf("Exit = %d, Out = %q, want a refusal with no summary", res.Exit, res.Out)
+	}
+}
+
+func TestOptOuts(t *testing.T) {
+	const body = `def a(x=[]):  # june: ignore[PY012] shared on purpose
+    pass
+def b(x=[]):  # june: ignore[PY012]
+    pass
+def c(x=[]):  # june: ignore[PY999] typo
+    pass
+def d(x=1):  # june: ignore[PY012] nothing here
+    pass
+def e(x=[]):  # june: ignore PY012 why
+    pass
+def f(x="# june: ignore[PY012] in a string", y=[]):
+    pass
+def g(x=[]):  # june: ignore[PY012] untouched line
+    pass
+`
+	env := tree(t, map[string]string{"a.py": body})
+	res := change(t, env, "a.py:1-12\n")
+	expect(t, res, 1, "a.py:1:15: PY012 opt-out: shared on purpose\n"+
+		"a.py:3:15: OPTOUT malformed opt-out suppresses nothing: the reason is required. Fix: write # june: ignore[RULE] reason\n"+
+		"a.py:5:15: OPTOUT malformed opt-out suppresses nothing: rule PY999 does not exist. Fix: name a rule from the rules directory\n"+
+		"a.py:7:14: PY012 opt-out: nothing here (suppresses nothing: no PY012 finding on this line)\n"+
+		"a.py:9:15: OPTOUT malformed opt-out suppresses nothing: the comment must start with `# june: ignore[`. Fix: write # june: ignore[RULE] reason\n"+
+		"a.py:3:9: "+py012+
+		"a.py:5:9: "+py012+
+		"a.py:9:9: "+py012+
+		"a.py:11:48: "+py012)
+}
+
+func TestOptOutHonouredKeepsExitZero(t *testing.T) {
+	env := tree(t, map[string]string{"a.py": "def a(x=[]):  # june: ignore[PY012] shared on purpose\n    pass\n"})
+	expect(t, change(t, env, "a.py:1\n"), 0, "a.py:1:15: PY012 opt-out: shared on purpose\n")
+}
+
+func TestOptOutControlCharactersAreEscaped(t *testing.T) {
+	env := tree(t, map[string]string{"a.py": "def a(x=[]): pass # june: ignore[PY012] \x1b[2K\x1b[1Gapproved\n" +
+		"def b(x=1): pass # june: ignore[PY012] café \"quoted\" \\path \x1b[2Kunmatched\n" +
+		"def c(x=[]): pass # june: ignore[NO\x1b[2KPE] typo\n"})
+	res := change(t, env, "a.py:1-3\n")
+	expect(t, res, 1, "a.py:1:19: PY012 opt-out: \\x1b[2K\\x1b[1Gapproved\n"+
+		"a.py:2:18: PY012 opt-out: café \"quoted\" \\path \\x1b[2Kunmatched (suppresses nothing: no PY012 finding on this line)\n"+
+		"a.py:3:19: OPTOUT malformed opt-out suppresses nothing: rule NO\\x1b[2KPE does not exist. Fix: name a rule from the rules directory\n"+
+		"a.py:3:9: "+py012)
+	for _, r := range string(res.Out) {
+		if unicode.IsControl(r) && r != '\n' {
+			t.Errorf("output contains raw control %U: %q", r, res.Out)
+		}
+	}
+}
+
+func TestOptOutNearMissesSuppressNothing(t *testing.T) {
+	const prefixProblem = "the comment must start with `# june: ignore[`"
+	const paddingProblem = "the rule must not have surrounding whitespace"
+	const reasonSpaceProblem = "a space is required before the reason"
+	for _, tc := range []struct {
+		comment string
+		problem string
+	}{
+		{"#june: ignore[PY012] reason", prefixProblem},
+		{"# june:ignore[PY012] reason", prefixProblem},
+		{"#june:ignore[ PY012 ]why", prefixProblem},
+		{"#\tjune: ignore[PY012] reason", prefixProblem},
+		{"# june:\tignore[PY012] reason", prefixProblem},
+		{"#  june: ignore[PY012] reason", prefixProblem},
+		{"# june:  ignore[PY012] reason", prefixProblem},
+		{"# june: ignore[ PY012] reason", paddingProblem},
+		{"# june: ignore[PY012 ] reason", paddingProblem},
+		{"# june: ignore[\tPY012\t] reason", paddingProblem},
+		{"# june: ignore[PY012]reason", reasonSpaceProblem},
+		{"# june: ignore[PY012]\treason", reasonSpaceProblem},
+		{"# june: ignore[PY012] \t", "the reason is required"},
+	} {
+		for _, value := range []string{"[]", "1"} {
+			t.Run(tc.comment+"/"+value, func(t *testing.T) {
+				prefix := "def f(x=" + value + "): pass  "
+				env := tree(t, map[string]string{"a.py": prefix + tc.comment + "\nx = 1\n"})
+				out := fmt.Sprintf("a.py:1:%d: OPTOUT malformed opt-out suppresses nothing: %s. Fix: write # june: ignore[RULE] reason\n", len(prefix)+1, tc.problem)
+				exit := 0
+				if value == "[]" {
+					exit = 1
+					out += "a.py:1:9: " + py012
+				}
+				expect(t, change(t, env, "a.py:1\n"), exit, out)
+				expect(t, change(t, env, "a.py:2\n"), 0, "")
+			})
+		}
+	}
+}
+
+func TestOptOutOffTouchedLineIsSilent(t *testing.T) {
+	env := tree(t, map[string]string{"a.py": "def a(x=[]):  # june: ignore[PY012] why\n    pass\n"})
+	expect(t, change(t, env, "a.py:2\n"), 0, "")
+}
+
+func TestSummaryCountsOptOutsOnTouchedLines(t *testing.T) {
+	env := tree(t, map[string]string{"a.py": "def a(x=[]):  # june: ignore[PY012] why\n    pass\ndef b(x=1):  # june: ignore[PY012]\n    pass\ndef c(x=1):  # june: ignore[PY012] untouched\n"})
+	res := change(t, env, "a.py:1-4\n")
+	if got, want := summaryOf(res), "june: 0 errors, 0 warnings, 2 opt-outs; checked 1 file, 4 changed lines"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
 	}
 }

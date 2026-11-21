@@ -38,7 +38,7 @@ type Result struct {
 	Diags []diag.Diagnostic
 }
 
-// Change judges one change. Exit is 1 if and only if an error-severity match is anchored on a touched line.
+// Change judges one change. Exit is 1 if and only if an unsuppressed error-severity match is anchored on a touched line.
 // Exit 2 means june could not produce a verdict and Out says why.
 // An empty Env.Dir or cancellation returns an error.
 func Change(ctx context.Context, env Env, req Request) (Result, error) {
@@ -97,10 +97,40 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 
 	var ds []diag.Diagnostic
 	exit := 0
-	var errs, warns int
+	var errs, warns, optOutCount int
+	type site struct {
+		file string
+		line int
+		rule string
+	}
+	optedOut := map[site]bool{}
+	found := map[site]bool{}
+	for _, m := range scanned.Matches {
+		found[site{byAbs[m.File], m.Line, m.Rule}] = true
+	}
+	for _, o := range scanned.OptOuts {
+		path := byAbs[o.File]
+		if !touched.has(path, o.Line) {
+			continue
+		}
+		d := diag.Diagnostic{File: path, Line: o.Line, Col: o.Col, Code: o.Rule, Sev: diag.Warning, Kind: diag.OptOut}
+		s := site{path, o.Line, o.Rule}
+		switch {
+		case o.Problem != "":
+			d.Code = "OPTOUT"
+			d.Msg = "malformed opt-out suppresses nothing: " + o.Problem
+		case found[s]:
+			optedOut[s] = true
+			d.Msg = "opt-out: " + o.Reason
+		default:
+			d.Msg = "opt-out: " + o.Reason + " (suppresses nothing: no " + o.Rule + " finding on this line)"
+		}
+		ds = append(ds, d)
+		optOutCount++
+	}
 	for _, m := range scanned.Matches {
 		path := byAbs[m.File]
-		if !touched.has(path, m.Line) {
+		if !touched.has(path, m.Line) || optedOut[site{path, m.Line, m.Rule}] {
 			continue
 		}
 		sev := diag.Warning
@@ -117,7 +147,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	for _, f := range files {
 		lines += touched.lineCount(f)
 	}
-	return render(req, exit, ds, summary(errs, warns, 0, len(files), lines)), nil
+	return render(req, exit, ds, summary(errs, warns, optOutCount, len(files), lines)), nil
 }
 
 // summary is the closing line of a verdict: finding counts and the scope that was covered.

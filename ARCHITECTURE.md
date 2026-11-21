@@ -48,8 +48,9 @@ Invariants:
 - The touched set is unknowable means Exit 2, never 0 and never every line.
 - Out is a pure function of the request, the tree and the diff: sorted, no clock, no absolute path, no ANSI.
 - Exit and finding diagnostics are identical across formats and CI vendors.
-- The opt-out is a same-line comment `# june: ignore[PY012] <reason>`.
-- The reason is required, a malformed opt-out suppresses nothing and says why, and every opt-out on a touched line is printed.
+- The opt-out is a same-line Python comment `# june: ignore[PY012] <reason>`, naming exactly one rule from the loaded rules directory. The spaces after `#` and `june:` are literal single spaces, rule IDs have no surrounding whitespace, and a space must separate `]` from the required nonblank reason.
+- A comment whose content starts with `june:` after leading whitespace is an opt-out attempt; malformed attempts suppress nothing and explain why with a Fix. The same text in a string literal is not an opt-out.
+- Every opt-out on a touched line is printed, honoured or not. A valid opt-out with no matching finding says it suppresses nothing; opt-outs on untouched lines are silent.
 
 Order: touched set, then `rules.Load`, then scan changed Python files only, then keep touched anchors, then opt-outs, then severity, then render.
 
@@ -90,7 +91,7 @@ func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File
 ```
 
 It hides workflow-command escaping, GitLab Code Quality fingerprints and severities, and summary placement.
-Output is text by default and carries no ANSI.
+Output is text by default and carries no ANSI. Rendering escapes control characters in diagnostic fields and summaries as visible escapes (for example, ESC as `\x1b` and tab as `\t`), preserving other text.
 
 ## cmd/june
 
@@ -105,8 +106,8 @@ go run ./cmd/june --rules rules/python --changed-lines changed.txt
 The list contains one `path:7` or `path:7-12` entry per line, with one-based, inclusive line ranges and paths relative to the working directory.
 Blank lines are ignored; whitespace in filenames is preserved, and only `.py` files are checked.
 The current check requires this list and emits plain text. Completed checks (exit 0 or 1) end with a summary line, `june: 1 error, 0 warnings, 0 opt-outs; checked 2 files, 5 changed lines`; refusals (exit 2) have no summary.
-Coverage counts distinct listed Python files and changed lines, counting overlapping ranges only once.
-Git scope inference, opt-outs, `verify`, and CI-specific formats remain planned; the opt-out count is currently always zero.
+Coverage counts distinct listed Python files and changed lines, counting overlapping ranges only once; the opt-out count is every opt-out printed on a touched line, honoured or not.
+Git scope inference, `verify`, and CI-specific formats remain planned.
 
 `cmd/june` is a shell and owns no decision.
 It maps flags to a `Request`, snapshots the environment, writes `Out` and `Files`, and returns `Exit`.
