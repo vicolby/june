@@ -53,6 +53,63 @@ func against(t *testing.T, env check.Env, base string) check.Result {
 
 const old = "def f(a=[]): pass\n"
 
+func TestGitScopeSparseFilesAreNotRenameSources(t *testing.T) {
+	for _, source := range []string{"legacy.py", "legacy.txt", "tab\tlegacy.py"} {
+		t.Run(source, func(t *testing.T) {
+			env := repo(t, map[string]string{source: old, "keep/app.py": "x = 1\n"})
+			git(t, env.Dir, "sparse-checkout", "init", "--no-cone")
+			git(t, env.Dir, "sparse-checkout", "set", "--no-cone", "/.june/", "/keep/")
+			if _, err := os.Lstat(filepath.Join(env.Dir, source)); !os.IsNotExist(err) {
+				t.Fatalf("sparse file is not absent: %v", err)
+			}
+			copyDir(t, filepath.Join(env.Dir, ".june", "rules"), filepath.Join(env.Dir, "keep", ".june", "rules"))
+			write(t, filepath.Join(env.Dir, "keep", "new.py"), old)
+			sub := check.Env{Dir: filepath.Join(env.Dir, "keep")}
+			for _, state := range []string{"untracked", "staged", "committed"} {
+				if state == "staged" {
+					git(t, env.Dir, "add", "keep/new.py")
+				}
+				if state == "committed" {
+					git(t, env.Dir, "commit", "-q", "-m", "add new file")
+				}
+				indexPath := filepath.Join(env.Dir, ".git", "index")
+				before, err := os.ReadFile(indexPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				expect(t, against(t, env, "main"), 1, "keep/new.py:1:9: "+py012)
+				expect(t, against(t, sub, "main"), 1, "new.py:1:9: "+py012)
+				after, err := os.ReadFile(indexPath)
+				if err != nil || string(after) != string(before) {
+					t.Fatalf("git scope changed the sparse index: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestGitScopeRenameSourceBecomesDirectory(t *testing.T) {
+	for _, source := range []string{"old.txt", "old[1]*?.txt", "旧.txt"} {
+		t.Run(source, func(t *testing.T) {
+			body := "import os\nimport sys\nx = 1\ny = 2\n" + old
+			env := repo(t, map[string]string{source: body})
+			git(t, env.Dir, "mv", source, "new.py")
+			asset := filepath.Join(env.Dir, source, "weights.bin")
+			write(t, asset, "\x00"+strings.Repeat("a", 1<<20))
+			write(t, filepath.Join(env.Dir, source, "child.py"), old)
+			git(t, env.Dir, "add", "--", source)
+			if err := os.Chmod(asset, 0); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(asset, 0o644) })
+			child := source + "/child.py:1:9: " + py012
+			expect(t, against(t, env, "main"), 1, child)
+			write(t, filepath.Join(env.Dir, "new.py"), body+"def g(b={}): pass\n")
+			expect(t, against(t, env, "main"), 1, "new.py:6:9: "+py012+child)
+		})
+	}
+}
+
 func TestGitScopeDoesNotReadUnrelatedBinaryPatchContent(t *testing.T) {
 	for _, extension := range []string{"bin", "py.bin"} {
 		t.Run(extension, func(t *testing.T) {
