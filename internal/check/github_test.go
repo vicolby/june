@@ -92,20 +92,15 @@ func TestPullRequestWinsOverNothingButExplicitScope(t *testing.T) {
 func TestPullRequestBaseThatWasNotFetchedNamesFetchDepth(t *testing.T) {
 	env := onGitHub(pullRequest(t), "pull_request", "gone")
 	res := infer(t, env)
-	want := "june: error: the base \"origin/gone\" is not a commit in this repository. Fix: set fetch-depth: 0 on actions/checkout so the pull request base is fetched, or pass an existing branch, tag or commit to --base\n"
-	refused(t, res, annotationOf(res)+want)
+	msg := "the base \"origin/gone\" is not a commit in this repository. Fix: set fetch-depth: 0 on actions/checkout so the pull request base is fetched, or pass an existing branch, tag or commit to --base"
+	refused(t, res, "::error title=june::"+msg+"\njune: error: "+msg+"\n")
 }
 
 func TestPushEventWithoutABaseIsRefusedWithANamedFix(t *testing.T) {
 	env := onGitHub(pullRequest(t), "push", "")
 	res := infer(t, env)
-	if res.Exit != 2 {
-		t.Errorf("Exit = %d, want 2", res.Exit)
-	}
-	want := "june: error: a push event has no pull request base, so the touched lines cannot be found. Fix: pass --base REF (for example --base origin/main) with fetch-depth: 0 on actions/checkout, or run june on pull_request\n"
-	if !strings.HasSuffix(string(res.Out), want) || strings.Contains(string(res.Out), "checked") {
-		t.Errorf("Out =\n%s\nwant a refusal ending\n%s", res.Out, want)
-	}
+	msg := "a push event has no pull request base, so the touched lines cannot be found. Fix: pass --base REF (for example --base origin/main) with fetch-depth: 0 on actions/checkout, or run june on pull_request"
+	refused(t, res, "::error title=june::"+msg+"\njune: error: "+msg+"\n")
 }
 
 func TestPushEventWithAnExplicitBaseIsJudged(t *testing.T) {
@@ -140,12 +135,6 @@ func TestTextIsTheSameInADevShellAndOnGitHub(t *testing.T) {
 	}
 }
 
-// annotationOf is the workflow command GitHub puts before a refusal's text.
-func annotationOf(res check.Result) string {
-	cmd, _, _ := strings.Cut(string(res.Out), "june: error: ")
-	return cmd
-}
-
 // pushCheckout is what actions/checkout leaves on a push event: the branch created from origin/<branch>, tracking it, with HEAD equal to it.
 func pushCheckout(t *testing.T) check.Env {
 	t.Helper()
@@ -161,10 +150,8 @@ func pushCheckout(t *testing.T) check.Env {
 func TestPushEventIsRefusedEvenWhenTheBranchTracksItsOwnRemote(t *testing.T) {
 	env := pushCheckout(t)
 	res := infer(t, env)
-	want := "june: error: a push event has no pull request base, so the touched lines cannot be found. Fix: pass --base REF (for example --base origin/main) with fetch-depth: 0 on actions/checkout, or run june on pull_request\n"
-	if res.Exit != 2 || !strings.HasSuffix(string(res.Out), want) || strings.Contains(string(res.Out), "checked") {
-		t.Errorf("Exit = %d, Out =\n%s\nwant 2 and a refusal ending\n%s", res.Exit, res.Out, want)
-	}
+	msg := "a push event has no pull request base, so the touched lines cannot be found. Fix: pass --base REF (for example --base origin/main) with fetch-depth: 0 on actions/checkout, or run june on pull_request"
+	refused(t, res, "::error title=june::"+msg+"\njune: error: "+msg+"\n")
 }
 
 func TestPushEventStillHonoursAnExplicitBaseAndList(t *testing.T) {
