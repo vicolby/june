@@ -13,7 +13,8 @@ This installs the `june` binary, `ast-grep` as a dependency, and the bundled rul
 ## Bundled rules
 
 Bundled rules are opt-in: june never loads them on its own.
-They install to `$(brew --prefix)/share/june/rules`, one directory per language, and `june rules-path` prints the location.
+They install to `$(brew --prefix)/share/june/rules`, one directory per language.
+`june rules-path` prints the directory beside the installed binary.
 
 ```sh
 june verify --rules "$(june rules-path)/python"
