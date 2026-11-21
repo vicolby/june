@@ -243,8 +243,8 @@ func findTouched(ctx context.Context, env Env, req Request) (touchedSet, scope, 
 		if req.Base != "" {
 			return gitTouched(ctx, env, req.Base, sourceFlag)
 		}
-		if sha := env.Vars["CI_MERGE_REQUEST_DIFF_BASE_SHA"]; gitlab(env) && sha != "" {
-			return gitTouched(ctx, env, sha, sourceMR)
+		if base := mergeRequestBase(env); base != "" {
+			return gitTouched(ctx, env, base, sourceMR)
 		}
 		return gitTouched(ctx, env, "", "")
 	}
@@ -268,6 +268,24 @@ func findTouched(ctx context.Context, env Env, req Request) (touchedSet, scope, 
 
 // gitlab reports whether the run is a GitLab CI job.
 func gitlab(env Env) bool { return env.Vars["GITLAB_CI"] == "true" }
+
+// mergeRequestBase is the commit a GitLab merge request pipeline judges from, or "" outside one.
+// Detached pipelines use the diff base. Merged results and merge trains check out a merge commit,
+// so the merge request's own changes are that commit's first parent through HEAD.
+func mergeRequestBase(env Env) string {
+	if !gitlab(env) {
+		return ""
+	}
+	switch env.Vars["CI_MERGE_REQUEST_EVENT_TYPE"] {
+	case "merged_result", "merge_train":
+		if sha := env.Vars["CI_MERGE_REQUEST_TARGET_BRANCH_SHA"]; sha != "" {
+			return sha
+		}
+		return "HEAD^1"
+	default:
+		return env.Vars["CI_MERGE_REQUEST_DIFF_BASE_SHA"]
+	}
+}
 
 // inferFormat picks the output format of the CI the run is in; the plain text is the same everywhere.
 func inferFormat(env Env) diag.Format {

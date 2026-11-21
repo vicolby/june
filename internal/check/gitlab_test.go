@@ -47,6 +47,73 @@ func editedTopic(t *testing.T) check.Env {
 	return env
 }
 
+// mergedResultCheckout is the finding's history, checked out as GitLab's merged result.
+// M1 is a clean main and the diff base. The merge request adds a PY012 to app.py.
+// Main then moves to M2, which adds a PY012 on other.py. HEAD is the merge of M2 with the
+// merge request, so its first parent is M2.
+func mergedResultCheckout(t *testing.T) (env check.Env, diffBase, target string) {
+	t.Helper()
+	env = repo(t, map[string]string{"app.py": "x = 1\n"})
+	diffBase = head(t, env.Dir, "main")
+	write(t, filepath.Join(env.Dir, "app.py"), "x = 1\ndef g(b={}): pass\n")
+	commit(t, env)
+	git(t, env.Dir, "checkout", "-q", "main")
+	write(t, filepath.Join(env.Dir, "other.py"), "def h(c=[]): pass\n")
+	commit(t, env)
+	target = head(t, env.Dir, "HEAD")
+	git(t, env.Dir, "merge", "-q", "--no-ff", "-m", "merge request", "topic")
+	if got := head(t, env.Dir, "HEAD^1"); got != target {
+		t.Fatalf("HEAD^1 = %s, want the target branch %s", got, target)
+	}
+	return env, diffBase, target
+}
+
+func TestMergedResultScopeIsTheMergeCommitFirstParent(t *testing.T) {
+	env, diffBase, target := mergedResultCheckout(t)
+	for _, tc := range []struct {
+		name   string
+		event  string
+		target string // empty leaves CI_MERGE_REQUEST_TARGET_BRANCH_SHA unset
+		base   string
+	}{
+		{"merged result", "merged_result", target, target},
+		{"merge train", "merge_train", target, target},
+		{"merged result without target sha", "merged_result", "", "HEAD^1"},
+		{"merge train without target sha", "merge_train", "", "HEAD^1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vars := map[string]string{
+				"GITLAB_CI":                      "true",
+				"CI_MERGE_REQUEST_EVENT_TYPE":    tc.event,
+				"CI_MERGE_REQUEST_DIFF_BASE_SHA": diffBase,
+			}
+			if tc.target != "" {
+				vars["CI_MERGE_REQUEST_TARGET_BRANCH_SHA"] = tc.target
+			}
+			res := bare(t, check.Env{Dir: env.Dir, Vars: vars})
+			expect(t, res, 1, "app.py:2:9: "+py012)
+			want := "june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 1 changed line; base " + tc.base + " (merge request diff base)"
+			if got := summaryOf(res); got != want {
+				t.Errorf("summary = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestDetachedMergeRequestKeepsTheDiffBase(t *testing.T) {
+	env := editedTopic(t)
+	tip := head(t, env.Dir, "HEAD")
+	env = mergeRequest(env, tip)
+	env.Vars["CI_MERGE_REQUEST_EVENT_TYPE"] = "detached"
+	env.Vars["CI_MERGE_REQUEST_TARGET_BRANCH_SHA"] = head(t, env.Dir, "main")
+	res := bare(t, env)
+	expect(t, res, 0, "")
+	want := "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; base " + tip + " (merge request diff base)"
+	if got := summaryOf(res); got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+}
+
 func TestMergeRequestScopeComesFromTheDiffBase(t *testing.T) {
 	env := editedTopic(t)
 	res := bare(t, mergeRequest(env, head(t, env.Dir, "main")))
