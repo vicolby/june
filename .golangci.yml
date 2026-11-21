@@ -38,9 +38,11 @@ linters:
   exclusions:
     rules:
       # cmd/june is the shell that snapshots the environment into check.Env.
+      # The clock rule still applies there.
       - path: ^cmd/june/
         linters:
           - forbidigo
+        text: os\.(Getenv|Environ|LookupEnv)
 
 formatters:
   enable:
