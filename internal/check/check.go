@@ -21,6 +21,9 @@ type Env struct {
 
 // Request describes one change to judge.
 type Request struct {
+	// Base is a git ref; the touched lines are those changed since its merge base with HEAD,
+	// worktree changes and untracked files included. Changed wins when both are set.
+	Base string
 	// Changed is the supplied touched-line list, one "path:7" or "path:7-12" per line.
 	Changed io.Reader
 	// Rules is the rules directory; "" means ./.june/rules.
@@ -48,19 +51,8 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	var touched touchedSet
-	var bad *string
-	read := make(chan struct{})
-	go func() {
-		touched, bad = readTouched(env, req.Changed)
-		close(read)
-	}()
-	select {
-	case <-ctx.Done():
-		return Result{}, ctx.Err()
-	case <-read:
-	}
-	if err := ctx.Err(); err != nil {
+	touched, bad, err := findTouched(ctx, env, req)
+	if err != nil {
 		return Result{}, err
 	}
 	if bad != nil {
@@ -109,6 +101,29 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		ds = append(ds, diag.Diagnostic{File: path, Line: m.Line, Col: m.Col, Code: m.Rule, Sev: sev, Kind: diag.Finding, Msg: m.Msg})
 	}
 	return render(req, exit, ds), nil
+}
+
+// findTouched picks the touched-line adapter: the supplied list, else git against Base, else unknowable.
+func findTouched(ctx context.Context, env Env, req Request) (touchedSet, *string, error) {
+	if req.Changed == nil && req.Base != "" {
+		return gitTouched(ctx, env, req.Base)
+	}
+	var touched touchedSet
+	var bad *string
+	read := make(chan struct{})
+	go func() {
+		touched, bad = readTouched(env, req.Changed)
+		close(read)
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	case <-read:
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	return touched, bad, nil
 }
 
 func refuse(req Request, msgs ...string) Result {

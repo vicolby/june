@@ -48,7 +48,7 @@ func readTouched(env Env, r io.Reader) (touchedSet, *string) {
 		return nil, &msg
 	}
 	if r == nil {
-		return fail("the touched lines are unknown. Fix: pass --changed-lines FILE, or - to read the list from stdin")
+		return fail("the touched lines are unknown. Fix: pass --base REF, or --changed-lines FILE (- reads the list from stdin)")
 	}
 
 	set := touchedSet{}

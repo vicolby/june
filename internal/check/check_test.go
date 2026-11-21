@@ -171,7 +171,7 @@ func TestRefusals(t *testing.T) {
 		path  string
 		out   string
 	}{
-		{name: "no list", out: "june: error: the touched lines are unknown. Fix: pass --changed-lines FILE, or - to read the list from stdin\n"},
+		{name: "no list", out: "june: error: the touched lines are unknown. Fix: pass --base REF, or --changed-lines FILE (- reads the list from stdin)\n"},
 		{name: "not an entry", list: ptr("app.py\n"), out: "june: error: changed-lines line 1 is not valid: expected path:N or path:N-M. Fix: " + listFix + "\n"},
 		{name: "line zero", list: ptr("app.py:0\n"), out: "june: error: changed-lines line 1 is not valid: expected a line number from 1. Fix: " + listFix + "\n"},
 		{name: "reversed range", list: ptr("\napp.py:9-3\n"), out: "june: error: changed-lines line 2 is not valid: expected a line number from 9. Fix: " + listFix + "\n"},
