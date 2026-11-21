@@ -1,0 +1,7 @@
+id: LST01
+language: python
+severity: error
+message: "Do not use a list. Fix: use a tuple"
+bogus_key: 1
+rule:
+  kind: list

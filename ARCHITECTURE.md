@@ -2,6 +2,7 @@
 
 This document applies VISION.md.
 Where the two disagree, VISION.md wins.
+The module interfaces and commands below describe the target design; see [cmd/june](#cmdjune) for current usage.
 Vocabulary: module, interface, implementation, depth, seam, adapter, leverage, locality.
 
 ## Shape
@@ -56,10 +57,11 @@ Scope inference, first hit wins: `Changed`, `Base`, pre-commit refs, GitHub pull
 The summary line prints the base and where it came from.
 
 Errors:
-- `error` is returned only when june cannot produce an explanation.
-- Every outcome june can explain, such as a shallow clone, a missing merge base, a push event with no base, a rule fault, a missing ast-grep or a bad list, comes back as a diagnostic with Exit 2.
+- `Change` returns an `error` for cancellation or when june cannot produce an explanation.
+- Other outcomes june can explain, such as a shallow clone, a missing merge base, a push event with no base, a rule fault, a missing ast-grep or a bad list, come back as a diagnostic with Exit 2.
+- `cmd/june` explains cancellation and a working-directory lookup failure as Exit 2 diagnostics, preserving the lookup cause; it reserves the june-bug message for unexplained errors.
 - Each reads `june: error: <cause>. Fix: <instruction>`.
-- A cancelled context kills child processes.
+- A cancelled context abandons changed-list reads and kills child processes.
 
 It hides: repo discovery, CI detection and the inference table, merge-base and shallow handling, diff parsing, renames, untracked and binary files, the list parser, the touched filter and anchor rule, opt-out matching, severity to exit code, sorting, which files get scanned.
 
@@ -92,9 +94,17 @@ Output is text by default and carries no ANSI.
 
 ## cmd/june
 
-The current scaffold supports only `june --version`, runnable locally with `go run ./cmd/june --version`.
-An unstamped build prints `june dev`.
-The checking commands and module interfaces in this document describe the target design.
+The current build supports `june --version` and `june [--rules DIR] --changed-lines FILE`; `-` reads the list from stdin.
+An unstamped `june --version` prints `june dev`.
+With ast-grep on PATH, run the shipped Python rule and its sidecar examples from the repository root:
+
+```sh
+go run ./cmd/june --rules rules/python --changed-lines changed.txt
+```
+
+The list contains one `path:7` or `path:7-12` entry per line, with one-based, inclusive line ranges and paths relative to the working directory.
+Blank lines are ignored; whitespace in filenames is preserved, and only `.py` files are checked.
+The current check requires this list and emits plain text; git scope inference, opt-outs, `verify`, and CI-specific formats remain planned.
 
 `cmd/june` is a shell and owns no decision.
 It maps flags to a `Request`, snapshots the environment, writes `Out` and `Files`, and returns `Exit`.

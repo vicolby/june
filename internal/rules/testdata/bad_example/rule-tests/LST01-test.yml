@@ -1,0 +1,5 @@
+id: LST01
+valid:
+  - "x = [1]"
+invalid:
+  - "x = (1,)"
