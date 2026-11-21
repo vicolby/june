@@ -487,10 +487,6 @@ func closesExample(line string) bool {
 	return strings.HasPrefix(line, "PASS ") || strings.HasPrefix(line, "FAIL ") || strings.HasPrefix(line, "SKIP ") || strings.HasPrefix(line, "Error: ")
 }
 
-func indented(line string) bool {
-	return strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")
-}
-
 // misbehaving reads the individual examples out of the case details of ast-grep test output.
 func misbehaving(text string) []misbehavior {
 	var out []misbehavior
@@ -516,7 +512,7 @@ func misbehaving(text string) []misbehavior {
 			flush()
 			continue
 		}
-		if cur != nil && indented(l) {
+		if cur != nil {
 			code = append(code, l)
 		}
 	}
@@ -535,9 +531,7 @@ func caseDetails(text string) string {
 		if closesExample(l) {
 			break
 		}
-		if indented(l) {
-			code = append(code, l)
-		}
+		code = append(code, l)
 	}
 	return oneLine(strings.Join(code, "\n"))
 }
