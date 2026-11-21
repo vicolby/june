@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 
 	"github.com/vicolby/june/internal/check"
@@ -15,6 +16,9 @@ import (
 
 // version is stamped at build time with -ldflags "-X main.version=...".
 var version = "dev"
+
+// executable locates the running binary; tests replace it.
+var executable = os.Executable
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -53,6 +57,9 @@ func snapshotEnv(getwd func() (string, error)) (check.Env, error) {
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, env check.Env) int {
 	if len(args) > 0 && args[0] == "verify" {
 		return verify(ctx, args[1:], stdout, stderr, env)
+	}
+	if len(args) > 0 && args[0] == "rules-path" {
+		return rulesPath(args[1:], stdout, stderr)
 	}
 	fs := flag.NewFlagSet("june", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -116,6 +123,26 @@ func (d *dirList) Set(v string) error {
 	return nil
 }
 
+// rulesPath is `june rules-path`: it prints the rules directory installed beside the binary at
+// <prefix>/share/june/rules, where <prefix> holds bin/june. The binary's own path is not resolved
+// through symlinks; where the OS reports the invoked path (macOS) a Homebrew install prints the stable
+// prefix path, and where it reports the resolved path (Linux) it prints the versioned Cellar path.
+func rulesPath(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 {
+		return usageError(stderr, fmt.Sprintf("unexpected argument %q", args[0]))
+	}
+	exe, err := executable()
+	if err != nil {
+		return fail(stderr, fmt.Sprintf("the june binary cannot be located (%v). Fix: pass --rules DIR with a rules directory", err))
+	}
+	dir := filepath.Join(filepath.Dir(exe), "..", "share", "june", "rules")
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return fail(stderr, fmt.Sprintf("no bundled rules at %s. Fix: install june with brew install vicolby/tap/june, or pass --rules DIR with a rules directory", dir))
+	}
+	fmt.Fprintln(stdout, dir)
+	return 0
+}
+
 // finish writes a verdict, or explains why there is none, and returns the exit code.
 func finish(stdout, stderr io.Writer, res check.Result, err error) int {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -129,7 +156,7 @@ func finish(stdout, stderr io.Writer, res check.Result, err error) int {
 }
 
 func usageError(stderr io.Writer, cause string) int {
-	return fail(stderr, cause+". Fix: usage is june [--legacy] [--rules DIR]... --changed-lines FILE, june verify [--rules DIR]..., or june --version")
+	return fail(stderr, cause+". Fix: usage is june [--legacy] [--rules DIR]... --changed-lines FILE, june verify [--rules DIR]..., june rules-path, or june --version")
 }
 
 func fail(stderr io.Writer, msg string) int {

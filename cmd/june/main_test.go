@@ -245,3 +245,53 @@ func TestLegacyFlag(t *testing.T) {
 		t.Errorf("--legacy: exit = %d, stdout = %q, want 0 and %q", code, out.String(), want)
 	}
 }
+
+// installed lays out a Homebrew-style prefix: bin/june plus share/june/rules/python.
+func installed(t *testing.T) (exe, rules string) {
+	t.Helper()
+	prefix := t.TempDir()
+	rules = filepath.Join(prefix, "share", "june", "rules")
+	if err := os.MkdirAll(filepath.Join(rules, "python"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(prefix, "bin", "june"), rules
+}
+
+func TestRulesPathPrintsBundledRulesNextToBinary(t *testing.T) {
+	exe, rules := installed(t)
+	t.Cleanup(func(prev func() (string, error)) func() { return func() { executable = prev } }(executable))
+	executable = func() (string, error) { return exe, nil }
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"rules-path"}, strings.NewReader(""), &out, &errOut, check.Env{Dir: t.TempDir()})
+	if code != 0 || out.String() != rules+"\n" || errOut.Len() != 0 {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q, want %q", code, out.String(), errOut.String(), rules+"\n")
+	}
+}
+
+func TestRulesPathWithoutBundledRulesExplainsItself(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "bin", "june")
+	t.Cleanup(func(prev func() (string, error)) func() { return func() { executable = prev } }(executable))
+	executable = func() (string, error) { return exe, nil }
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"rules-path"}, strings.NewReader(""), &out, &errOut, check.Env{Dir: t.TempDir()})
+	if code != 2 || out.Len() != 0 || !strings.HasPrefix(errOut.String(), "june: error: ") || !strings.Contains(errOut.String(), ". Fix: ") || !strings.Contains(errOut.String(), "brew install vicolby/tap/june") {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+}
+
+func TestRulesPathUnknownExecutableExplainsItself(t *testing.T) {
+	t.Cleanup(func(prev func() (string, error)) func() { return func() { executable = prev } }(executable))
+	executable = func() (string, error) { return "", errors.New("boom") }
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"rules-path"}, strings.NewReader(""), &out, &errOut, check.Env{Dir: t.TempDir()})
+	if code != 2 || out.Len() != 0 || !strings.Contains(errOut.String(), "boom") || !strings.Contains(errOut.String(), ". Fix: ") {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+}
+
+func TestRulesPathRejectsArguments(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"rules-path", "x"}, strings.NewReader(""), &out, &errOut, check.Env{Dir: t.TempDir()}); code != 2 || out.Len() != 0 {
+		t.Errorf("exit = %d, stdout = %q", code, out.String())
+	}
+}
