@@ -29,6 +29,9 @@ type Request struct {
 	Rules []string
 	// Format is the output format; "" means text.
 	Format diag.Format
+	// Legacy also lists rule matches on untouched lines of the checked files, as information only.
+	// They never change Exit; off by default.
+	Legacy bool
 }
 
 // Result is the verdict and its rendering.
@@ -102,12 +105,17 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	}
 	optedOut := map[site]bool{}
 	found := map[site]bool{}
+	legacyOptOut := map[site]bool{} // valid opt-outs on untouched lines hide their legacy match, silently
+	var legacy int
 	for _, m := range scanned.Matches {
 		found[site{byAbs[m.File], m.Line, m.Rule}] = true
 	}
 	for _, o := range scanned.OptOuts {
 		path := byAbs[o.File]
 		if !touched.has(path, o.Line) {
+			if o.Problem == "" {
+				legacyOptOut[site{path, o.Line, o.Rule}] = true
+			}
 			continue
 		}
 		d := diag.Diagnostic{File: path, Line: o.Line, Col: o.Col, Code: o.Rule, Sev: diag.Warning, Kind: diag.OptOut}
@@ -127,7 +135,14 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	}
 	for _, m := range scanned.Matches {
 		path := byAbs[m.File]
-		if !touched.has(path, m.Line) || optedOut[site{path, m.Line, m.Rule}] {
+		if !touched.has(path, m.Line) {
+			if req.Legacy && !legacyOptOut[site{path, m.Line, m.Rule}] {
+				ds = append(ds, diag.Diagnostic{File: path, Line: m.Line, Col: m.Col, Code: m.Rule, Sev: diag.Warning, Kind: diag.Legacy, Msg: m.Msg})
+				legacy++
+			}
+			continue
+		}
+		if optedOut[site{path, m.Line, m.Rule}] {
 			continue
 		}
 		sev := diag.Warning
@@ -144,7 +159,11 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	for _, f := range files {
 		lines += touched.lineCount(f)
 	}
-	return render(req, exit, ds, summary(errs, warns, optOutCount, len(files), lines)), nil
+	sum := summary(errs, warns, optOutCount, len(files), lines)
+	if legacy > 0 {
+		sum += "; " + count(legacy, "legacy violation") + " listed"
+	}
+	return render(req, exit, ds, sum), nil
 }
 
 // Rules verifies every example of every rule in dirs, none meaning ./.june/rules.

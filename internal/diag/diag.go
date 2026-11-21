@@ -28,6 +28,8 @@ const (
 	Failure
 	// OptOut is an inline opt-out comment on a touched line, honoured or not, rendered like a finding.
 	OptOut
+	// Legacy is a rule match on an untouched line, listed as information only, rendered as legacy: file:line:col: CODE message.
+	Legacy
 )
 
 // Format selects the rendering of a diagnostic list.
@@ -63,6 +65,8 @@ func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File
 		switch d.Kind {
 		case Failure:
 			fmt.Fprintf(&b, "june: error: %s\n", escapeControls(d.Msg))
+		case Legacy:
+			fmt.Fprintf(&b, "legacy: %s:%d:%d: %s %s\n", escapeControls(d.File), d.Line, d.Col, escapeControls(d.Code), escapeControls(d.Msg))
 		default:
 			fmt.Fprintf(&b, "%s:%d:%d: %s %s\n", escapeControls(d.File), d.Line, d.Col, escapeControls(d.Code), escapeControls(d.Msg))
 		}
@@ -88,6 +92,10 @@ func escapeControls(text string) string {
 
 func less(a, b Diagnostic) bool {
 	if a.Kind != b.Kind {
+		// Legacy information always closes the list; otherwise opt-outs and failures lead findings.
+		if a.Kind == Legacy || b.Kind == Legacy {
+			return b.Kind == Legacy
+		}
 		return a.Kind > b.Kind
 	}
 	if a.File != b.File {

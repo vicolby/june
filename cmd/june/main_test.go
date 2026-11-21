@@ -228,3 +228,20 @@ func TestVerifyArguments(t *testing.T) {
 		}
 	}
 }
+
+func TestLegacyFlag(t *testing.T) {
+	env := project(t)
+	args := []string{"--changed-lines", "-"}
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), args, strings.NewReader("app.py:1\n"), &out, &errOut, env)
+	if code != 0 || strings.Contains(out.String(), "legacy") {
+		t.Errorf("default: exit = %d, stdout = %q, want 0 and no legacy output", code, out.String())
+	}
+
+	out.Reset()
+	code = run(context.Background(), append([]string{"--legacy"}, args...), strings.NewReader("app.py:1\n"), &out, &errOut, env)
+	want := "legacy: app.py:2:9: " + py012 + "june: 0 errors, 0 warnings, 0 opt-outs; checked 1 file, 1 changed line; 1 legacy violation listed\n"
+	if code != 0 || out.String() != want || errOut.Len() != 0 {
+		t.Errorf("--legacy: exit = %d, stdout = %q, want 0 and %q", code, out.String(), want)
+	}
+}

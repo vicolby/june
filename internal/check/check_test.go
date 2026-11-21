@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/vicolby/june/internal/check"
+	"github.com/vicolby/june/internal/diag"
 )
 
 const py012 = "PY012 Mutable default argument. Fix: default the parameter to None and create the value inside the function.\n"
@@ -836,5 +837,92 @@ func TestOptOutNamesRuleFromAnyDirectory(t *testing.T) {
 	res := changeWith(t, env, []string{".june/rules", "shared"}, "app.py:1\n")
 	if res.Exit != 0 || !strings.Contains(string(res.Out), "opt-out: fixture") {
 		t.Errorf("Exit = %d, Out = %q, want 0 with the opt-out printed", res.Exit, res.Out)
+	}
+}
+
+func changeLegacy(t *testing.T, env check.Env, list string) check.Result {
+	t.Helper()
+	res, err := check.Change(context.Background(), env, check.Request{Changed: strings.NewReader(list), Legacy: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+const legacyPY012 = "legacy: "
+
+func TestLegacyIsOffByDefault(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "def f(a=[]):\n    pass\n\nx = 1\n"})
+	res := change(t, env, "app.py:4\n")
+	expect(t, res, 0, "")
+	if strings.Contains(string(res.Out), "legacy") {
+		t.Errorf("Out mentions legacy without --legacy: %q", res.Out)
+	}
+}
+
+func TestLegacyListsUntouchedViolationsAndNeverFails(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "def f(a=[]):\n    pass\n\nx = 1\n"})
+	res := changeLegacy(t, env, "app.py:4\n")
+	if res.Exit != 0 {
+		t.Errorf("Exit = %d, want 0", res.Exit)
+	}
+	if got, want := string(res.Out), legacyPY012+"app.py:1:9: "+py012+"june: 0 errors, 0 warnings, 0 opt-outs; checked 1 file, 1 changed line; 1 legacy violation listed\n"; got != want {
+		t.Errorf("Out =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestLegacyFollowsFindingsAndDoesNotRepeatThem(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "def g(b={}): pass\ndef f(a=[]): pass\n"})
+	res := changeLegacy(t, env, "app.py:2\n")
+	want := "app.py:2:9: " + py012 + legacyPY012 + "app.py:1:9: " + py012 +
+		"june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 1 changed line; 1 legacy violation listed\n"
+	if res.Exit != 1 || string(res.Out) != want {
+		t.Errorf("Exit = %d, Out =\n%s\nwant 1 and\n%s", res.Exit, res.Out, want)
+	}
+}
+
+func TestLegacyWarningsAndErrorsAreBothInformation(t *testing.T) {
+	env := withWarningRule(t, tree(t, map[string]string{"app.py": "tmp = 1\ndef f(a=[]): pass\nx = 1\n"}))
+	res := changeLegacy(t, env, "app.py:3\n")
+	want := legacyPY012 + "app.py:1:1: " + lst02 + legacyPY012 + "app.py:2:9: " + py012 +
+		"june: 0 errors, 0 warnings, 0 opt-outs; checked 1 file, 1 changed line; 2 legacy violations listed\n"
+	if res.Exit != 0 || string(res.Out) != want {
+		t.Errorf("Exit = %d, Out =\n%s\nwant 0 and\n%s", res.Exit, res.Out, want)
+	}
+}
+
+func TestLegacyOnlyScansFilesInTheChange(t *testing.T) {
+	env := tree(t, map[string]string{"a.py": "x = 1\n", "other.py": "def f(a=[]): pass\n"})
+	res := changeLegacy(t, env, "a.py:1\n")
+	if res.Exit != 0 || strings.Contains(string(res.Out), "other.py") || strings.Contains(string(res.Out), "legacy") {
+		t.Errorf("Exit = %d, Out = %q, want no legacy lines for an unchanged file", res.Exit, res.Out)
+	}
+}
+
+func TestLegacyWithNothingToListKeepsSummaryUnchanged(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "x = 1\n"})
+	res := changeLegacy(t, env, "app.py:1\n")
+	expect(t, res, 0, "")
+}
+
+func TestLegacyHonoursValidOptOutOnUntouchedLine(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "def f(a=[]): pass  # june: ignore[PY012] shared on purpose\nx = 1\n"})
+	res := changeLegacy(t, env, "app.py:2\n")
+	expect(t, res, 0, "")
+}
+
+func TestLegacyDiagnosticsAreMarkedLegacy(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\nx = 1\n"})
+	res := changeLegacy(t, env, "app.py:2\n")
+	if len(res.Diags) != 1 || res.Diags[0].Kind != diag.Legacy || res.Diags[0].Sev == diag.Error {
+		t.Errorf("Diags = %+v, want one legacy diagnostic that is not an error", res.Diags)
+	}
+}
+
+func TestLegacyDoesNotMaskRefusals(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "x = 1\n"})
+	res := changeLegacy(t, env, "app.py\n")
+	if res.Exit != 2 {
+		t.Errorf("Exit = %d, want 2", res.Exit)
 	}
 }
