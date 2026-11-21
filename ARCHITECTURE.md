@@ -54,7 +54,7 @@ Invariants:
 
 Order: touched set, then `rules.Load`, then scan changed Python files only, then keep touched anchors, then opt-outs, then severity, then render.
 
-Scope inference, first hit wins: `Changed`, `Base`, pre-commit refs, GitHub pull request base, GitLab merge request base, pre-commit staged diff, then local (merge base with upstream, worktree plus untracked).
+Scope inference, first hit wins: `Changed`, `Base`, pre-commit refs, GitHub pull request base, GitLab merge request base, pre-commit staged diff, then local (merge base with the upstream branch or the remote default branch, worktree plus untracked).
 The summary line prints the base and where it came from.
 
 Errors:
