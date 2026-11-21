@@ -37,7 +37,7 @@ Rules are ast-grep rules, and june owns them directly, never as configuration fo
 ## Scope
 june is not a linter engine, not a replacement for ruff or mypy, not a rule marketplace, and not an LLM reviewer.
 Version 1 checks Python only.
-It ships through Homebrew, with the bundled rules and ast-grep as a dependency.
+It ships through Homebrew, with the bundled rules and ast-grep as a dependency. There is no pip package and no container image.
 june finds the touched lines itself from git against the target branch, and also accepts a list of changed lines from the CI job or the pre-commit hook.
 Reviewing the guidelines no tool can check, and reporting per-guideline coverage, belong to a later version.
 

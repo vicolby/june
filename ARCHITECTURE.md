@@ -104,7 +104,7 @@ With ast-grep on PATH, run the shipped Python fundamentals and their sidecar exa
 go run ./cmd/june --rules rules/python --changed-lines changed.txt
 ```
 
-`rules/python` is the opt-in directory for the shipped fundamentals. A repo adopts it by pointing `--rules` at `rules/python` or copying it to `.june/rules`. Pip and container packaging were dropped (issues #14 and #15 are closed); distribution is via Homebrew, delivered by a separate change. The rules are PY012 mutable default argument, PY013 bare `except`, PY014 comparison to `None` with `==` or `!=`, PY015 `except` block that only passes, and PY016 `assert` on a tuple.
+`rules/python` is the opt-in directory for the shipped fundamentals; adoption is under [Defaults where VISION is silent](#defaults-where-vision-is-silent). The rules are PY012 mutable default argument, PY013 bare `except`, PY014 comparison to `None` with `==` or `!=`, PY015 `except` block that only passes, and PY016 `assert` on a tuple.
 Each is an error with a corrective message and its own valid and invalid examples.
 
 The list contains one `path:7` or `path:7-12` entry per line, with one-based, inclusive line ranges and paths relative to the working directory.

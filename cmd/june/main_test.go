@@ -40,7 +40,7 @@ func TestUnknownArgs(t *testing.T) {
 
 const py012 = "PY012 Mutable default argument. Fix: default the parameter to None and create the value inside the function.\n"
 
-// project builds a temp tree with the shipped rules at .june/rules and one Python file.
+// project builds a temp tree with PY012 at .june/rules and one Python file.
 func project(t *testing.T) check.Env {
 	t.Helper()
 	dir := t.TempDir()
