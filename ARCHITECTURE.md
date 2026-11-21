@@ -1,0 +1,146 @@
+# Architecture
+
+This document applies VISION.md.
+Where the two disagree, VISION.md wins.
+Vocabulary: module, interface, implementation, depth, seam, adapter, leverage, locality.
+
+## Shape
+
+`june` is four modules.
+Callers cross each interface and nothing else, and tests cross the same interfaces.
+
+```
+cmd/june -> check -> rules   (Load, Scan)
+                  -> diag    (Render)
+```
+
+Layout: `cmd/june`, `internal/{check,rules,diag}`, `rules/python`.
+
+## check
+
+`check` is the deep module.
+It decides one change: which lines are touched, which findings land on them, which opt-outs apply, and the exit code.
+
+```go
+func Change(ctx context.Context, env Env, req Request) (Result, error)
+func Rules(ctx context.Context, env Env, dir string) (Result, error)
+
+type Env struct{ Dir string; Vars map[string]string } // os.Environ snapshot; nothing reads ambient state
+type Request struct {
+	Paths   []string  // narrows only
+	Base    string    // git ref; "" = inferred
+	Changed io.Reader // supplied list, one "path:7" or "path:7-12" per line; replaces git
+	Rules   string    // "" = ./.june/rules
+	Format  diag.Format // "" = inferred
+	Legacy  bool      // also list untouched-line violations, information only
+}
+type Result struct{ Exit int; Out []byte; Files []diag.File; Diags []diag.Diagnostic }
+```
+
+Invariants:
+- Exit 1 if and only if an error-severity match is anchored on a touched line with no valid opt-out.
+- Warnings, legacy matches and opt-out lines never change Exit.
+- A touched line is one added or edited in the post-image.
+- Pure deletions, mode changes and pure renames touch nothing.
+- A new file touches every line, including an untracked file in a local run.
+- A match is judged on its first line only, so rules match the smallest wrong node.
+- The touched set is unknowable means Exit 2, never 0 and never every line.
+- Out is a pure function of the request, the tree and the diff: sorted, no clock, no absolute path, no ANSI.
+- Exit and finding diagnostics are identical across formats and CI vendors.
+- The opt-out is a same-line comment `# june: ignore[PY012] <reason>`.
+- The reason is required, a malformed opt-out suppresses nothing and says why, and every opt-out on a touched line is printed.
+
+Order: touched set, then `rules.Load`, then scan changed Python files only, then keep touched anchors, then opt-outs, then severity, then render.
+
+Scope inference, first hit wins: `Changed`, `Base`, pre-commit refs, GitHub pull request base, GitLab merge request base, pre-commit staged diff, then local (merge base with upstream, worktree plus untracked).
+The summary line prints the base and where it came from.
+
+Errors:
+- `error` is returned only when june cannot produce an explanation.
+- Every outcome june can explain, such as a shallow clone, a missing merge base, a push event with no base, a rule fault, a missing ast-grep or a bad list, comes back as a diagnostic with Exit 2.
+- Each reads `june: error: <cause>. Fix: <instruction>`.
+- A cancelled context kills child processes.
+
+It hides: repo discovery, CI detection and the inference table, merge-base and shallow handling, diff parsing, renames, untracked and binary files, the list parser, the touched filter and anchor rule, opt-out matching, severity to exit code, sorting, which files get scanned.
+
+## rules
+
+`rules` owns ast-grep rules and their examples.
+
+```go
+func Load(ctx context.Context, dir string) (*RuleSet, []Fault) // faults non-empty means nil set, never a partial set
+func (*RuleSet) Scan(ctx context.Context, files []string) (Scanned, error)
+```
+
+A `*RuleSet` exists only if every example behaved, so an unverified rule cannot produce a verdict.
+Faults: unparseable rule, empty message, failing example, zero rules.
+Scan reads only the given files, anchors each match at its first line, and reports comments so `check` never learns a comment marker.
+
+It hides: the location of the ast-grep binary (bundled first, then PATH), the invocation, zero-based to one-based lines, the rule schema, the sidecar example file `rule-tests/<id>-test.yml` with `valid:` and `invalid:` (ast-grep rejects unknown keys inside a rule), and the `.py` filter.
+
+## diag
+
+`diag` is the one ruff-shaped vocabulary for findings, opt-outs, legacy matches, rule faults and june's own failures.
+
+```go
+type Diagnostic struct{ File string; Line, Col int; Code string; Sev Severity; Kind Kind; Msg string }
+func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File) // Format: Text | GitHub | GitLab
+```
+
+It hides workflow-command escaping, GitLab Code Quality fingerprints and severities, and summary placement.
+Output is text by default and carries no ANSI.
+
+## cmd/june
+
+`cmd/june` is a shell and owns no decision.
+It maps flags to a `Request`, snapshots the environment, writes `Out` and `Files`, and returns `Exit`.
+
+```
+june                          # identical in a dev shell, pre-commit, GitHub Actions and GitLab CI
+june --base main --legacy
+june --changed-lines FILE     # "-" reads stdin
+june verify                   # rule author: every example behaves, or refused
+```
+
+## Seams
+
+- **Touched lines, real, internal to `check`:** two adapters, git and the supplied list.
+- The list is also a product feature, so `Request.Changed` is a caller input and not a test hook.
+- Pre-commit is covered by inference.
+- No patch, staged or fixed-set adapter exists, because the list already carries any scope.
+- **Output format, real, in `diag`:** three adapters, text, GitHub and GitLab, chosen by a closed switch.
+- **ast-grep, hypothetical:** one engine, VISION refuses a second, no interface.
+- **Language, hypothetical:** Python lives in rule data and the `.py` filter.
+- A second language is the moment to cut a seam.
+- **Network, model, clock:** none exist.
+
+## Tests
+
+- The interface is the test surface.
+- `check.Change` runs scenarios on temp trees with real git and real ast-grep, comparing golden `Out`.
+- Scenarios use `Changed` when git is not under test.
+- One scenario runs under a dev-shell, GitHub and GitLab environment and asserts the same exit and finding diagnostics.
+- `rules` runs against fixture rule directories.
+- `diag` runs against golden output.
+- Three to five smoke runs go through `cmd/june`.
+- Tests that reach past an interface are disposable.
+- The pinned ast-grep version is required on PATH for tests.
+
+## Defaults where VISION is silent
+
+Each is reversible and lives here until changed.
+- A finding is judged on its first line.
+- The opt-out syntax is as above.
+- The default rules directory is `./.june/rules`, overridable by flag; where shared rules live stays open.
+- One rule fault refuses the whole run.
+- A shallow clone or a push event with no base exits 2 with a named fix.
+- Legacy listing is off unless asked.
+- Rules are verified on every run, at the cost of one ast-grep process.
+
+## House rules
+
+- A module earns its place by the deletion test: if complexity vanishes without it, it is a pass-through.
+- A seam needs two real adapters.
+- No pass-through packages.
+- Python knowledge stays in rule data.
+- No registry or plugin load: extension is a closed switch and a release.
