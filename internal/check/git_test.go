@@ -614,3 +614,128 @@ func TestBaseCancelledContextIsAnError(t *testing.T) {
 		t.Errorf("Change error = %v, want context.Canceled", err)
 	}
 }
+
+// infer runs a bare check: no base and no list.
+func infer(t *testing.T, env check.Env) check.Result {
+	t.Helper()
+	res, err := check.Change(context.Background(), env, check.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+// clone makes a full clone of env's repository, checked out on a new branch that tracks nothing.
+func clone(t *testing.T, env check.Env, args ...string) check.Env {
+	t.Helper()
+	git(t, env.Dir, "checkout", "-q", "main")
+	dst := filepath.Join(t.TempDir(), "clone")
+	git(t, env.Dir, append([]string{"clone", "-q", "--no-local"}, append(args, "file://"+env.Dir, dst)...)...)
+	git(t, dst, "config", "user.name", "june")
+	git(t, dst, "config", "user.email", "june@example.com")
+	git(t, dst, "config", "commit.gpgsign", "false")
+	return check.Env{Dir: dst}
+}
+
+func TestBareJuneInfersTheUpstreamBranch(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": old + "x = 1\n"})
+	git(t, env.Dir, "branch", "-q", "--set-upstream-to=main", "topic")
+	write(t, filepath.Join(env.Dir, "app.py"), old+"def g(b={}): pass\n")
+	commit(t, env)
+	res := infer(t, env)
+	expect(t, res, 1, "app.py:2:9: "+py012)
+	if got, want := summaryOf(res), "june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 1 changed line; base main (upstream branch)"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+}
+
+func TestBareJuneFindsRemoteUpstreamInAClone(t *testing.T) {
+	origin := repo(t, map[string]string{"app.py": old})
+	env := clone(t, origin)
+	git(t, env.Dir, "checkout", "-q", "-b", "feature", "--track", "origin/main")
+	write(t, filepath.Join(env.Dir, "app.py"), old+"def g(b={}): pass\n")
+	commit(t, env)
+	res := infer(t, env)
+	expect(t, res, 1, "app.py:2:9: "+py012)
+	if got, want := summaryOf(res), "june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 1 changed line; base origin/main (upstream branch)"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+}
+
+func TestBareJuneFallsBackToTheRemoteDefaultBranch(t *testing.T) {
+	origin := repo(t, map[string]string{"app.py": old})
+	env := clone(t, origin)
+	git(t, env.Dir, "checkout", "-q", "-b", "feature", "--no-track", "origin/main")
+	write(t, filepath.Join(env.Dir, "app.py"), old+"def g(b={}): pass\n")
+	commit(t, env)
+	res := infer(t, env)
+	expect(t, res, 1, "app.py:2:9: "+py012)
+	if got, want := summaryOf(res), "june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 1 changed line; base origin/main (remote default branch)"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+}
+
+func TestExplicitBaseNamesItsSource(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": old})
+	if got, want := summaryOf(against(t, env, "main")), "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; base main (--base)"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+}
+
+func TestUpstreamWinsOverTheRemoteDefaultBranch(t *testing.T) {
+	origin := repo(t, map[string]string{"app.py": old})
+	git(t, origin.Dir, "branch", "-q", "release", "main")
+	env := clone(t, origin)
+	git(t, env.Dir, "checkout", "-q", "-b", "feature", "--track", "origin/release")
+	if got, want := summaryOf(infer(t, env)), "; base origin/release (upstream branch)"; !strings.HasSuffix(got, want) {
+		t.Errorf("summary = %q, want suffix %q", got, want)
+	}
+}
+
+func TestBareJuneWithoutAnyBaseRefusesInsteadOfCheckingEverything(t *testing.T) {
+	// repo has a violation in a committed file: if the touched set were "every line", this would exit 1.
+	env := repo(t, map[string]string{"app.py": old})
+	refused(t, infer(t, env),
+		"june: error: no base branch can be inferred because the current branch has no upstream and the repository has no remote default branch. Fix: pass --base REF, or --changed-lines FILE\n")
+}
+
+func TestBareJuneInAShallowCloneIsRefused(t *testing.T) {
+	origin := repo(t, map[string]string{"app.py": old})
+	write(t, filepath.Join(origin.Dir, "app.py"), old+"x = 1\n")
+	git(t, origin.Dir, "checkout", "-q", "main")
+	write(t, filepath.Join(origin.Dir, "main.py"), "y = 1\n")
+	commit(t, origin)
+	git(t, origin.Dir, "checkout", "-q", "topic")
+	git(t, origin.Dir, "rebase", "-q", "--onto", "main~1", "main~1", "topic")
+	env := clone(t, origin, "--depth=1", "--branch", "topic", "--no-single-branch")
+	git(t, env.Dir, "checkout", "-q", "--no-track", "-b", "feature", "origin/topic")
+	git(t, env.Dir, "remote", "set-head", "origin", "main")
+	res := infer(t, env)
+	if res.Exit != 2 || !strings.Contains(string(res.Out), "no merge base") || !strings.Contains(string(res.Out), "git fetch --unshallow") || strings.Contains(string(res.Out), "checked") {
+		t.Errorf("Exit = %d, Out = %q, want a refusal naming git fetch --unshallow", res.Exit, res.Out)
+	}
+}
+
+func TestBareJuneOutsideAGitRepositoryNamesTheFix(t *testing.T) {
+	dir := t.TempDir()
+	env := check.Env{Dir: dir, Vars: map[string]string{"GIT_CEILING_DIRECTORIES": filepath.Dir(dir)}}
+	res := infer(t, env)
+	if res.Exit != 2 || !strings.HasSuffix(string(res.Out), " is not inside a git work tree. Fix: run june inside the repository, or pass --changed-lines FILE\n") || strings.Contains(string(res.Out), "checked") {
+		t.Errorf("Exit = %d, Out = %q", res.Exit, res.Out)
+	}
+}
+
+func TestBareJuneWithoutGitNamesTheFix(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": old})
+	t.Setenv("PATH", t.TempDir())
+	refused(t, infer(t, env),
+		"june: error: git was not found, so the touched lines cannot be found. Fix: install git and put it on PATH, or pass --changed-lines FILE\n")
+}
+
+func TestSuppliedListNeedsNeitherGitNorABase(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": old})
+	expect(t, change(t, env, "app.py:1\n"), 1, "app.py:1:9: "+py012)
+	if got := summaryOf(change(t, env, "app.py:1\n")); strings.Contains(got, "base") {
+		t.Errorf("summary = %q, want no base for a supplied list", got)
+	}
+}

@@ -130,7 +130,7 @@ func finish(stdout, stderr io.Writer, res check.Result, err error) int {
 }
 
 func usageError(stderr io.Writer, cause string) int {
-	return fail(stderr, cause+". Fix: usage is june [--legacy] [--rules DIR]... (--base REF | --changed-lines FILE), june verify [--rules DIR]..., or june --version")
+	return fail(stderr, cause+". Fix: usage is june [--legacy] [--rules DIR]... [--base REF | --changed-lines FILE], june verify [--rules DIR]..., or june --version")
 }
 
 func fail(stderr io.Writer, msg string) int {

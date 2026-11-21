@@ -71,7 +71,7 @@ func change(t *testing.T, env check.Env, list string) check.Result {
 	return res
 }
 
-var summaryLine = regexp.MustCompile(`^june: \d+ errors?, \d+ warnings?, \d+ opt-outs?; checked \d+ files?, \d+ changed lines?\n$`)
+var summaryLine = regexp.MustCompile(`^june: \d+ errors?, \d+ warnings?, \d+ opt-outs?; checked \d+ files?, \d+ changed lines?(; base \S+ \([a-z -]+\))?\n$`)
 
 // expect compares the findings in Out; the summary line has its own tests, so here it only has to close the output.
 func expect(t *testing.T, res check.Result, exit int, findings string) {
@@ -195,7 +195,6 @@ func TestRefusals(t *testing.T) {
 		path  string
 		out   string
 	}{
-		{name: "no list", out: "june: error: the touched lines are unknown. Fix: pass --base REF, or --changed-lines FILE (- reads the list from stdin)\n"},
 		{name: "not an entry", list: ptr("app.py\n"), out: "june: error: changed-lines line 1 is not valid: expected path:N or path:N-M. Fix: " + listFix + "\n"},
 		{name: "line zero", list: ptr("app.py:0\n"), out: "june: error: changed-lines line 1 is not valid: expected a line number from 1. Fix: " + listFix + "\n"},
 		{name: "reversed range", list: ptr("\napp.py:9-3\n"), out: "june: error: changed-lines line 2 is not valid: expected a line number from 9. Fix: " + listFix + "\n"},

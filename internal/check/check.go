@@ -56,7 +56,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	touched, bad, err := findTouched(ctx, env, req)
+	touched, sc, bad, err := findTouched(ctx, env, req)
 	if err != nil {
 		return Result{}, err
 	}
@@ -152,6 +152,9 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		lines += touched.lineCount(f)
 	}
 	sum := summary(errs, warns, optOutCount, len(files), lines)
+	if sc.base != "" {
+		sum += "; base " + sc.base + " (" + sc.source + ")"
+	}
 	if legacy > 0 {
 		sum += "; " + count(legacy, "legacy violation") + " listed"
 	}
@@ -230,9 +233,10 @@ func count(n int, noun string) string {
 	return fmt.Sprintf("%d %ss", n, noun)
 }
 
-// findTouched picks the touched-line adapter: the supplied list, else git against Base, else unknowable.
-func findTouched(ctx context.Context, env Env, req Request) (touchedSet, *string, error) {
-	if req.Changed == nil && req.Base != "" {
+// findTouched picks the touched-line adapter: the supplied list, else git against Base or an inferred base.
+// The scope is zero for a supplied list. The touched set is never "every line": what cannot be known is refused.
+func findTouched(ctx context.Context, env Env, req Request) (touchedSet, scope, *string, error) {
+	if req.Changed == nil {
 		return gitTouched(ctx, env, req.Base)
 	}
 	var touched touchedSet
@@ -244,13 +248,13 @@ func findTouched(ctx context.Context, env Env, req Request) (touchedSet, *string
 	}()
 	select {
 	case <-ctx.Done():
-		return nil, nil, ctx.Err()
+		return nil, scope{}, nil, ctx.Err()
 	case <-read:
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return nil, scope{}, nil, err
 	}
-	return touched, bad, nil
+	return touched, scope{}, bad, nil
 }
 
 func refuse(req Request, msgs ...string) Result {
