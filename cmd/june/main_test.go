@@ -257,7 +257,7 @@ func TestBaseFlagJudgesGitChanges(t *testing.T) {
 		{"add", "-A"},
 		{"commit", "-q", "-m", "base"},
 	} {
-		cmd := exec.Command("git", args...)
+		cmd := exec.CommandContext(context.Background(), "git", args...)
 		cmd.Dir = env.Dir
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
