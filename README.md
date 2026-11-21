@@ -14,14 +14,13 @@ This installs the `june` binary, `ast-grep` as a dependency, and the bundled rul
 
 Bundled rules are opt-in: june never loads them on its own.
 They install to `$(brew --prefix)/share/june/rules`, one directory per language.
-`june rules-path` prints the directory beside the installed binary.
 
 ```sh
-june verify --rules "$(june rules-path)/python"
-june --rules "$(june rules-path)/python" --changed-lines changed.txt
+june verify --rules "$(brew --prefix)/share/june/rules/python"
+june --rules "$(brew --prefix)/share/june/rules/python" --changed-lines changed.txt
 ```
 
-To adopt them in a repo, copy `$(june rules-path)/python` to `.june/rules`, the default rules directory.
+To adopt them in a repo, copy `$(brew --prefix)/share/june/rules/python` to `.june/rules`, the default rules directory.
 
 ## Releases
 

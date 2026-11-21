@@ -96,7 +96,7 @@ Output is text by default and carries no ANSI. Rendering escapes control charact
 
 ## cmd/june
 
-The current build supports `june --version`, `june rules-path`, `june verify [--rules DIR]...` and `june [--legacy] [--rules DIR]... --changed-lines FILE`; `-` reads the list from stdin.
+The current build supports `june --version`, `june verify [--rules DIR]...` and `june [--legacy] [--rules DIR]... --changed-lines FILE`; `-` reads the list from stdin.
 An unstamped `june --version` prints `june dev`.
 With ast-grep on PATH, run the shipped Python rule and its sidecar examples from the repository root:
 
@@ -111,8 +111,6 @@ Coverage counts distinct listed Python files and changed lines, counting overlap
 `--legacy` also lists matches on untouched lines of the checked files, one `legacy: file:line:col: CODE message` line each after the findings, and the summary gains `; 2 legacy violations listed`.
 Legacy lines never change the exit code, are off by default, and a valid opt-out on the untouched line hides its legacy line.
 `june verify` runs every example of every rule and prints `june: verified 1 rule, 19 examples` on success. Any fault exits 2, as it does for a normal run, and each fault is one line naming the rules directory, the rule file, or the sidecar, and, for a failing example, the example.
-`june rules-path` prints the bundled rules directory, `<prefix>/share/june/rules` where `<prefix>` holds `bin/june`, and exits 2 with a Fix when the binary has no rules beside it, as in a source build.
-The binary's path is not resolved through symlinks, so on macOS a Homebrew install prints the stable prefix path.
 Git scope inference and CI-specific formats remain planned.
 
 `cmd/june` is a shell and owns no decision.
@@ -124,7 +122,6 @@ june --base main --legacy
 june --changed-lines FILE     # "-" reads stdin
 june --rules shared --rules .june/rules   # shared rules layered under repo rules
 june verify                   # rule author: every example behaves, or refused
-june rules-path               # where the installed, bundled rules live
 ```
 
 ## Release
@@ -168,7 +165,7 @@ Each is reversible and lives here until changed.
 - The opt-out syntax is as above.
 - The default rules directory is `./.june/rules`, used when no `--rules` is given.
 - `--rules` repeats, and the directories merge into one rule set, so a team can layer bundled, shared and repo-local rules.
-- Shared rules ship in the release archive under `rules/` and install to `<prefix>/share/june/rules`, which `june rules-path` prints. They are opt-in: a repo copies one language directory, such as `python`, to `.june/rules` or passes `--rules`, and june never loads them implicitly.
+- Shared rules ship in the release archive under `rules/` and install to `<prefix>/share/june/rules`. They are opt-in: a repo copies one language directory, such as `python`, to `.june/rules` or passes `--rules`, and june never loads them implicitly.
 - Shared rules are supplied by directory path; june never fetches, clones or updates them, and CI checks them out.
 - A rule id defined in two files is a rule fault, exit 2 naming both files, in either directory order. A successful verdict does not depend on that order.
 - A directory named twice counts once, after cleaning and symlink resolution, and an empty `--rules` value means the default directory.

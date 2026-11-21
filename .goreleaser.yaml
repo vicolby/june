@@ -1,6 +1,6 @@
 # Release config. A version tag (v*) triggers .github/workflows/release.yml, which runs goreleaser.
 # Archives carry the june binary and the bundled rules; the Homebrew formula installs them to
-# <prefix>/share/june/rules, which `june rules-path` prints.
+# <prefix>/share/june/rules.
 version: 2
 
 project_name: june
@@ -55,10 +55,6 @@ brews:
     install: |
       bin.install "june"
       (share/"june").install "rules"
-    caveats: |
-      The bundled rules are installed to #{HOMEBREW_PREFIX}/share/june/rules.
-      Run `june rules-path` to print the directory, then pass a rule set with
-      `june --rules "$(june rules-path)/python" ...`.
     test: |
       assert_match version.to_s, shell_output("#{bin}/june --version")
       assert_path_exists share/"june/rules"
