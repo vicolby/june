@@ -7,6 +7,7 @@ valid:
   - "def f():\n    pass"
   - "if x:\n    pass"
   - "try:\n    f()\nexcept ValueError:\n    pass; x = 1"
+  - "try:\n    f()\nexcept ValueError:\n    pass; \\\n    x = 1"
 invalid:
   - "try:\n    f()\nexcept ValueError:\n    pass"
   - "try:\n    f()\nexcept:\n    pass"
@@ -17,3 +18,8 @@ invalid:
   - "try:\n    f()\nexcept ValueError:\n    pass;"
   - "try:\n    f()\nexcept ValueError:\n    pass; pass"
   - "try:\n    f()\nexcept* ValueError:\n    pass"
+  - "try:\n    f()\nexcept ValueError:\n    pass; \\\n    pass"
+  - "try:\n    f()\nexcept ValueError: pass; \\\n    pass"
+  - "try:\n    f()\nexcept ValueError:\n    pass\\\n    ; pass"
+  - "try:\n    f()\nexcept:\n    pass; \\\n    pass"
+  - "try:\n    f()\nexcept* ValueError:\n    pass; \\\n    pass"

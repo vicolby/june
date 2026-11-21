@@ -15,4 +15,5 @@ rule:
           any:
             - kind: pass_statement
             - kind: comment
+            - kind: line_continuation
             - regex: '^;$'

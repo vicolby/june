@@ -303,7 +303,7 @@ func TestShippedFundamentals(t *testing.T) {
 	env := check.Env{Dir: dir}
 
 	var out, errOut bytes.Buffer
-	if code := run(context.Background(), []string{"verify", "--rules", rulesDir}, strings.NewReader(""), &out, &errOut, env); code != 0 || out.String() != "june: verified 5 rules, 129 examples\n" || errOut.Len() != 0 {
+	if code := run(context.Background(), []string{"verify", "--rules", rulesDir}, strings.NewReader(""), &out, &errOut, env); code != 0 || out.String() != "june: verified 5 rules, 135 examples\n" || errOut.Len() != 0 {
 		t.Fatalf("verify exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
 	}
 
