@@ -1,0 +1,16 @@
+id: PY014
+valid:
+  - "x is None"
+  - "x is not None"
+  - "x == 0"
+  - "x != 'None'"
+  - "x == [None]"
+  - "x = None"
+  - "f(None)"
+invalid:
+  - "x == None"
+  - "x != None"
+  - "None == x"
+  - "None != x"
+  - "if f(a) == None: pass"
+  - "y = [a.b != None for a in c]"

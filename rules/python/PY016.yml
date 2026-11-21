@@ -1,0 +1,10 @@
+id: PY016
+language: python
+severity: error
+message: "Assert on a tuple is always true. Fix: remove the parentheses and pass the message after a comma, as in assert cond, message."
+rule:
+  kind: assert_statement
+  has:
+    nthChild: 1
+    kind: tuple
+    regex: '^\(\s*[^)\s]'

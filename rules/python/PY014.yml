@@ -1,0 +1,10 @@
+id: PY014
+language: python
+severity: error
+message: "Comparison to None with == or !=. Fix: use is None or is not None."
+rule:
+  any:
+    - pattern: $A == None
+    - pattern: None == $A
+    - pattern: $A != None
+    - pattern: None != $A

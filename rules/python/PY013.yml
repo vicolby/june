@@ -1,0 +1,7 @@
+id: PY013
+language: python
+severity: error
+message: "Bare except catches every exception, including KeyboardInterrupt and SystemExit. Fix: name the exception type to catch, or use except Exception."
+rule:
+  kind: except_clause
+  regex: '^except\s*:'

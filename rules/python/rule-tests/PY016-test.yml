@@ -1,0 +1,14 @@
+id: PY016
+valid:
+  - "assert x"
+  - "assert x, 'msg'"
+  - "assert (x)"
+  - "assert (x), 'msg'"
+  - "assert x, (1, 2)"
+  - "assert ()"
+  - "t = (x, 'msg')"
+invalid:
+  - "assert (x, 'msg')"
+  - "assert (x,)"
+  - "assert (x, 'msg'), 'other'"
+  - "assert (\n    x,\n    'msg',\n)"

@@ -1,0 +1,16 @@
+id: PY015
+language: python
+severity: error
+message: "Except block only passes, which silently swallows the exception. Fix: handle the exception, log it, or re-raise it."
+rule:
+  kind: except_clause
+  has:
+    kind: block
+    has:
+      kind: pass_statement
+    not:
+      has:
+        not:
+          any:
+            - kind: pass_statement
+            - kind: comment

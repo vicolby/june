@@ -98,11 +98,14 @@ Output is text by default and carries no ANSI. Rendering escapes control charact
 
 The current build supports `june --version`, `june verify [--rules DIR]...`, `june [--legacy] [--rules DIR]... [--base REF]` and `june [--legacy] [--rules DIR]... --changed-lines FILE`; `-` reads the list from stdin.
 An unstamped `june --version` prints `june dev`.
-With ast-grep on PATH, run the shipped Python rule and its sidecar examples from the repository root:
+With ast-grep on PATH, run the shipped Python fundamentals and their sidecar examples from the repository root:
 
 ```sh
 go run ./cmd/june --rules rules/python --changed-lines changed.txt
 ```
+
+`rules/python` holds the shipped fundamentals, an opt-in directory a repo adopts by pointing `--rules` at it or copying it to `.june/rules`: PY012 mutable default argument, PY013 bare `except`, PY014 comparison to `None` with `==` or `!=`, PY015 `except` block that only passes, PY016 `assert` on a tuple.
+Each is an error with a corrective message and its own valid and invalid examples.
 
 The list contains one `path:7` or `path:7-12` entry per line, with one-based, inclusive line ranges and paths relative to the working directory.
 Blank lines are ignored; whitespace in filenames is preserved, and only `.py` files are checked.

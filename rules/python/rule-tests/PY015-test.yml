@@ -1,0 +1,15 @@
+id: PY015
+valid:
+  - "try:\n    f()\nexcept ValueError:\n    log()"
+  - "try:\n    f()\nexcept ValueError:\n    raise"
+  - "try:\n    f()\nexcept ValueError:\n    pass\n    log()"
+  - "try:\n    f()\nexcept ValueError:\n    log()\n    pass"
+  - "def f():\n    pass"
+  - "if x:\n    pass"
+invalid:
+  - "try:\n    f()\nexcept ValueError:\n    pass"
+  - "try:\n    f()\nexcept:\n    pass"
+  - "try:\n    f()\nexcept ValueError as e:\n    pass"
+  - "try:\n    f()\nexcept ValueError:\n    # ignored on purpose\n    pass"
+  - "try:\n    f()\nexcept ValueError: pass"
+  - "try:\n    f()\nexcept* ValueError:\n    pass"
