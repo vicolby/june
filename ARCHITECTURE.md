@@ -130,6 +130,127 @@ june --rules shared --rules .june/rules   # shared rules layered under repo rule
 june verify                   # rule author: every example behaves, or refused
 ```
 
+## Version 2: review (planned)
+
+Nothing in this section is built.
+It describes `june review`, the advisory LLM review of taste and design rules from VISION.md.
+It adds a fifth module and leaves every statement about `check`, `rules` and `diag` above unchanged.
+
+```
+cmd/june -> check  -> rules   (Load, Scan)
+                   -> diag    (Render)
+         -> review -> check   (Scope)
+                   -> diag    (Render)
+```
+
+Layout: `internal/review`.
+
+### review
+
+`review` is a deep module.
+It decides one review: which touched hunks go to the model, what the model says about them under the user's rule file, and which of that survives as a finding.
+
+```go
+func Change(ctx context.Context, env Env, req Request) (Result, error)
+
+type Request struct {
+	Rules   string      // path to the rule file, any format the reviewer reads; required
+	Paths   []string    // narrows only
+	Base    string      // as in check.Request
+	Changed io.Reader   // as in check.Request
+	Model   string      // closed set: anthropic | openai | claude | codex
+	Format  diag.Format // "" = inferred
+}
+type Result struct{ Exit int; Out []byte; Files []diag.File; Diags []diag.Diagnostic }
+```
+
+`Env` is the one `check` defines, so credentials come from `Env.Vars` and nothing reads ambient state.
+
+Invariants:
+- Exit is 0 or 2, never 1. A finding, however many, never changes Exit.
+- Findings are advisory. They are never errors and never fail or block a build.
+- `june review` never runs as part of a bare `june`, and `check` never imports `review`.
+- A finding is kept only if the model anchors it on a touched line of a touched file; any other claim is dropped.
+- Context around a hunk may be sent to the model, but only touched lines can carry a finding, the same rule `check` applies.
+- The rule file is read from the supplied path and is never fetched, cloned, discovered or cached. A missing, empty or unreadable file is Exit 2.
+- Model output that does not parse into findings is Exit 2 with the cause, never a silent zero findings.
+- A review that cannot run (no credential, adapter failure, cancelled context, touched set unknowable) is Exit 2 with `june: error: <cause>. Fix: <instruction>`, never findings by omission.
+- Findings are sorted and carry no clock and no absolute path, but the model is not deterministic, so unlike `check` the same input does not promise the same output.
+- The same request gives the same findings only under the replay adapter.
+
+Order: touched set, then read the rule file, then build one prompt per touched file, then the model adapter, then drop findings off the touched lines, then render.
+
+It hides: prompt construction, hunk and context selection, size limits and batching, response parsing, retries and timeouts, and which provider answered.
+
+### Scope reuse
+
+`review` does not find touched lines itself.
+`check` exposes the touched-set logic as one function, `check.Scope(ctx, env, Scope) (Touched, error)`, and `check.Change` and `review.Change` both call it.
+`Request.Base` and `Request.Changed` keep the meaning and the inference table from `check`, so a review judges the same lines the check judges in a dev shell, pre-commit, GitHub Actions and GitLab CI.
+An unknowable touched set is Exit 2, never every line.
+Scope inference is hidden once, in `check`.
+
+### Model adapter seam
+
+The model is a real seam inside `review`, with these adapters:
+- **anthropic**, API token, from `ANTHROPIC_API_KEY` in `Env.Vars`.
+- **openai**, API token, from `OPENAI_API_KEY` in `Env.Vars`.
+- **claude**, the Claude command-line tool, run locally as a child process.
+- **codex**, the Codex command-line tool, run locally as a child process.
+- **replay**, a recorded response keyed by the prompt, used by tests only and not reachable from `Model`.
+
+The interface is one call: a prompt in, text out, with a context that cancels it.
+`Request.Model` picks the adapter through a closed switch, and an unknown value is Exit 2.
+There is no adapter registry and no plugin load, and a new provider is a release.
+The API adapters and the command-line adapters are real adapters that differ in where the credential and the network live, so the seam passes the two-real-adapters rule with room to spare.
+A cancelled context kills the child process and abandons the request.
+
+### Rule files
+
+The user supplies one path, `--rules-file PATH`, to a file in any format the reviewer reads, such as Markdown prose, a skill file or plain text.
+The file may live anywhere: in the repo, in a checked-out shared repo, or in a CI artifact.
+`review` passes its text to the model unparsed, so it owns no rule schema and no rule ids, and a finding names the rule in the model's words.
+This is not `rules`: those are ast-grep rules with examples that june verifies, and a review rule file has no examples and no verification.
+A guideline a tool can decide still belongs in `rules`, and the review file holds judgment, taste and design only.
+
+### Findings and diag
+
+Findings leave through `diag`, with one new `Kind`, `Review`, beside the existing kinds.
+A review diagnostic has the touched file and line, the code `REVIEW`, a warning-level severity that never maps to an exit code, and a message that names the rule the model cited and the corrective instruction.
+Text output reads like a check finding and carries no ANSI.
+`diag` keeps rendering GitHub and GitLab formats from the same `Diagnostic`, so a CI shows review findings as annotations or Code Quality entries beside the check's.
+A summary line names the model adapter and the number of findings, and a review that checked nothing says so.
+The `# june: ignore[...]` opt-out names a loaded `rules` id and does not apply to review findings.
+
+### Local and CI
+
+- Locally, any adapter works, and the command-line adapters reuse the login the tool already has.
+- In CI, credentials come only from the job's environment through `Env.Vars`, never from a flag or a file, and june never prints one.
+- The command-line adapters in CI need the tool installed and logged in on the runner; june assumes neither.
+- The API adapters need the network, and june says so in the Exit 2 cause when a call fails.
+- Whether a command-line adapter uses the network is the tool's affair, and june does not assume it is offline.
+- None of this touches `june`: a bare `june` run has no model and no network in every environment.
+- A CI job that wants the review never to stop the pipeline can run it as an allowed-to-fail step, since Exit 2 means june could not review and not that a finding landed.
+
+### Seams and tests
+
+- **Model, real, internal to `review`:** four real adapters plus replay, chosen by a closed switch.
+- **Touched lines, shared:** the seam stays in `check`, and `review` crosses `check.Scope`.
+- **Output format, shared:** `diag` is unchanged except for the `Review` kind.
+- `review.Change` runs scenarios on temp trees with the replay adapter and real git, comparing golden `Out`.
+- Scenarios cover a finding on a touched line, a finding the model puts on an untouched line and is dropped, malformed model output, a missing credential, and an unknown `Model`.
+- One scenario runs under a dev-shell, GitHub and GitLab environment and asserts the same findings.
+- Recordings are committed fixtures, and tests never reach a model.
+- A smoke run per real adapter runs only when its credential or tool is present, and never in the default test run.
+
+### House rules in version 2
+
+- `review` earns its place by the deletion test: prompts, parsing, drop-off-touched-lines and the adapter seam vanish into nothing without it.
+- The model seam has two real adapters or more, and replay is the test adapter.
+- No registry or plugin load: the adapter and provider are a closed switch and a release.
+- The rule file is a path the user supplies, never a marketplace, a fetch or a registry.
+- The check path stays free of a model, a network and a clock.
+
 ## Release
 
 Distribution is Homebrew only: `brew install vicolby/tap/june`.

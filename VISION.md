@@ -2,12 +2,13 @@
 
 june exists so that code-guideline rules a tool can decide are decided by a tool, never by an LLM's judgment.
 It serves teams whose AI agents write code against shared guideline skills, and it turns each checkable rule into a deterministic CI and pre-commit failure that an agent fixes the way it fixes a ruff or mypy error.
-It owns exactly one thing: deterministic enforcement of guideline rules on the lines a change touches.
+It owns deterministic enforcement of guideline rules on the lines a change touches.
+Version 2 adds an advisory LLM review of the taste and design guidelines no tool can decide.
 
 ## The skill holds only what a tool cannot check
 Every rule that can be decided from a single file's syntax tree belongs in june, and the skill keeps only judgment, taste, and design guidance.
 A rule is never maintained twice, once as prose and once as code.
-june never reads guideline prose and never judges what a rule means.
+The check never reads guideline prose and never judges what a rule means.
 A rule that needs the import graph or any cross-file knowledge stays in the skill or in the tool built for it.
 
 ## Existing code never excuses a new violation
@@ -30,16 +31,29 @@ In each CI it also reports findings in that CI's native format, beside the plain
 The same input gives the same verdict on every run, with no network and no model.
 
 ## Rules are written once by a model and verified by examples
-An LLM drafts a rule from guideline prose at authoring time, and june itself never calls a model.
+An LLM drafts a rule from guideline prose at authoring time, and the check never calls a model.
 Every rule ships with passing and failing examples, and june refuses a rule whose examples do not behave.
 Rules are ast-grep rules, and june owns them directly, never as configuration for another linter.
 
+## Taste and design rules get an advisory LLM review
+Version 2 adds `june review`, a separate command that asks a model whether the lines a change touches follow the taste and design rules no tool can decide.
+The user supplies the rule file by path, from any source.
+It runs locally and in CI, with the Anthropic API or the OpenAI API through an API token, or through the Claude or Codex command-line tool run locally.
+The review is opt-in and never part of a bare `june` run.
+Its findings are advisory only: they never set exit 1 and never block a build, like `--legacy`.
+A review finding never replaces a deterministic rule, and a rule a tool can decide stays in june.
+Every v1 guarantee holds on the check path.
+The deterministic check never calls a model, has no network and gives the same verdict on every run.
+
 ## Scope
-june is not a linter engine, not a replacement for ruff or mypy, not a rule marketplace, and not an LLM reviewer.
+june is not a linter engine, not a replacement for ruff or mypy, and not a rule marketplace.
+The check path has no model.
+In version 2 the LLM review is a separate command, and its findings never decide a verdict.
 Version 1 checks Python only.
 It ships through Homebrew, with the bundled rules and ast-grep as a dependency. There is no pip package and no container image.
 june finds the touched lines itself from git against the target branch, and also accepts a list of changed lines from the CI job or the pre-commit hook.
-Reviewing the guidelines no tool can check, and reporting per-guideline coverage, belong to a later version.
+Reviewing the guidelines no tool can check belongs to version 2.
+Reporting per-guideline coverage belongs to a later version.
 
-A change aligns when it makes a tool-decidable rule more exact, easier for an agent to act on, or cheaper to adopt on legacy code.
-A change should be resisted when it puts a model call on the check path, fails lines the change did not touch, rewrites code on the agent's behalf, or adds a second rule engine or a rule registry.
+A change aligns when it makes a tool-decidable rule more exact, easier for an agent to act on, or cheaper to adopt on legacy code, or when it makes the advisory review more useful to an agent without letting it decide a verdict.
+A change should be resisted when it puts a model call on the check path, fails lines the change did not touch, rewrites code on the agent's behalf, makes a review finding fail or block a build, runs the review as part of a bare `june`, or adds a second rule engine or a rule registry.
