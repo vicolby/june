@@ -53,6 +53,38 @@ func against(t *testing.T, env check.Env, base string) check.Result {
 
 const old = "def f(a=[]): pass\n"
 
+func TestGitScopeDoesNotReadUnrelatedBinaryPatchContent(t *testing.T) {
+	for _, extension := range []string{"bin", "py.bin"} {
+		t.Run(extension, func(t *testing.T) {
+			asset := "model." + extension
+			body := "import os\nimport sys\nx = 1\ny = 2\n" + old
+			env := repo(t, map[string]string{asset: "\x00" + strings.Repeat("a", 1<<20), "old.txt": body})
+			write(t, filepath.Join(env.Dir, asset), "\x00"+strings.Repeat("b", 1<<20))
+			if err := os.Rename(filepath.Join(env.Dir, "old.txt"), filepath.Join(env.Dir, "new.py")); err != nil {
+				t.Fatal(err)
+			}
+			for _, state := range []string{"unstaged", "staged", "committed"} {
+				if state == "staged" {
+					git(t, env.Dir, "add", "-A")
+				}
+				if state == "committed" {
+					git(t, env.Dir, "commit", "-q", "-m", "move with binary update")
+				}
+				if err := os.Chmod(filepath.Join(env.Dir, asset), 0); err != nil {
+					t.Fatal(err)
+				}
+				expect(t, against(t, env, "main"), 0, "")
+				write(t, filepath.Join(env.Dir, "new.py"), body+"def g(b={}): pass\n")
+				expect(t, against(t, env, "main"), 1, "new.py:6:9: "+py012)
+				write(t, filepath.Join(env.Dir, "new.py"), body)
+				if err := os.Chmod(filepath.Join(env.Dir, asset), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestGitScopeNormalizesIndexFlagsWithoutChangingCallerIndex(t *testing.T) {
 	for _, flag := range []string{"core.ignorestat", "assume-unchanged", "skip-worktree"} {
 		t.Run(flag, func(t *testing.T) {
