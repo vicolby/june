@@ -51,7 +51,7 @@ brews:
     description: Deterministic enforcement of code-guideline rules on the lines a change touches
     license: ""
     dependencies:
-      - ast-grep
+      - name: ast-grep
     install: |
       bin.install "june"
       (share/"june").install "rules"
