@@ -94,6 +94,43 @@ func TestRulesFlag(t *testing.T) {
 	}
 }
 
+func TestRulesFlagRepeats(t *testing.T) {
+	env := project(t)
+	shared := filepath.Join(env.Dir, "shared")
+	if err := os.MkdirAll(filepath.Join(shared, "rule-tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rule := "id: LST01\nlanguage: python\nseverity: error\nmessage: No lists.\nrule:\n  kind: list\n"
+	examples := "id: LST01\nvalid:\n  - \"x = (1,)\"\ninvalid:\n  - \"x = [1]\"\n"
+	for name, body := range map[string]string{"LST01.yml": rule, "rule-tests/LST01-test.yml": examples} {
+		if err := os.WriteFile(filepath.Join(shared, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(env.Dir, "app.py"), []byte("x = [1]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	args := []string{"--rules", ".june/rules", "--rules", "shared", "--changed-lines", "-"}
+	code := run(context.Background(), args, strings.NewReader("app.py:1\n"), &out, &errOut, env)
+	want := "app.py:1:5: LST01 No lists.\njune: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 1 changed line\n"
+	if code != 1 || out.String() != want {
+		t.Errorf("exit = %d, stdout = %q, want 1 and %q", code, out.String(), want)
+	}
+
+	out.Reset()
+	code = run(context.Background(), []string{"verify", "--rules", ".june/rules", "--rules", "shared"}, nil, &out, &errOut, env)
+	if code != 0 || out.String() != "june: verified 2 rules, 21 examples\n" {
+		t.Errorf("verify exit = %d, stdout = %q", code, out.String())
+	}
+
+	out.Reset()
+	code = run(context.Background(), []string{"--rules", "shared", "--rules", "shared/../shared", "--rules", ".june/rules", "--rules", "shared", "--changed-lines", "-"}, strings.NewReader("app.py:1\n"), &out, &errOut, env)
+	if code != 1 || out.String() != want {
+		t.Errorf("repeated dir: exit = %d, stdout = %q, want 1 and %q", code, out.String(), want)
+	}
+}
+
 func TestBadListExitsTwo(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := run(context.Background(), []string{"--changed-lines", "-"}, strings.NewReader("app.py\n"), &out, &errOut, project(t))

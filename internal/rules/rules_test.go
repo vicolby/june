@@ -505,3 +505,43 @@ w = []  # june: ignore[	LST01	] why
 	}
 	t.Error("an ast-grep-ignore comment suppressed a match")
 }
+
+func TestLoadMergesDirectories(t *testing.T) {
+	other := t.TempDir()
+	if err := os.Mkdir(filepath.Join(other, "rule-tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(other, "T01.yml"), "id: T01\nlanguage: python\nseverity: error\nmessage: No dicts.\nrule:\n  kind: dictionary\n")
+	write(t, filepath.Join(other, "rule-tests", "T01-test.yml"), "id: T01\nvalid:\n  - \"x = 1\"\ninvalid:\n  - \"x = {}\"\n")
+	rs, faults := rules.Load(context.Background(), fixture("good"), other)
+	if rs == nil || len(faults) != 0 {
+		t.Fatalf("Load = %v, %v, want a rule set", rs, faults)
+	}
+	if rs.Rules() != 2 || rs.Examples() != 4 {
+		t.Errorf("Rules, Examples = %d, %d, want 2, 4", rs.Rules(), rs.Examples())
+	}
+}
+
+func TestLoadDuplicateIDAcrossDirectoriesNamesBothPlaces(t *testing.T) {
+	_, faults := rules.Load(context.Background(), fixture("good"), fixture("good"))
+	if len(faults) != 1 {
+		t.Fatalf("faults = %v, want 1", faults)
+	}
+	f := faults[0]
+	if f.Dir != 1 || f.Path != "LST01.yml" || f.Also == nil || *f.Also != (rules.Place{Dir: 0, Path: "LST01.yml"}) || !strings.Contains(f.Cause, "duplicated") {
+		t.Errorf("fault = %+v, want dir 1 LST01.yml duplicated with Also dir 0 LST01.yml", f)
+	}
+}
+
+func TestLoadReportsEveryBadDirectory(t *testing.T) {
+	_, faults := rules.Load(context.Background(), fixture("missing"), fixture("good"), fixture("empty"))
+	if len(faults) != 2 || faults[0].Dir != 0 || faults[1].Dir != 2 {
+		t.Fatalf("faults = %+v, want one each for dirs 0 and 2", faults)
+	}
+}
+
+func TestLoadWithoutDirectoriesIsAFault(t *testing.T) {
+	if rs, faults := rules.Load(context.Background()); rs != nil || len(faults) != 1 {
+		t.Fatalf("Load = %v, %v, want one fault", rs, faults)
+	}
+}

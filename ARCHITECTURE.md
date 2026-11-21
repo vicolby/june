@@ -24,14 +24,14 @@ It decides one change: which lines are touched, which findings land on them, whi
 
 ```go
 func Change(ctx context.Context, env Env, req Request) (Result, error)
-func Rules(ctx context.Context, env Env, dir string) (Result, error)
+func Rules(ctx context.Context, env Env, dirs []string) (Result, error)
 
 type Env struct{ Dir string; Vars map[string]string } // os.Environ snapshot; nothing reads ambient state
 type Request struct {
 	Paths   []string  // narrows only
 	Base    string    // git ref; "" = inferred
 	Changed io.Reader // supplied list, one "path:7" or "path:7-12" per line; replaces git
-	Rules   string    // "" = ./.june/rules
+	Rules   []string  // merged directories; none = ./.june/rules
 	Format  diag.Format // "" = inferred
 	Legacy  bool      // also list untouched-line violations, information only
 }
@@ -71,12 +71,13 @@ It hides: repo discovery, CI detection and the inference table, merge-base and s
 `rules` owns ast-grep rules and their examples.
 
 ```go
-func Load(ctx context.Context, dir string) (*RuleSet, []Fault) // faults non-empty means nil set, never a partial set
+func Load(ctx context.Context, dirs ...string) (*RuleSet, []Fault) // faults non-empty means nil set, never a partial set
 func (*RuleSet) Scan(ctx context.Context, files []string) (Scanned, error)
 ```
 
 A `*RuleSet` exists only if every example behaved, including a rule whose severity is off, so an unverified rule cannot produce a verdict.
-Faults: unparseable rule, empty message, failing example, zero rules.
+Faults: unparseable rule, empty message, failing example, zero rules, a rule id defined in two files.
+A fault names the directory it concerns, and a duplicate id names both files.
 Scan reads only the given files, anchors each match at its first line, and reports comments so `check` never learns a comment marker.
 
 It hides: the location of the ast-grep binary (bundled first, then PATH), the invocation, zero-based to one-based lines, the rule schema, the sidecar example file `rule-tests/<id>-test.yml` with `valid:` and `invalid:` (ast-grep rejects unknown keys inside a rule), and the `.py` filter.
@@ -95,7 +96,7 @@ Output is text by default and carries no ANSI. Rendering escapes control charact
 
 ## cmd/june
 
-The current build supports `june --version`, `june verify [--rules DIR]` and `june [--rules DIR] --changed-lines FILE`; `-` reads the list from stdin.
+The current build supports `june --version`, `june verify [--rules DIR]...` and `june [--rules DIR]... --changed-lines FILE`; `-` reads the list from stdin.
 An unstamped `june --version` prints `june dev`.
 With ast-grep on PATH, run the shipped Python rule and its sidecar examples from the repository root:
 
@@ -117,6 +118,7 @@ It maps flags to a `Request`, snapshots the environment, writes `Out` and `Files
 june                          # identical in a dev shell, pre-commit, GitHub Actions and GitLab CI
 june --base main --legacy
 june --changed-lines FILE     # "-" reads stdin
+june --rules shared --rules .june/rules   # shared rules layered under repo rules
 june verify                   # rule author: every example behaves, or refused
 ```
 
@@ -149,7 +151,12 @@ june verify                   # rule author: every example behaves, or refused
 Each is reversible and lives here until changed.
 - A finding is judged on its first line.
 - The opt-out syntax is as above.
-- The default rules directory is `./.june/rules`, overridable by flag; where shared rules live stays open.
+- The default rules directory is `./.june/rules`, used when no `--rules` is given.
+- `--rules` repeats, and the directories merge into one rule set, so a team can layer bundled, shared and repo-local rules.
+- Shared rules are supplied by directory path; june never fetches, clones or updates them, and CI checks them out.
+- A rule id defined in two files is a rule fault, exit 2 naming both files, whatever the directory order; the order never changes output.
+- A directory named twice counts once, after cleaning and symlink resolution, and an empty `--rules` value means the default directory.
+- Every missing or empty directory is reported, and one fault anywhere refuses the whole run.
 - One rule fault refuses the whole run.
 - A shallow clone or a push event with no base exits 2 with a named fix.
 - Legacy listing is off unless asked.
