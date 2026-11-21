@@ -87,12 +87,29 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, *string,
 			fmt.Fprintf(&entries, "%s %s 0\t%s%s\x00", mode, strings.TrimSpace(empty), prefix, name)
 		}
 	}
-	tracked, err := git(ctx, env, "", "ls-files", "--stage", "--full-name", "-z", "--", ":/")
+	tracked, err := git(ctx, env, "", "ls-files", "--stage", "-t", "-z", "--", ":/")
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, nil, ctx.Err()
 		}
 		return refuse("git could not list tracked files. Fix: run git status to see why")
+	}
+	var skipped strings.Builder
+	for _, record := range strings.Split(tracked, "\x00") {
+		if record == "" {
+			continue
+		}
+		metadata, name, _ := strings.Cut(record[2:], "\t")
+		fmt.Fprintf(&entries, "%s\t%s\x00", metadata, path.Join(prefix, name))
+		if record[0] != 'S' {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(env.Dir, filepath.FromSlash(name))); os.IsNotExist(err) {
+			skipped.WriteString(name)
+			skipped.WriteByte(0)
+		} else if err != nil {
+			return refuse("sparse file %q cannot be inspected. Fix: check its permissions and run june again", name)
+		}
 	}
 	dir, err := os.MkdirTemp("", "june-git-")
 	if err != nil {
@@ -105,11 +122,19 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, *string,
 	}
 	vars["GIT_INDEX_FILE"] = filepath.Join(dir, "index")
 	env.Vars = vars
-	if _, err := git(ctx, env, tracked+entries.String(), "-c", "core.ignorestat=false", "update-index", "--no-split-index", "-z", "--index-info"); err != nil {
+	if _, err := git(ctx, env, entries.String(), "-c", "core.ignorestat=false", "update-index", "--no-split-index", "-z", "--index-info"); err != nil {
 		if ctx.Err() != nil {
 			return nil, nil, ctx.Err()
 		}
 		return refuse("a temporary git index cannot be prepared. Fix: run git status and check temporary directory permissions")
+	}
+	if skipped.Len() > 0 {
+		if _, err := git(ctx, env, skipped.String(), "-c", "core.ignorestat=false", "update-index", "--no-split-index", "--skip-worktree", "-z", "--stdin"); err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
+			return refuse("a temporary git index cannot be prepared. Fix: run git status and check temporary directory permissions")
+		}
 	}
 
 	// -M forces rename detection whatever diff.renames says, so a pure rename shows no hunk.
@@ -133,9 +158,9 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, *string,
 		if path.Ext(destination) != ".py" || !strings.HasPrefix(destination, prefix) {
 			continue
 		}
-		paths = append(paths, ":(top,literal)"+source)
+		paths = append(paths, exactPathspec(source))
 		if destination != source {
-			paths = append(paths, ":(top,literal)"+destination)
+			paths = append(paths, exactPathspec(destination))
 		}
 	}
 	if len(paths) == 0 {
@@ -176,6 +201,18 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, *string,
 		return nil, nil, err
 	}
 	return set, nil, nil
+}
+
+func exactPathspec(name string) string {
+	var pattern strings.Builder
+	pattern.WriteString(":(top,glob)")
+	for i := 0; i < len(name); i++ {
+		if name[i] != '/' {
+			pattern.WriteByte('\\')
+		}
+		pattern.WriteByte(name[i])
+	}
+	return pattern.String()
 }
 
 // git runs git in env.Dir and returns its standard output.
