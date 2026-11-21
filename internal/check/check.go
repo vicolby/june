@@ -30,7 +30,7 @@ type Request struct {
 	// Rules lists the rules directories, merged into one set; empty means ./.june/rules.
 	// A directory named twice counts once, and a rule id defined in two files is a rule fault.
 	Rules []string
-	// Format is the output format; "" means text.
+	// Format is the output format; "" is inferred: GitHub under GitHub Actions, else text.
 	Format diag.Format
 	// Legacy also lists rule matches on untouched lines of the checked files, as information only.
 	// They never change Exit; off by default.
@@ -56,6 +56,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
+	req.Format = formatFor(env, req)
 	touched, sc, bad, err := findTouched(ctx, env, req)
 	if err != nil {
 		return Result{}, err
@@ -167,14 +168,16 @@ func Rules(ctx context.Context, env Env, dirs []string) (Result, error) {
 	if env.Dir == "" {
 		return Result{}, errors.New("check: Env.Dir is empty")
 	}
-	rs, refusal, err := load(ctx, env, dirs, Request{})
+	req := Request{}
+	req.Format = formatFor(env, req)
+	rs, refusal, err := load(ctx, env, dirs, req)
 	if refusal != nil {
 		return *refusal, nil
 	}
 	if err != nil {
 		return Result{}, err
 	}
-	return render(Request{}, 0, nil, fmt.Sprintf("june: verified %s, %s", count(rs.Rules(), "rule"), count(rs.Examples(), "example"))), nil
+	return render(req, 0, nil, fmt.Sprintf("june: verified %s, %s", count(rs.Rules(), "rule"), count(rs.Examples(), "example"))), nil
 }
 
 // load verifies the rules in dirs. A rule fault comes back as a refusal.
@@ -231,6 +234,17 @@ func count(n int, noun string) string {
 		return "1 " + noun
 	}
 	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+// formatFor is the requested format, else the native one of the CI that env says it runs in.
+func formatFor(env Env, req Request) diag.Format {
+	if req.Format != "" {
+		return req.Format
+	}
+	if onGitHub(env) {
+		return diag.GitHub
+	}
+	return diag.Text
 }
 
 // findTouched picks the touched-line adapter: the supplied list, else git against Base or an inferred base.

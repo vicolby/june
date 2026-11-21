@@ -37,6 +37,8 @@ type Format string
 
 const (
 	Text Format = "text"
+	// GitHub is the plain text followed by one GitHub Actions workflow command per diagnostic.
+	GitHub Format = "github"
 )
 
 type Diagnostic struct {
@@ -55,7 +57,8 @@ type File struct {
 }
 
 // Render returns sorted plain-text diagnostics, followed by summary when it is not empty.
-// f is reserved for future formats. The output carries no ANSI.
+// The text is the same for every format; a format adds its native report before it, and the
+// closed switch below is the only place a format is chosen. The output carries no ANSI.
 func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File) {
 	sorted := append([]Diagnostic(nil), ds...)
 	sort.SliceStable(sorted, func(i, j int) bool { return less(sorted[i], sorted[j]) })
@@ -74,7 +77,47 @@ func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File
 	if summary != "" {
 		fmt.Fprintf(&b, "%s\n", escapeControls(summary))
 	}
-	return b.Bytes(), nil
+	switch f {
+	case GitHub:
+		// Commands lead so the text still ends with the summary line, as it does everywhere.
+		var a bytes.Buffer
+		for _, d := range sorted {
+			a.WriteString(annotation(d))
+		}
+		return append(a.Bytes(), b.Bytes()...), nil
+	default: // Text, and "" before a caller has chosen one.
+		return b.Bytes(), nil
+	}
+}
+
+// annotation is a GitHub Actions workflow command for d, ending in a newline.
+// A failure has no location, so it is annotated without a file.
+// Legacy matches and opt-outs are information, so they are notices.
+func annotation(d Diagnostic) string {
+	level := "notice"
+	switch {
+	case d.Kind == Failure:
+		level = "error"
+	case d.Kind == Finding && d.Sev == Error:
+		level = "error"
+	case d.Kind == Finding:
+		level = "warning"
+	}
+	if d.Kind == Failure {
+		return fmt.Sprintf("::%s title=june::%s\n", level, commandData(d.Msg))
+	}
+	return fmt.Sprintf("::%s file=%s,line=%d,col=%d,title=%s::%s\n", level,
+		commandProperty(d.File), d.Line, d.Col, commandProperty(d.Code), commandData(d.Msg))
+}
+
+// commandData escapes a workflow command message after control characters are made visible.
+func commandData(s string) string {
+	return strings.ReplaceAll(escapeControls(s), "%", "%25")
+}
+
+// commandProperty also escapes the characters that separate properties.
+func commandProperty(s string) string {
+	return strings.NewReplacer(":", "%3A", ",", "%2C").Replace(commandData(s))
 }
 
 func escapeControls(text string) string {

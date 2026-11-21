@@ -20,11 +20,30 @@ const (
 	sourceFlag     = "--base"
 	sourceUpstream = "upstream branch"
 	sourceDefault  = "remote default branch"
+	sourcePull     = "pull request base"
 )
+
+// onGitHub reports whether env is a GitHub Actions run.
+func onGitHub(env Env) bool { return env.Vars["GITHUB_ACTIONS"] == "true" }
+
+// pullRequestBase is the remote-tracking ref of the branch a GitHub pull request targets.
+// actions/checkout fetches it with fetch-depth: 0. It is "" outside a pull request event.
+func pullRequestBase(env Env) string {
+	if !onGitHub(env) {
+		return ""
+	}
+	switch env.Vars["GITHUB_EVENT_NAME"] {
+	case "pull_request", "pull_request_target":
+		if ref := env.Vars["GITHUB_BASE_REF"]; ref != "" {
+			return "origin/" + ref
+		}
+	}
+	return ""
+}
 
 // gitTouched finds the lines added or edited since the merge base of base and HEAD:
 // committed changes, staged and unstaged changes, and untracked files.
-// An empty base is inferred: the upstream branch of HEAD, else the remote default branch.
+// An empty base is inferred: a GitHub pull request base, else the upstream branch of HEAD, else the remote default branch.
 // Paths are relative to env.Dir. The returned message is a complete "<cause>. Fix: <instruction>" refusal.
 // A cancelled context returns its error.
 func gitTouched(ctx context.Context, env Env, base string) (touchedSet, scope, *string, error) {
@@ -51,6 +70,10 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, scope, *
 		if err := ctx.Err(); err != nil {
 			return nil, scope{}, nil, err
 		}
+		if inferred == "" && onGitHub(env) {
+			event := env.Vars["GITHUB_EVENT_NAME"]
+			return refuse("a %s event has no pull request base, so the touched lines cannot be found. Fix: pass --base REF (for example --base origin/main) with fetch-depth: 0 on actions/checkout, or run june on pull_request", event)
+		}
 		if inferred == "" {
 			return refuse("no base branch can be inferred because the current branch has no upstream and the repository has no remote default branch. Fix: pass --base REF, or --changed-lines FILE")
 		}
@@ -60,6 +83,9 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, scope, *
 	if _, err := git(ctx, env, "", "rev-parse", "--verify", "--quiet", base+"^{commit}"); err != nil {
 		if ctx.Err() != nil {
 			return nil, scope{}, nil, ctx.Err()
+		}
+		if sc.source == sourcePull {
+			return refuse("the base %q is not a commit in this repository. Fix: set fetch-depth: 0 on actions/checkout so the pull request base is fetched, or pass an existing branch, tag or commit to --base", base)
 		}
 		return refuse("the base %q is not a commit in this repository. Fix: fetch it, or pass an existing branch, tag or commit to --base", base)
 	}
@@ -235,9 +261,12 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, scope, *
 	return set, sc, nil, nil
 }
 
-// inferBase picks the base of a bare run: the upstream branch of HEAD, else the default branch of origin.
+// inferBase picks the base of a bare run: a GitHub pull request base, else the upstream branch of HEAD, else the default branch of origin.
 // It returns "" when neither exists. Both are local reads; nothing is fetched.
 func inferBase(ctx context.Context, env Env) (base, source string) {
+	if pr := pullRequestBase(env); pr != "" {
+		return pr, sourcePull
+	}
 	if out, err := git(ctx, env, "", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); err == nil {
 		if name := strings.TrimSpace(out); name != "" {
 			return name, sourceUpstream

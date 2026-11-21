@@ -109,3 +109,51 @@ func TestRenderLegacyIsLabelledAndSortsAfterFindings(t *testing.T) {
 		t.Errorf("out =\n%s\nwant\n%s", out, want)
 	}
 }
+
+func TestGitHubAnnotatesBesideTheSameText(t *testing.T) {
+	ds := []diag.Diagnostic{
+		{Kind: diag.Finding, File: "a.py", Line: 3, Col: 5, Code: "PY012", Sev: diag.Error, Msg: "bad"},
+		{Kind: diag.Finding, File: "a.py", Line: 4, Col: 1, Code: "PY013", Sev: diag.Warning, Msg: "meh"},
+		{Kind: diag.OptOut, File: "a.py", Line: 5, Col: 1, Code: "PY012", Sev: diag.Warning, Msg: "opt-out: why"},
+		{Kind: diag.Legacy, File: "a.py", Line: 1, Col: 1, Code: "PY012", Sev: diag.Warning, Msg: "old"},
+	}
+	text, _ := diag.Render(ds, "june: sum", diag.Text)
+	out, files := diag.Render(ds, "june: sum", diag.GitHub)
+	if !strings.HasSuffix(string(out), string(text)) {
+		t.Errorf("GitHub out does not end with the plain text:\n%s\nvs\n%s", out, text)
+	}
+	want := "::notice file=a.py,line=5,col=1,title=PY012::opt-out: why\n" +
+		"::error file=a.py,line=3,col=5,title=PY012::bad\n" +
+		"::warning file=a.py,line=4,col=1,title=PY013::meh\n" +
+		"::notice file=a.py,line=1,col=1,title=PY012::old\n"
+	if got := string(out[:len(out)-len(text)]); got != want {
+		t.Errorf("annotations =\n%s\nwant\n%s", got, want)
+	}
+	if len(files) != 0 {
+		t.Errorf("files = %v, want none", files)
+	}
+}
+
+func TestGitHubFailureAnnotatesWithoutAFile(t *testing.T) {
+	ds := []diag.Diagnostic{{Kind: diag.Failure, Msg: "cannot. Fix: do"}}
+	out, _ := diag.Render(ds, "", diag.GitHub)
+	want := "::error title=june::cannot. Fix: do\njune: error: cannot. Fix: do\n"
+	if string(out) != want {
+		t.Errorf("out = %q, want %q", out, want)
+	}
+}
+
+func TestGitHubEscapesWorkflowCommandSyntax(t *testing.T) {
+	ds := []diag.Diagnostic{{Kind: diag.Finding, File: "a,b:c%d.py", Line: 1, Col: 1, Code: "PY012", Sev: diag.Error, Msg: "100% ::x\r\nline\x1b[0m"}}
+	out, _ := diag.Render(ds, "", diag.GitHub)
+	got := string(out)
+	annotation, _, _ := strings.Cut(got, "\n")
+	annotation += "\n"
+	want := "::error file=a%2Cb%3Ac%25d.py,line=1,col=1,title=PY012::100%25 ::x\\r\\nline\\x1b[0m\n"
+	if annotation != want {
+		t.Errorf("annotation = %q, want %q", annotation, want)
+	}
+	if strings.Count(annotation, "\n") != 1 {
+		t.Errorf("annotation spans several lines: %q", annotation)
+	}
+}

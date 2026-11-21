@@ -22,6 +22,28 @@ june --rules "$(brew --prefix)/share/june/rules/python" --changed-lines changed.
 
 To adopt them in a repo, copy `$(brew --prefix)/share/june/rules/python` to `.june/rules`, the default rules directory.
 
+## GitHub Actions
+
+On a pull request june judges the lines changed since the pull request base and annotates each finding on the diff, beside the same plain text it prints everywhere.
+It needs the base branch in the checkout, so fetch the full history:
+
+```yaml
+name: june
+on: pull_request
+
+jobs:
+  june:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: brew install vicolby/tap/june
+      - run: june --rules "$(brew --prefix)/share/june/rules/python"
+```
+
+On a `push` event there is no pull request base, so june exits 2 and names the fix: pass `--base REF` (for example `--base origin/main`) with `fetch-depth: 0`, or run on `pull_request`.
+
 ## Releases
 
 Pushing a `v*` tag publishes a GitHub release and updates the formula in [vicolby/homebrew-tap](https://github.com/vicolby/homebrew-tap).
