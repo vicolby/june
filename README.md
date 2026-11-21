@@ -25,7 +25,7 @@ To adopt them in a repo, copy `$(brew --prefix)/share/june/rules/python` to `.ju
 ## GitHub Actions
 
 On a pull request june judges the lines changed since the pull request base and annotates each finding on the diff, beside the same plain text it prints everywhere.
-It needs the base branch in the checkout, so fetch the full history:
+It needs the base branch in the checkout, so fetch the full history. Ubuntu images install Homebrew at `/home/linuxbrew/.linuxbrew` and leave it off `PATH`, so add that `bin` directory before `brew install`. Later steps then call `brew` and `june` directly:
 
 ```yaml
 name: june
@@ -38,6 +38,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - run: echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
       - run: brew install vicolby/tap/june
       - run: june --rules "$(brew --prefix)/share/june/rules/python"
 ```
