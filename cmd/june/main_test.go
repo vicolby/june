@@ -319,3 +319,45 @@ func TestShippedFundamentals(t *testing.T) {
 		}
 	}
 }
+
+func TestGitLabJobWritesCodeQualityReportBesideTheSameText(t *testing.T) {
+	env := project(t)
+	env.Vars = map[string]string{"GITLAB_CI": "true"}
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"--changed-lines", "-"}, strings.NewReader("app.py:2-3\n"), &out, &errOut, env)
+	if code != 1 || out.String() != "app.py:2:9: "+py012+"june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 2 changed lines\n" || errOut.Len() != 0 {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+	report, err := os.ReadFile(filepath.Join(env.Dir, "gl-code-quality-report.json"))
+	if err != nil {
+		t.Fatalf("report not written: %v", err)
+	}
+	if !strings.Contains(string(report), `"check_name": "PY012"`) || !strings.Contains(string(report), `"severity": "major"`) {
+		t.Errorf("report = %s", report)
+	}
+}
+
+func TestDevShellWritesNoReport(t *testing.T) {
+	env := project(t)
+	var out, errOut bytes.Buffer
+	run(context.Background(), []string{"--changed-lines", "-"}, strings.NewReader("app.py:2-3\n"), &out, &errOut, env)
+	if _, err := os.Stat(filepath.Join(env.Dir, "gl-code-quality-report.json")); !os.IsNotExist(err) {
+		t.Errorf("a dev shell run wrote a report (stat err = %v)", err)
+	}
+}
+
+func TestUnwritableReportExitsTwoAndKeepsTheVerdictText(t *testing.T) {
+	env := project(t)
+	env.Vars = map[string]string{"GITLAB_CI": "true"}
+	if err := os.Mkdir(filepath.Join(env.Dir, "gl-code-quality-report.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"--changed-lines", "-"}, strings.NewReader("app.py:2-3\n"), &out, &errOut, env)
+	if code != 2 || !strings.HasPrefix(errOut.String(), "june: error: the report gl-code-quality-report.json cannot be written (") || !strings.Contains(errOut.String(), ". Fix: ") {
+		t.Errorf("exit = %d, stderr = %q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "PY012") {
+		t.Errorf("stdout = %q, want the findings still printed", out.String())
+	}
+}

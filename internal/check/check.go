@@ -56,6 +56,9 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
+	if req.Format == "" {
+		req.Format = inferFormat(env)
+	}
 	touched, sc, bad, err := findTouched(ctx, env, req)
 	if err != nil {
 		return Result{}, err
@@ -237,7 +240,13 @@ func count(n int, noun string) string {
 // The scope is zero for a supplied list. The touched set is never "every line": what cannot be known is refused.
 func findTouched(ctx context.Context, env Env, req Request) (touchedSet, scope, *string, error) {
 	if req.Changed == nil {
-		return gitTouched(ctx, env, req.Base)
+		if req.Base != "" {
+			return gitTouched(ctx, env, req.Base, sourceFlag)
+		}
+		if sha := env.Vars["CI_MERGE_REQUEST_DIFF_BASE_SHA"]; gitlab(env) && sha != "" {
+			return gitTouched(ctx, env, sha, sourceMR)
+		}
+		return gitTouched(ctx, env, "", "")
 	}
 	var touched touchedSet
 	var bad *string
@@ -257,7 +266,20 @@ func findTouched(ctx context.Context, env Env, req Request) (touchedSet, scope, 
 	return touched, scope{}, bad, nil
 }
 
+// gitlab reports whether the run is a GitLab CI job.
+func gitlab(env Env) bool { return env.Vars["GITLAB_CI"] == "true" }
+
+// inferFormat picks the output format of the CI the run is in; the plain text is the same everywhere.
+func inferFormat(env Env) diag.Format {
+	if gitlab(env) {
+		return diag.GitLab
+	}
+	return diag.Text
+}
+
+// refuse explains why there is no verdict. A refusal is text only: a report would read as a clean run.
 func refuse(req Request, msgs ...string) Result {
+	req.Format = diag.Text
 	ds := make([]diag.Diagnostic, len(msgs))
 	for i, m := range msgs {
 		ds[i] = diag.Diagnostic{Kind: diag.Failure, Sev: diag.Error, Msg: m}

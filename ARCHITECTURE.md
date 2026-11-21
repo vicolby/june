@@ -117,7 +117,10 @@ Coverage counts distinct touched Python files and changed lines, counting overla
 `--legacy` also lists matches on untouched lines of the checked files, one `legacy: file:line:col: CODE message` line each after the findings, and the summary gains `; 2 legacy violations listed`.
 Legacy lines never change the exit code, are off by default, and a valid opt-out on the untouched line hides its legacy line.
 `june verify` runs every example of every rule and prints `june: verified 5 rules, 135 examples` on success. Any fault exits 2, as it does for a normal run, and each fault is one line naming the rules directory, the rule file, or the sidecar, and, for a failing example, the example.
-CI base inference (pre-commit refs, pull and merge request bases, staged diffs) and CI-specific formats remain planned.
+In a GitLab CI job (`GITLAB_CI=true`) the format is inferred as GitLab, and `cmd/june` writes `Files` beside the text: `gl-code-quality-report.json` in the working directory, an empty array for a clean run and no file for a refusal.
+Findings are `major` for an error and `minor` for a warning, opt-outs are `info`, and legacy matches stay out; each fingerprint hashes file, rule, message and the ordinal among identical ones.
+A merge request pipeline (`CI_MERGE_REQUEST_DIFF_BASE_SHA` set) takes that sha as the base, after `--base` and before local inference, and names it `merge request diff base` in the summary; a clone too shallow to hold it exits 2 pointing at `GIT_DEPTH: 0`.
+Pre-commit refs, the GitHub pull request base, staged diffs and the GitHub format remain planned.
 
 `cmd/june` is a shell and owns no decision.
 It maps flags to a `Request`, snapshots the environment, writes `Out` and `Files`, and returns `Exit`.

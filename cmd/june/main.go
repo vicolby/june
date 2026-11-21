@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 
 	"github.com/vicolby/june/internal/check"
@@ -88,7 +89,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 
 	res, err := check.Change(ctx, env, req)
-	return finish(stdout, stderr, res, err)
+	return finish(env.Dir, stdout, stderr, res, err)
 }
 
 // verify is `june verify [--rules DIR]...`: every example of every rule behaves, or the run is refused.
@@ -104,7 +105,7 @@ func verify(ctx context.Context, args []string, stdout, stderr io.Writer, env ch
 		return usageError(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
 	}
 	res, err := check.Rules(ctx, env, rulesDirs)
-	return finish(stdout, stderr, res, err)
+	return finish(env.Dir, stdout, stderr, res, err)
 }
 
 // dirList is a repeatable directory flag that keeps the order given.
@@ -117,8 +118,8 @@ func (d *dirList) Set(v string) error {
 	return nil
 }
 
-// finish writes a verdict, or explains why there is none, and returns the exit code.
-func finish(stdout, stderr io.Writer, res check.Result, err error) int {
+// finish writes a verdict and its extra files under dir, or explains why there is none, and returns the exit code.
+func finish(dir string, stdout, stderr io.Writer, res check.Result, err error) int {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return fail(stderr, "june was interrupted before it reached a verdict. Fix: run june again and let it finish")
 	}
@@ -126,6 +127,12 @@ func finish(stdout, stderr io.Writer, res check.Result, err error) int {
 		return fail(stderr, fmt.Sprintf("%v. Fix: report this as a june bug", err))
 	}
 	_, _ = stdout.Write(res.Out) // Output write failures have no recovery path, as with fail.
+	for _, f := range res.Files {
+		// A report that cannot be written is no verdict for the CI that reads it, so it exits 2, whatever the findings were.
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(f.Path)), f.Data, 0o644); err != nil {
+			return fail(stderr, fmt.Sprintf("the report %s cannot be written (%v). Fix: make the working directory writable", f.Path, err))
+		}
+	}
 	return res.Exit
 }
 
