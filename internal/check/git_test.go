@@ -96,6 +96,31 @@ func TestGitScopeSparseFilesAreNotRenameSources(t *testing.T) {
 	}
 }
 
+func TestGitScopeAbsentSparseEditDoesNotHideCheckedOutFile(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": "x = 1\n", "keep/lib.py": "y = 1\n"})
+	write(t, filepath.Join(env.Dir, "app.py"), "x = 2\n")
+	write(t, filepath.Join(env.Dir, "keep", "lib.py"), "def g(b={}): pass\n")
+	commit(t, env)
+	git(t, env.Dir, "sparse-checkout", "init", "--no-cone")
+	git(t, env.Dir, "sparse-checkout", "set", "--no-cone", "/.june/", "/keep/")
+	if _, err := os.Lstat(filepath.Join(env.Dir, "app.py")); !os.IsNotExist(err) {
+		t.Fatalf("sparse file is not absent: %v", err)
+	}
+	indexPath := filepath.Join(env.Dir, ".git", "index")
+	before, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, against(t, env, "main"), 1, "keep/lib.py:1:9: "+py012)
+	if _, err := os.Lstat(filepath.Join(env.Dir, "app.py")); !os.IsNotExist(err) {
+		t.Fatalf("sparse file is no longer absent: %v", err)
+	}
+	after, err := os.ReadFile(indexPath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("git scope changed the sparse index: %v", err)
+	}
+}
+
 func TestGitScopeRenameSourceBecomesDirectory(t *testing.T) {
 	for _, source := range []string{"old.txt", "old[1]*?.txt", "旧.txt"} {
 		t.Run(source, func(t *testing.T) {

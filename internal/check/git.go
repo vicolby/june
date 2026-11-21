@@ -95,18 +95,21 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, *string,
 		return refuse("git could not list tracked files. Fix: run git status to see why")
 	}
 	var skipped strings.Builder
+	absent := map[string]bool{}
 	for _, record := range strings.Split(tracked, "\x00") {
 		if record == "" {
 			continue
 		}
 		metadata, name, _ := strings.Cut(record[2:], "\t")
-		fmt.Fprintf(&entries, "%s\t%s\x00", metadata, path.Join(prefix, name))
+		repoPath := path.Join(prefix, name)
+		fmt.Fprintf(&entries, "%s\t%s\x00", metadata, repoPath)
 		if record[0] != 'S' {
 			continue
 		}
 		if _, err := os.Lstat(filepath.Join(env.Dir, filepath.FromSlash(name))); os.IsNotExist(err) {
 			skipped.WriteString(name)
 			skipped.WriteByte(0)
+			absent[repoPath] = true
 		} else if err != nil {
 			return refuse("sparse file %q cannot be inspected. Fix: check its permissions and run june again", name)
 		}
@@ -183,6 +186,9 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, *string,
 		rel := strings.TrimPrefix(name, prefix)
 		abs := filepath.Join(env.Dir, filepath.FromSlash(rel))
 		info, err := os.Lstat(abs)
+		if os.IsNotExist(err) && absent[name] {
+			continue
+		}
 		if err != nil {
 			return refuse("changed file %q cannot be inspected. Fix: check its permissions and run june again", rel)
 		}
