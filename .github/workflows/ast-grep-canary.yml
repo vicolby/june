@@ -5,7 +5,6 @@ name: ast-grep canary
 on:
   schedule:
     - cron: "17 5 * * 1"
-  workflow_dispatch:
 
 permissions:
   contents: read
