@@ -67,6 +67,7 @@ type ruleSource struct{ id, text string }
 // RuleSet is a set of rules whose examples all behaved.
 type RuleSet struct {
 	bin      string
+	version  string
 	docs     []ruleSource
 	ids      map[string]bool
 	rules    int
@@ -75,6 +76,9 @@ type RuleSet struct {
 
 // Rules is the number of rules that were verified.
 func (rs *RuleSet) Rules() int { return rs.rules }
+
+// Version is the ast-grep version the set was verified with, such as "0.51.3".
+func (rs *RuleSet) Version() string { return rs.version }
 
 // Examples is the number of valid and invalid examples that were verified.
 func (rs *RuleSet) Examples() int { return rs.examples }
@@ -133,6 +137,13 @@ func Load(ctx context.Context, dirs ...string) (*RuleSet, []Fault) {
 	if err != nil {
 		return nil, []Fault{{Cause: "ast-grep was not found", Fix: astGrepFindFix}}
 	}
+	version, fault := versionFault(ctx, bin)
+	if fault != nil {
+		if err := ctx.Err(); err != nil {
+			fault = &Fault{Cause: "the ast-grep version check was cancelled", Fix: "run june again"}
+		}
+		return nil, []Fault{*fault}
+	}
 	if len(dirs) == 0 {
 		return nil, []Fault{{Cause: "no rules directory was given", Fix: "point --rules at a rules directory"}}
 	}
@@ -187,7 +198,7 @@ func Load(ctx context.Context, dirs ...string) (*RuleSet, []Fault) {
 		ids[e.id] = true
 		total += e.examples
 	}
-	return &RuleSet{bin: bin, docs: docs, ids: ids, rules: len(entries), examples: total}, nil
+	return &RuleSet{bin: bin, version: version, docs: docs, ids: ids, rules: len(entries), examples: total}, nil
 }
 
 // knownID reports the file that already owns id. Comparison is case-insensitive because staging uses the id as a filename.

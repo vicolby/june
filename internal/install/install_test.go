@@ -261,8 +261,12 @@ func TestInstallAstGrepOptIn(t *testing.T) {
 		t.Fatalf("install failed: %v\n%s", r.err, r.stderr)
 	}
 	got, err := os.ReadFile(log)
-	if err != nil || strings.TrimSpace(string(got)) != "install --global @ast-grep/cli" {
-		t.Errorf("npm calls = %q, %v", got, err)
+	pin, perr := os.ReadFile(filepath.Join("..", "..", ".ast-grep-version"))
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	if want := "install --global @ast-grep/cli@" + strings.TrimSpace(string(pin)); err != nil || strings.TrimSpace(string(got)) != want {
+		t.Errorf("npm calls = %q, %v, want %q", got, err, want)
 	}
 }
 

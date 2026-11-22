@@ -743,7 +743,8 @@ func TestScanErrorCarriesAstGrepReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := t.TempDir()
-	script := "#!/bin/sh\n[ \"$1\" = test ] && exec " + real + " \"$@\"\necho \"Error: boom at $PWD/rules\" >&2\necho 'second line' >&2\nexit 2\n"
+	// Load reads --version before any scan, so the double must answer it and still fail a scan.
+	script := "#!/bin/sh\n[ \"$1\" = test ] || [ \"$1\" = --version ] && exec " + real + " \"$@\"\necho \"Error: boom at $PWD/rules\" >&2\necho 'second line' >&2\nexit 2\n"
 	write(t, filepath.Join(bin, "ast-grep"), script)
 	if err := os.Chmod(filepath.Join(bin, "ast-grep"), 0o755); err != nil {
 		t.Fatal(err)

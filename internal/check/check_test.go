@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/vicolby/june/internal/check"
 	"github.com/vicolby/june/internal/diag"
+	"github.com/vicolby/june/internal/rules"
 )
 
 const py012 = "PY012 Mutable default argument. Fix: default the parameter to None and create the value inside the function.\n"
@@ -625,13 +627,23 @@ func TestSummaryCountsOptOutsOnTouchedLines(t *testing.T) {
 	}
 }
 
+// astGrepVersion is the version of the ast-grep on PATH, as june prints it.
+func astGrepVersion(t *testing.T) string {
+	t.Helper()
+	out, err := exec.CommandContext(context.Background(), "ast-grep", "--version").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimPrefix(strings.TrimSpace(string(out)), "ast-grep ")
+}
+
 func TestRulesVerifiesEveryExample(t *testing.T) {
 	env := tree(t, nil)
 	res, err := check.Rules(context.Background(), env, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "june: verified 5 rules, 135 examples\n"; res.Exit != 0 || string(res.Out) != want {
+	if want := "june: verified 5 rules, 135 examples with ast-grep " + astGrepVersion(t) + "\n"; res.Exit != 0 || string(res.Out) != want {
 		t.Errorf("Exit = %d, Out = %q, want 0 and %q", res.Exit, res.Out, want)
 	}
 }
@@ -844,7 +856,7 @@ func TestRulesRepeatedSameDirectoryCountsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "june: verified 5 rules, 135 examples\n"; verified.Exit != 0 || string(verified.Out) != want {
+	if want := "june: verified 5 rules, 135 examples with ast-grep " + astGrepVersion(t) + "\n"; verified.Exit != 0 || string(verified.Out) != want {
 		t.Errorf("Exit = %d, Out = %q, want 0 and %q", verified.Exit, verified.Out, want)
 	}
 }
@@ -856,7 +868,7 @@ func TestRulesCountsSumAcrossDirectories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "june: verified 6 rules, 137 examples\n"; res.Exit != 0 || string(res.Out) != want {
+	if want := "june: verified 6 rules, 137 examples with ast-grep " + astGrepVersion(t) + "\n"; res.Exit != 0 || string(res.Out) != want {
 		t.Errorf("Exit = %d, Out = %q, want 0 and %q", res.Exit, res.Out, want)
 	}
 }
@@ -992,5 +1004,54 @@ func TestLegacyDoesNotMaskRefusals(t *testing.T) {
 	res := changeLegacy(t, env, "app.py\n")
 	if res.Exit != 2 {
 		t.Errorf("Exit = %d, want 2", res.Exit)
+	}
+}
+
+// An ast-grep below the floor is refused by verify and by a run, with the same fix, before any scan.
+func TestOldASTGrepIsRefused(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\n"})
+	bin := t.TempDir()
+	script := filepath.Join(bin, "ast-grep")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'ast-grep 0.40.0'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	want := "june: error: .june/rules: ast-grep 0.40.0 is older than the oldest supported version " + rules.MinVersion +
+		". Fix: install ast-grep " + rules.PinnedVersion + " or newer, for example npm install --global @ast-grep/cli@" + rules.PinnedVersion + "\n"
+	verified, err := check.Rules(context.Background(), env, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := check.Change(context.Background(), env, check.Request{Changed: strings.NewReader("app.py:1\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, res := range map[string]check.Result{"verify": verified, "run": run} {
+		if res.Exit != 2 || string(res.Out) != want {
+			t.Errorf("%s: Exit = %d, Out = %q, want 2 and %q", name, res.Exit, res.Out, want)
+		}
+	}
+}
+
+func TestASTGrepDescription(t *testing.T) {
+	if got, want := check.ASTGrep(context.Background()), "ast-grep "+astGrepVersion(t); got != want {
+		t.Errorf("ASTGrep = %q, want %q", got, want)
+	}
+	for name, tt := range map[string]struct{ script, want string }{
+		"old":     {"echo 'ast-grep 0.40.0'", "ast-grep 0.40.0 (unsupported: june needs " + rules.MinVersion + " or newer)"},
+		"garbage": {"echo hi", `ast-grep version unreadable (ast-grep --version printed "hi")`},
+	} {
+		bin := t.TempDir()
+		if err := os.WriteFile(filepath.Join(bin, "ast-grep"), []byte("#!/bin/sh\n"+tt.script+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", bin)
+		if got := check.ASTGrep(context.Background()); got != tt.want {
+			t.Errorf("%s: ASTGrep = %q, want %q", name, got, tt.want)
+		}
+	}
+	t.Setenv("PATH", t.TempDir())
+	if got, want := check.ASTGrep(context.Background()), "ast-grep not found on PATH"; got != want {
+		t.Errorf("missing: ASTGrep = %q, want %q", got, want)
 	}
 }

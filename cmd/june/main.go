@@ -67,7 +67,7 @@ flags:
   --ignore-whitespace   do not count a line whose only change is whitespace as touched (git diff -w)
   --legacy              also list violations on untouched lines, information only
   --rules DIR           rules directory, repeatable (default ./.june/rules)
-  --version             print the version
+  --version             print the june and ast-grep versions
   --help, -h            print this help
 
 exit codes:
@@ -101,7 +101,11 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return usageError(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
 	}
 	if *showVersion {
-		fmt.Fprintf(stdout, "june %s\n", version)
+		line := check.ASTGrep(ctx)
+		if err := ctx.Err(); err != nil {
+			return finish(env.Dir, stdout, stderr, check.Result{}, err)
+		}
+		fmt.Fprintf(stdout, "june %s\n%s\n", version, line)
 		return 0
 	}
 
