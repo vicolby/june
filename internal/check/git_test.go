@@ -223,31 +223,37 @@ func TestGitScopeReconstructedIndexReadsWorktree(t *testing.T) {
 
 func TestGitScopeBinaryTransitions(t *testing.T) {
 	lateNUL := strings.Repeat("# padding\n", 900) + "\x00" + old
+	nul := skippedText("app.py", "it contains NUL bytes")
 	for _, tc := range []struct {
 		name   string
 		before string
 		after  string
 		out    string
+		exit   int
 	}{
-		{name: "binary to text", before: "\x00\x01\n", after: old, out: "app.py:1:9: " + py012},
+		{name: "binary to text", before: "\x00\x01\n", after: old, out: "app.py:1:9: " + py012, exit: 1},
 		{name: "binary to empty", before: "\x00\x01\n", after: ""},
-		{name: "text to binary", before: "x = 1\n", after: "\x00" + old},
-		{name: "text to late binary", before: "x = 1\n", after: lateNUL},
-		{name: "late binary to text", before: lateNUL, after: old, out: "app.py:1:9: " + py012},
+		{name: "text to binary", before: "x = 1\n", after: "\x00" + old, out: nul},
+		{name: "text to late binary", before: "x = 1\n", after: lateNUL, out: nul},
+		{name: "late binary to text", before: lateNUL, after: old, out: "app.py:1:9: " + py012, exit: 1},
 		{name: "binary retains untouched violation", before: old + "x = '\x00'\n", after: old + "x = 'text'\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := repo(t, map[string]string{"app.py": tc.before})
 			write(t, filepath.Join(env.Dir, "app.py"), tc.after)
-			exit := 0
-			if tc.out != "" {
-				exit = 1
+			check := func() {
+				t.Helper()
+				res := against(t, env, "main")
+				expect(t, res, tc.exit, tc.out)
+				if strings.Contains(tc.out, "ENCODING") {
+					wantSkippedSummary(t, res, 1)
+				}
 			}
-			expect(t, against(t, env, "main"), exit, tc.out)
+			check()
 			git(t, env.Dir, "add", "app.py")
-			expect(t, against(t, env, "main"), exit, tc.out)
+			check()
 			git(t, env.Dir, "commit", "-q", "-m", "replace")
-			expect(t, against(t, env, "main"), exit, tc.out)
+			check()
 		})
 	}
 }
@@ -255,11 +261,30 @@ func TestGitScopeBinaryTransitions(t *testing.T) {
 func TestGitScopeNewBinaryWithLateNULIsSkipped(t *testing.T) {
 	env := repo(t, nil)
 	write(t, filepath.Join(env.Dir, "new.py"), strings.Repeat("# padding\n", 900)+"\x00"+old)
-	expect(t, against(t, env, "main"), 0, "")
+	want := skippedText("new.py", "it contains NUL bytes")
+	check := func() {
+		t.Helper()
+		res := against(t, env, "main")
+		expect(t, res, 0, want)
+		wantSkippedSummary(t, res, 1)
+	}
+	check()
 	git(t, env.Dir, "add", "new.py")
-	expect(t, against(t, env, "main"), 0, "")
+	check()
 	git(t, env.Dir, "commit", "-q", "-m", "add binary")
-	expect(t, against(t, env, "main"), 0, "")
+	check()
+}
+
+func TestGitNULFileIsNamedAndOtherFindingsStay(t *testing.T) {
+	env := repo(t, map[string]string{"ok.py": "x = 1\n"})
+	write(t, filepath.Join(env.Dir, "ok.py"), "x = 1\ndef g(b=[]): pass\n")
+	write(t, filepath.Join(env.Dir, "legacy.py"), "# coding: latin-1\nx = \"\xe9\x00\"\n")
+	res := against(t, env, "main")
+	expect(t, res, 1, skippedText("legacy.py", "it contains NUL bytes")+"ok.py:2:9: "+py012)
+	wantSkippedSummary(t, res, 1)
+	if !strings.Contains(summaryOf(res), "checked 1 file") {
+		t.Errorf("summary = %q, want the readable file counted", summaryOf(res))
+	}
 }
 
 func TestGitScopeBinaryToTextRenameJudgesOnlyEditedLines(t *testing.T) {
@@ -528,15 +553,24 @@ func TestRenamedAndEditedFileIsJudgedByItsNewPath(t *testing.T) {
 	expect(t, against(t, env, "main"), 1, want)
 }
 
-func TestBinaryAndNonPythonFilesAreSkipped(t *testing.T) {
+func TestBinaryPythonFilesWarnAndNonPythonFilesAreSkipped(t *testing.T) {
 	env := repo(t, map[string]string{"data.py": "\x00\x01", "notes.md": "a\n"})
 	write(t, filepath.Join(env.Dir, "data.py"), "\x00"+old)
 	write(t, filepath.Join(env.Dir, "notes.md"), old)
 	write(t, filepath.Join(env.Dir, "new.md"), old)
 	write(t, filepath.Join(env.Dir, "blob.py"), "\x00\x01"+old)
-	expect(t, against(t, env, "main"), 0, "")
+	want := skippedText("blob.py", "it contains NUL bytes") + skippedText("data.py", "it contains NUL bytes")
+	check := func() {
+		t.Helper()
+		res := against(t, env, "main")
+		expect(t, res, 0, want)
+		wantSkippedSummary(t, res, 2)
+	}
+	check()
+	git(t, env.Dir, "add", "-A")
+	check()
 	commit(t, env)
-	expect(t, against(t, env, "main"), 0, "")
+	check()
 }
 
 func TestPathsWithSpacesAndUnicode(t *testing.T) {
@@ -834,12 +868,29 @@ func TestOtherRevParseFailuresQuoteGitInsteadOfClaimingNoWorkTree(t *testing.T) 
 	}
 }
 
-func TestNonUTF8PythonFileIsNamedAndBlamesNeitherAstGrepNorTheScope(t *testing.T) {
+func TestNonUTF8PythonFilesAreTranscodedOrSkippedLoudly(t *testing.T) {
 	env := repo(t, map[string]string{"ok.py": "x = 1\n"})
-	write(t, filepath.Join(env.Dir, "pkg", "legacy.py"), "# -*- coding: latin-1 -*-\nx = '\xe9'\n")
+	write(t, filepath.Join(env.Dir, "ok.py"), "x = 1\ndef f(a=[]): pass\n")
+	write(t, filepath.Join(env.Dir, "pkg", "legacy.py"), "# -*- coding: latin-1 -*-\nx = '\xe9'\ndef g(a=[]): pass\n")
+	write(t, filepath.Join(env.Dir, "pkg", "broken.py"), "x = '\xe9'\n")
 	commit(t, env)
 	res := against(t, env, "main")
-	refused(t, res, "june: error: \"pkg/legacy.py\" is not UTF-8 text, so it cannot be scanned. Fix: save it as UTF-8 without NUL bytes and run june again\n")
+	out := string(res.Out)
+	for _, want := range []string{
+		"ok.py:2:",
+		"pkg/legacy.py:3:",
+		`pkg/broken.py:1:1: ENCODING file not scanned: it is not valid UTF-8 and declares no other encoding.`,
+		"1 warning,",
+		"; 1 file skipped, not readable as text;",
+		"checked 2 files",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("Out lacks %q:\n%s", want, out)
+		}
+	}
+	if res.Exit != 1 {
+		t.Errorf("Exit = %d, want 1 from the readable files", res.Exit)
+	}
 }
 
 func ignoringSpace(t *testing.T, env check.Env) check.Result {

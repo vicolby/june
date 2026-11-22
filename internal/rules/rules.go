@@ -92,6 +92,14 @@ type Match struct {
 type Scanned struct {
 	Matches []Match
 	OptOuts []OptOut
+	// Skipped lists the files that could not be read as text and so were not scanned, in the order given.
+	Skipped []Skipped
+}
+
+// Skipped is a Python file Scan left out. File is the path as given to Scan and Reason says why, without the path.
+type Skipped struct {
+	File   string
+	Reason string
 }
 
 // OptOut is one inline opt-out comment, including malformed attempts. Line and Col are one-based.
@@ -192,12 +200,6 @@ func knownID(places map[string]Place, id string) (Place, bool) {
 	return Place{}, false
 }
 
-// NotTextError reports a Python file that is not UTF-8 text, so ast-grep cannot read it.
-// File is the path as given to Scan.
-type NotTextError struct{ File string }
-
-func (e *NotTextError) Error() string { return "a Python file is not UTF-8 text" }
-
 // Scan runs the rules over the given files and keeps only Python files.
 // Files are slash-separated paths relative to root. Matches are anchored at their first line.
 // File is reported as given, and results come back in the order the files were given.
@@ -223,8 +225,9 @@ func (rs *RuleSet) Scan(ctx context.Context, root string, files []string) (Scann
 		return Scanned{}, errScanSetup
 	}
 
-	// Read and stage every file before ast-grep starts, so an unreadable one refuses the whole scan.
+	// Read and stage files before ast-grep starts, so a file I/O failure refuses the whole scan.
 	// A file that may hold a comment of interest is also staged in a tree of its own for the comment pass.
+	var out Scanned
 	var marked []int // indexes into py
 	sources := map[int][]byte{}
 	staged := make([]string, len(py)) // the path each file has under treeDir
@@ -237,8 +240,10 @@ func (rs *RuleSet) Scan(ctx context.Context, root string, files []string) (Scann
 		if err != nil {
 			return Scanned{}, errors.New("a Python file cannot be read")
 		}
-		if !utf8.Valid(source) || bytes.IndexByte(source, 0) >= 0 {
-			return Scanned{}, &NotTextError{File: f}
+		source, reason := toUTF8(source)
+		if reason != "" {
+			out.Skipped = append(out.Skipped, Skipped{File: f, Reason: reason})
+			continue
 		}
 		name, err := stageSource(filepath.Join(scratch, treeDir), f, i, source)
 		if err != nil {
@@ -254,7 +259,9 @@ func (rs *RuleSet) Scan(ctx context.Context, root string, files []string) (Scann
 		}
 	}
 
-	var out Scanned
+	if len(out.Skipped) == len(py) {
+		return out, nil // nothing was staged for ast-grep to scan
+	}
 	if len(marked) > 0 {
 		comments, err := rs.comments(ctx, scratch, byStaged)
 		if err != nil {

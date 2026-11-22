@@ -14,7 +14,7 @@ Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`, whic
 
 - `cmd/june` is a shell and owns no decision. It maps flags to a `check.Request`, snapshots the environment, writes the output and report files, and returns the exit code.
 - `check` is the deep module. It decides one change: which lines are touched, which findings land on them, which opt-outs apply, and the exit code. It hides repo discovery, CI detection and scope inference, merge-base and shallow-clone handling, diff parsing, the changed-lines list parser, opt-out matching and sorting.
-- `rules` owns ast-grep rules and their sidecar examples (`rule-tests/<id>-test.yml`). A rule set loads only if every example behaves, so an unverified rule never produces a verdict. It runs ast-grep and hides the invocation and the zero-based to one-based line shift.
+- `rules` owns ast-grep rules and their sidecar examples (`rule-tests/<id>-test.yml`). A rule set loads only if every example behaves, so an unverified rule never produces a verdict. It runs ast-grep and hides the invocation, source encodings, and the zero-based to one-based line shift.
 - `diag` is the one ruff-shaped vocabulary for findings, opt-outs, legacy matches, rule faults and june's own failures, and renders it as text, GitHub, GitLab, JSON or SARIF.
 
 ## Invariants
@@ -23,6 +23,7 @@ Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`, whic
 - Exit 2 means june could not give a verdict (no base, shallow clone, bad rules, missing ast-grep, bad list, unwritable report). Output reads `june: error: <cause>. Fix: <instruction>`.
 - A touched line is one added or edited in the post-image. With `--ignore-whitespace`, a line whose only change is whitespace (`git diff -w`) is not touched; a line with any other edit still is. Pure deletions, mode changes and pure renames touch nothing. A new file touches every line, including an untracked file in a local run.
 - A match is judged on its first line only, so rules match the smallest wrong node.
+- Source files follow the [source-encoding contract](README.md#source-encoding).
 - If the touched set is unknowable, the exit is 2, never 0 and never every line. A GitHub push with no base and no changed-lines list is unknowable even when the branch tracks its remote.
 - An opt-out is a same-line Python comment `# june: ignore[RULE_ID] <reason>` naming one loaded rule, with a nonblank reason. A comment starting with `june:` that does not parse suppresses nothing and says why. The same text in a string literal is not an opt-out.
 - Every opt-out on a touched line is printed, honoured or not.
@@ -42,5 +43,5 @@ Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`, whic
 
 - A module earns its place by the deletion test: if complexity vanishes without it, it is a pass-through.
 - A seam needs two real adapters. Touched lines (git and the supplied list) and output format are real seams; ast-grep and language are not.
-- Python knowledge stays in rule data.
+- Guideline-specific Python knowledge stays in rule data.
 - No registry or plugin load: extension is a closed switch and a release.

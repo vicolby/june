@@ -71,7 +71,31 @@ func change(t *testing.T, env check.Env, list string) check.Result {
 	return res
 }
 
-var summaryLine = regexp.MustCompile(`^june: \d+ errors?, \d+ warnings?, \d+ opt-outs?; checked \d+ files?, \d+ changed lines?(; base \S+ \([a-z -]+\))?\n$`)
+var summaryLine = regexp.MustCompile(`^june: \d+ errors?, \d+ warnings?, \d+ opt-outs?; checked \d+ files?, \d+ changed lines?(; \d+ files? skipped, not readable as text)?(; base \S+ \([a-z -]+\))?\n$`)
+
+// skippedText is the warning june prints when a Python file is left out of the scan.
+func skippedText(file, reason string) string {
+	return file + ":1:1: ENCODING file not scanned: " + reason + ". Fix: add a PEP 263 coding declaration for a supported encoding, or save it as UTF-8\n"
+}
+
+func wantSkippedSummary(t *testing.T, res check.Result, n int) {
+	t.Helper()
+	noun := "files"
+	warn := "warnings"
+	if n == 1 {
+		noun = "file"
+		warn = "warning"
+	}
+	sum := summaryOf(res)
+	for _, want := range []string{
+		fmt.Sprintf("%d %s skipped, not readable as text", n, noun),
+		fmt.Sprintf("%d %s,", n, warn),
+	} {
+		if !strings.Contains(sum, want) {
+			t.Errorf("summary = %q, want it to contain %q", sum, want)
+		}
+	}
+}
 
 // expect compares the findings in Out; the summary line has its own tests, so here it only has to close the output.
 func expect(t *testing.T, res check.Result, exit int, findings string) {
@@ -115,6 +139,31 @@ func TestRangeTouchesEveryLineInIt(t *testing.T) {
 func TestMatchOnUntouchedLineNeverFails(t *testing.T) {
 	env := tree(t, map[string]string{"app.py": "def f(a=[]):\n    pass\n\nx = 1\n"})
 	expect(t, change(t, env, "app.py:3-4\n"), 0, "")
+}
+
+// Python ends a physical line at CR, LF, or CRLF
+// (https://docs.python.org/3/reference/lexical_analysis.html#physical-lines).
+// CRLF still shares LF with the scanner, so the violation stays on that line.
+// A bare CR does not, and listing the Python line must name the file instead of passing clean.
+func TestCRLFKeepsPythonLineNumbers(t *testing.T) {
+	env := tree(t, map[string]string{
+		"latin.py": "# coding: latin-1\r\nx = '\xe9'\r\ndef f(a=[]): pass\r\n",
+		"utf.py":   "x = 1\r\ndef f(a=[]): pass\r\n",
+	})
+	expect(t, change(t, env, "latin.py:3\nutf.py:2\n"), 1, "latin.py:3:9: "+py012+"utf.py:2:9: "+py012)
+	expect(t, change(t, env, "latin.py:2\nutf.py:1\n"), 0, "")
+}
+
+func TestBareCarriageReturnIsSkippedNotShifted(t *testing.T) {
+	const reason = "it uses bare carriage returns as line endings"
+	env := tree(t, map[string]string{
+		"app.py": "# coding: latin-1\r# caf\xe9\r\ndef f(a=[]): pass\n",
+		"utf.py": "x = 1\rdef f(a=[]): pass\n",
+		"ok.py":  "def g(b=[]): pass\n",
+	})
+	res := change(t, env, "app.py:3\nutf.py:2\nok.py:1\n")
+	expect(t, res, 1, skippedText("app.py", reason)+"ok.py:1:9: "+py012+skippedText("utf.py", reason))
+	wantSkippedSummary(t, res, 2)
 }
 
 func TestMatchIsJudgedOnItsFirstLineOnly(t *testing.T) {
@@ -353,7 +402,15 @@ func TestFailureOutputHasNoAbsolutePaths(t *testing.T) {
 			case "reader":
 				req.Changed = iotest.ErrReader(&os.PathError{Op: "read", Path: filepath.Join(env.Dir, "changed.txt"), Err: os.ErrPermission})
 			case "scan":
-				write(t, filepath.Join(env.Dir, "app.py"), "# coding: latin-1\nx = '\xe9'\ndef f(a=[]): pass\n")
+				file := filepath.Join(env.Dir, "app.py")
+				if err := os.Chmod(file, 0); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := os.Chmod(file, 0o644); err != nil {
+						t.Error(err)
+					}
+				})
 			case "temporary directory":
 				t.Setenv("TMPDIR", filepath.Join(env.Dir, "missing"))
 			}
@@ -397,6 +454,18 @@ func TestWarningOnTouchedLinePrintsAndExitsZero(t *testing.T) {
 	res := change(t, env, "app.py:2\n")
 	expect(t, res, 0, "app.py:2:1: "+lst02)
 	if got, want := summaryOf(res), "june: 0 errors, 1 warning, 0 opt-outs; checked 1 file, 1 changed line"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+}
+
+func TestSkippedFileCountsAsAWarningAlongsideRuleWarnings(t *testing.T) {
+	env := withWarningRule(t, tree(t, map[string]string{
+		"app.py": "tmp = 2\n",
+		"bad.py": "x = '\xe9'\n",
+	}))
+	res := change(t, env, "app.py:1\nbad.py:1\n")
+	expect(t, res, 0, "app.py:1:1: "+lst02+skippedText("bad.py", "it is not valid UTF-8 and declares no other encoding"))
+	if got, want := summaryOf(res), "june: 0 errors, 2 warnings, 0 opt-outs; checked 1 file, 1 changed line; 1 file skipped, not readable as text"; got != want {
 		t.Errorf("summary = %q, want %q", got, want)
 	}
 }

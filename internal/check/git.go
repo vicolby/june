@@ -377,7 +377,6 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 			continue
 		}
 		rel := strings.TrimPrefix(name, prefix)
-		var content []byte
 		if post != nil {
 			blob, ok := post[name]
 			if !ok {
@@ -386,8 +385,12 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 			if !strings.HasPrefix(blob.mode, "100") {
 				continue
 			}
-			if content, ok = blobs[blob.sha]; !ok {
+			content, ok := blobs[blob.sha]
+			if !ok {
 				return refuse("changed file %q cannot be read. Fix: check its permissions and run june again", rel)
+			}
+			if err := writeScanFile(&scanDir, rel, content); err != nil {
+				return refuse("a temporary copy of %q cannot be created. Fix: check temporary directory permissions and run june again", rel)
 			}
 		} else {
 			abs := filepath.Join(env.Dir, filepath.FromSlash(rel))
@@ -401,17 +404,8 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 			if !info.Mode().IsRegular() {
 				continue
 			}
-			content, err = os.ReadFile(abs)
-			if err != nil {
+			if _, err = os.ReadFile(abs); err != nil {
 				return refuse("changed file %q cannot be read. Fix: check its permissions and run june again", rel)
-			}
-		}
-		if bytes.IndexByte(content, 0) >= 0 {
-			continue
-		}
-		if post != nil {
-			if err := writeScanFile(&scanDir, rel, content); err != nil {
-				return refuse("a temporary copy of %q cannot be created. Fix: check temporary directory permissions and run june again", rel)
 			}
 		}
 		set[rel] = parsed[name]
