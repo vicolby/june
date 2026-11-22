@@ -75,17 +75,17 @@ Unsupported declarations, invalid bytes for the selected encoding, a conflicting
 
 ### Coverage notes
 
-Notes and warnings never change the exit code.
+Notes and warnings never change the exit code. Coverage notes appear in the summary in every format; SARIF carries the summary as a `note` in `runs[].invocations[].toolExecutionNotifications`.
 
-- **Nothing checked.** When no changed `.py` file is found, the summary ends with `note: no changed Python files found`. If you expected some, check `--base` and the checkout (a `pull_request_target` checkout, say, has no diff).
-- **Paths left out.** A changed `.py` path that is a symlink or submodule is not read; the summary says `N changed .py paths skipped`.
-- **Syntax errors.** A touched line inside a region the parser could not read gets `file:line:col: PARSE ...` as a warning, because rules matched only what the parser recovered there. Fix the syntax error.
+- **Nothing checked.** When no changed `.py` file remains in scope, the summary includes `note: no changed Python files found`. If you expected some, check `--base` and the checkout (a `pull_request_target` checkout, say, has no diff).
+- **Paths left out.** In git-derived scope, changed `.py` paths that are symlinks or submodules are not read; the summary counts them as `N changed .py paths skipped, not regular files (symlink or submodule)`. A local run also counts changed paths absent from a sparse checkout as `N changed .py paths skipped, absent from sparse checkout`. Counts use `path` for a single skip. For unreadable text, see [Source encoding](#source-encoding).
+- **Syntax errors.** A touched line inside a region the parser could not read gets `file:line:col: PARSE ...` as a warning, at most once per file, because rules matched only what the parser recovered there. Fix the syntax error.
 
 ## Rules
 
 june ships no rules: write your own [ast-grep](https://ast-grep.github.io) rules and keep them in `.june/rules`, or pass `--rules DIR`. A run with neither stops with an error that says to supply rules. Only an error fails the check.
 
-Every rule has `valid` and `invalid` examples in `rule-tests/`. A normal run verifies the rules it loads first; run `june verify --rules DIR` in the CI of a repo that keeps its own rules.
+Every rule has `valid` and `invalid` examples in `rule-tests/`. A normal run verifies the rules it loads first; run `june verify --rules DIR` in the CI of a repo that keeps its own rules. The rule ID `june-parse-error` is reserved for the built-in syntax-error scan; user rules with that ID, ignoring case, are refused.
 
 A rule can scope itself with ast-grep's `files:` and `ignores:`, matched against the path relative to the working directory. If a file cannot be staged at its original path, a run using path-scoped rules exits 2. `june verify` refuses unsupported rule keys (such as `fix`, `note` or `url`), naming the key, and reports bad globs against the offending rule file.
 
@@ -205,6 +205,8 @@ Install june with Homebrew. The hook runs without filenames when Python files ar
 | `2` | No verdict: bad usage, bad rules directory, shallow clone, no base, missing, too-old, or unreadable `ast-grep`. Output: `june: error: <cause>. Fix: <instruction>`. |
 
 Warnings, `--legacy` lines and opt-outs never change the exit code.
+
+Unexpected internal errors include the issue URL and june version, and ask you to report the command you ran.
 
 ## More
 
