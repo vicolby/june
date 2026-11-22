@@ -46,8 +46,8 @@ changelog:
       - '^test:'
       - '^chore:'
 
-# `brews` is the only block that generates a Formula (homebrew_casks is macOS-only and cannot install
-# shared data or declare the ast-grep dependency). goreleaser check reports it as deprecated; GoReleaser
+# `brews` is the only block that generates a Formula (homebrew_casks is macOS-only and cannot
+# declare the ast-grep dependency). goreleaser check reports it as deprecated; GoReleaser
 # removes deprecated options only in a major version, and the release workflow pins v2.
 brews:
   - name: june
