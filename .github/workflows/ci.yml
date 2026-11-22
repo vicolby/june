@@ -11,8 +11,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
       - name: Install pinned ast-grep
@@ -25,8 +25,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
       - name: Install pinned golangci-lint
@@ -37,3 +37,34 @@ jobs:
         run: golangci-lint run ./...
       - name: Format check
         run: golangci-lint fmt --diff
+
+  # Builds the release archives without publishing and installs from them with install.sh, so a
+  # broken goreleaser config or installer fails here instead of on the first tag push.
+  release-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --clean
+      - name: Install from the snapshot archive with install.sh
+        run: |
+          set -eu
+          version=$(jq -r .version dist/metadata.json)
+          os=$(uname -s | tr '[:upper:]' '[:lower:]')
+          case "$(uname -m)" in x86_64) arch=amd64 ;; *) arch=arm64 ;; esac
+          base="$RUNNER_TEMP/releases"
+          mkdir -p "$base/download/v$version"
+          cp dist/*.tar.gz dist/checksums.txt "$base/download/v$version/"
+          JUNE_RELEASES_URL="file://$base" JUNE_VERSION="$version" \
+            JUNE_INSTALL_DIR="$RUNNER_TEMP/bin" JUNE_RULES_DIR="$RUNNER_TEMP/share/june/rules" \
+            sh install.sh
+          test "$("$RUNNER_TEMP/bin/june" --version)" = "june $version"
+          test -d "$RUNNER_TEMP/share/june/rules/python"

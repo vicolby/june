@@ -37,8 +37,15 @@ release:
   extra_files:
     - glob: install.sh
 
+# Release notes are generated from the commits since the previous tag.
 changelog:
-  disable: true
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
 
 # `brews` is the only block that generates a Formula (homebrew_casks is macOS-only and cannot install
 # shared data or declare the ast-grep dependency). goreleaser check reports it as deprecated; GoReleaser
