@@ -655,7 +655,7 @@ func readRule(dir, name string) (string, string, int, []Fault) {
 }
 
 // usedKeys are the rule keys june reads or lets ast-grep apply to the match, the message or the path.
-// Any other key (fix, note, url, labels, metadata, rewriters of a fix) would be dropped silently, so it is refused.
+// Any other key would be dropped silently, so it is refused.
 var usedKeys = []string{"id", "language", "message", "severity", "rule", "constraints", "utils", "transform", "rewriters", "files", "ignores"}
 
 // ruleKeys lists the top-level keys of a rule document.

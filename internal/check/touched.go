@@ -26,7 +26,7 @@ func (t touchedSet) has(file string, line int) bool {
 	return false
 }
 
-// pythonFiles lists the touched files that june reads, sorted.
+// pythonFiles includes excluded paths retained for summary counts, sorted.
 func (t touchedSet) pythonFiles() []string {
 	var files []string
 	for f := range t {

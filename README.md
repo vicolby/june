@@ -79,11 +79,11 @@ june ships no rules: write your own [ast-grep](https://ast-grep.github.io) rules
 
 Every rule has `valid` and `invalid` examples in `rule-tests/`. A normal run verifies the rules it loads first; run `june verify --rules DIR` in the CI of a repo that keeps its own rules.
 
-A rule can scope itself with ast-grep's `files:` and `ignores:`, matched against the path relative to the working directory. `june verify` refuses a rule with a key june does not use (such as `fix`, `note` or `url`) or a bad glob, and names the key.
+A rule can scope itself with ast-grep's `files:` and `ignores:`, matched against the path relative to the working directory. If a file cannot be staged at its original path, a run using path-scoped rules exits 2. `june verify` refuses unsupported rule keys (such as `fix`, `note` or `url`), naming the key, and reports bad globs against the offending rule file.
 
 ### Excluding paths
 
-Generated code, vendored trees and fixtures cannot take line opt-outs. Exclude them by path, in `.june/config.yml` or with `--exclude`:
+Exclude generated code, vendored trees and fixtures by path, in `.june/config.yml` or with `--exclude`:
 
 ```yaml
 exclude:
@@ -92,9 +92,9 @@ exclude:
   - migrations/**
 ```
 
-Globs are relative to the working directory: `*` stays within one path segment, `**` spans directories, a glob that matches a directory excludes everything under it, and whitespace in a glob is literal. An unknown key in the config is an error.
+Globs are relative to the working directory: `*` stays within one path segment, `**` spans directories, a glob that matches a directory excludes everything under it, and whitespace in a glob is literal. The only config key is `exclude`, a list of globs; unknown or repeated keys, extra YAML documents and invalid globs are errors.
 
-Exclusion applies after discovery: excluded files are not scanned or counted as checked, and the summary reports how many were excluded. Git still reads them to compute the diff, so unreadable excluded files can refuse the run. Python paths in `--changed-lines` must exist even when excluded.
+Exclusion applies during discovery, before file-existence checks or reading excluded worktree contents. Excluded files are not scanned or counted as checked, and the summary reports how many were excluded. Unreadable excluded worktree files do not refuse the run. Excluded Python paths in `--changed-lines` need not exist, but list entries must still use valid `path:7` or `path:7-12` syntax.
 
 ### Opt-outs
 

@@ -19,7 +19,7 @@ Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`, whic
 
 ## Invariants
 
-- Paths matching `--exclude` or `exclude:` in `.june/config.yml` are dropped after discovery and before any scan, so excluded files are never scanned or counted as checked. Git still reads excluded paths to compute the diff, so unreadable excluded files can refuse the run. Python paths in `--changed-lines` must exist even when excluded.
+- Path exclusions follow the [exclusion contract](README.md#excluding-paths).
 - Exit 1 if and only if an error-severity match is anchored on a touched line with no valid opt-out. Warnings, legacy matches and opt-outs never change the exit code.
 - Exit 2 means june could not give a verdict (no base, shallow clone, bad rules, missing ast-grep, bad list, unwritable report). Output reads `june: error: <cause>. Fix: <instruction>`.
 - A touched line is one added or edited in the post-image. With `--ignore-whitespace`, a line whose only change is whitespace (`git diff -w`) is not touched; a line with any other edit still is. Pure deletions, mode changes and pure renames touch nothing. A new file touches every line, including an untracked file in a local run.
