@@ -86,7 +86,7 @@ type File struct {
 
 // Render returns sorted diagnostics in f and carries no ANSI.
 // Text is plain text followed by summary when it is not empty. GitHub prepends one workflow command per diagnostic to that text.
-// GitLab returns that text and a Code Quality file. JSON and SARIF return one document and no text; SARIF omits summary.
+// GitLab returns that text and a Code Quality file. JSON and SARIF return one document and no text.
 // The closed switch below is the only place a format is chosen.
 func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File) {
 	sorted := append([]Diagnostic(nil), ds...)
@@ -110,7 +110,7 @@ func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File
 	case JSON:
 		return jsonReport(sorted, summary), nil
 	case SARIF:
-		return sarifReport(sorted), nil
+		return sarifReport(sorted, summary), nil
 	case GitHub:
 		// Commands lead so the text still ends with the summary line, as the plain text does.
 		var a bytes.Buffer

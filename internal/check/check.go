@@ -229,6 +229,9 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	if sc.notRegular > 0 {
 		sum += "; " + count(sc.notRegular, "changed .py path") + " skipped, not regular files (symlink or submodule)"
 	}
+	if sc.notPresent > 0 {
+		sum += "; " + count(sc.notPresent, "changed .py path") + " skipped, absent from sparse checkout"
+	}
 	if len(files) == 0 {
 		sum += "; note: no changed Python files found - june reads .py files only, not .pyi or scripts without an extension - so if some were expected, check --base and the checkout"
 	}
