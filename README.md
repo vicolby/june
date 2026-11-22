@@ -166,7 +166,7 @@ Warnings, `--legacy` lines and opt-outs never change the exit code.
 ## More
 
 - [VISION.md](VISION.md): purpose, scope, and the planned advisory LLM review (not built).
-- [ARCHITECTURE.md](ARCHITECTURE.md): modules, guarantees, design.
+- [ARCHITECTURE.md](ARCHITECTURE.md): module map and invariants.
 - [SECURITY.md](SECURITY.md): how to report a vulnerability.
 
 ## License
