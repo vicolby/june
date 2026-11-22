@@ -16,7 +16,7 @@ const MinVersion = "0.51.1"
 // PinnedVersion is the ast-grep that install.sh and the docs recommend; it is also the version in .ast-grep-version.
 const PinnedVersion = "0.51.3"
 
-var versionLine = regexp.MustCompile(`^ast-grep (\d+)\.(\d+)\.(\d+)\S*$`)
+var versionLine = regexp.MustCompile(`^ast-grep (\d+)\.(\d+)\.(\d+)$`)
 
 // Version runs bin --version and returns the version, such as "0.51.3".
 func Version(ctx context.Context, bin string) (string, error) {
@@ -33,14 +33,17 @@ func Version(ctx context.Context, bin string) (string, error) {
 }
 
 // Supported reports whether version, as returned by Version, is at least MinVersion.
-// A pre-release or build suffix does not change the comparison.
 func Supported(version string) bool {
 	return compare(version, MinVersion) >= 0
 }
 
-// compare orders two dotted versions by their numeric core.
+// compare orders two X.Y.Z releases.
 func compare(a, b string) int {
-	x, y := core(a), core(b)
+	x, xok := core(a)
+	y, yok := core(b)
+	if !xok || !yok {
+		return -1
+	}
 	for i := range x {
 		if x[i] != y[i] {
 			if x[i] < y[i] {
@@ -52,17 +55,24 @@ func compare(a, b string) int {
 	return 0
 }
 
-func core(v string) [3]int {
+func core(v string) ([3]int, bool) {
 	var n [3]int
-	parts := strings.SplitN(v, ".", 3)
-	for i := 0; i < len(parts) && i < 3; i++ {
-		digits := parts[i]
-		if j := strings.IndexFunc(digits, func(r rune) bool { return r < '0' || r > '9' }); j >= 0 {
-			digits = digits[:j]
-		}
-		n[i], _ = strconv.Atoi(digits)
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 {
+		return n, false
 	}
-	return n
+	for i, part := range parts {
+		if part == "" {
+			return n, false
+		}
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				return n, false
+			}
+		}
+		n[i], _ = strconv.Atoi(part)
+	}
+	return n, true
 }
 
 // versionFault checks the ast-grep at bin and returns its version, or the fault that refuses it.

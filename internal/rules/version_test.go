@@ -35,8 +35,9 @@ func TestSupported(t *testing.T) {
 		{"0.51.10", true},
 		{"0.52.0", true},
 		{"1.0.0", true},
-		{"0.51.1-rc.1", true},
+		{"0.51.1-rc.1", false},
 		{"0.51.0-rc.1", false},
+		{"0.52.0-rc.1", false},
 	}
 	for _, tt := range tests {
 		if got := rules.Supported(tt.version); got != tt.want {
@@ -92,9 +93,10 @@ func TestLoadRefusesOldASTGrep(t *testing.T) {
 
 func TestLoadRefusesUnreadableVersion(t *testing.T) {
 	for name, script := range map[string]string{
-		"garbage": "echo 'something else'",
-		"empty":   "true",
-		"fails":   "exit 3",
+		"garbage":    "echo 'something else'",
+		"empty":      "true",
+		"fails":      "exit 3",
+		"prerelease": "echo 'ast-grep 0.51.1-rc.1'",
 	} {
 		t.Run(name, func(t *testing.T) {
 			fakeASTGrep(t, script)
