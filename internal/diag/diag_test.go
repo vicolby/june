@@ -421,6 +421,7 @@ func TestSARIFSummaryPreservesExecutionStatus(t *testing.T) {
 	}{
 		{"clean", nil, true},
 		{"finding", []diag.Diagnostic{{File: "a.py", Line: 1, Col: 1, Code: "X", Sev: diag.Error, Kind: diag.Finding, Msg: "bad"}}, true},
+		{"warning", []diag.Diagnostic{{Kind: diag.Failure, Sev: diag.Warning, Msg: "nothing judged"}}, true},
 		{"failure", []diag.Diagnostic{{Kind: diag.Failure, Msg: "cannot scan"}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

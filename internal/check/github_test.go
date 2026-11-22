@@ -404,7 +404,7 @@ func TestPullRequestExplicitBaseThatJudgesNothingWarns(t *testing.T) {
 				t.Fatalf("Exit = %d, Out =\n%s", res.Exit, res.Out)
 			}
 			inv := log.Runs[0].Invocations[0]
-			if !inv.ExecutionSuccessful || len(inv.ToolExecutionNotifications) != 1 || inv.ToolExecutionNotifications[0].Level != "warning" {
+			if !inv.ExecutionSuccessful || len(inv.ToolExecutionNotifications) != 2 || inv.ToolExecutionNotifications[0].Level != "warning" || inv.ToolExecutionNotifications[1].Level != "note" {
 				t.Errorf("invocation = %+v", inv)
 			}
 		})
@@ -429,7 +429,7 @@ func TestMergeGroupThatJudgesNothingPassesWithoutWarning(t *testing.T) {
 				if base == "" {
 					wantBase, source = sha, "merge group base"
 				}
-				want := "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; base " + wantBase + " (" + source + ")"
+				want := "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines" + noPython + "; base " + wantBase + " (" + source + ")"
 				if summaryOf(res) != want {
 					t.Errorf("summary = %q, want %q", summaryOf(res), want)
 				}
@@ -455,7 +455,7 @@ func TestPullRequestThatJudgesNothingWarns(t *testing.T) {
 	if want := "june: warning: this pull request judged 0 changed lines."; !strings.Contains(out, want) {
 		t.Errorf("Out =\n%s\nwant text %q", out, want)
 	}
-	if want := "june: 0 errors, 1 warning, 0 opt-outs; checked 0 files, 0 changed lines; base origin/main (pull request base)"; summaryOf(res) != want {
+	if want := "june: 0 errors, 1 warning, 0 opt-outs; checked 0 files, 0 changed lines" + noPython + "; base origin/main (pull request base)"; summaryOf(res) != want {
 		t.Errorf("summary = %q, want %q", summaryOf(res), want)
 	}
 }
