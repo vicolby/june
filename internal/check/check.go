@@ -88,24 +88,15 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		root = sc.scanDir
 	}
 	files := touched.pythonFiles()
-	abs := make([]string, len(files))
-	byAbs := make(map[string]string, len(files))
-	for i, f := range files {
-		abs[i] = filepath.Join(root, filepath.FromSlash(f))
-		byAbs[abs[i]] = f
-	}
-	scanned, err := rs.Scan(ctx, abs)
+	scanned, err := rs.Scan(ctx, root, files)
 	if err != nil {
 		if ctx.Err() != nil {
 			return Result{}, ctx.Err()
 		}
 		var notText *rules.NotTextError
 		if errors.As(err, &notText) {
-			name := notText.File
-			if rel, ok := byAbs[name]; ok {
-				name = rel
-			}
-			return refuse(req, fmt.Sprintf("%q is not UTF-8 text, so it cannot be scanned. Fix: save it as UTF-8 without NUL bytes and run june again", name)), nil
+			// Scan reports the slash-separated path it was given, already relative to the working directory.
+			return refuse(req, fmt.Sprintf("%q is not UTF-8 text, so it cannot be scanned. Fix: save it as UTF-8 without NUL bytes and run june again", notText.File)), nil
 		}
 		return refuse(req, "ast-grep failed while scanning ("+err.Error()+"). Fix: run ast-grep scan on the changed files to see why"), nil
 	}
@@ -123,10 +114,10 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	legacyOptOut := map[site]bool{} // valid opt-outs on untouched lines hide their legacy match, silently
 	var legacy int
 	for _, m := range scanned.Matches {
-		found[site{byAbs[m.File], m.Line, m.Rule}] = true
+		found[site{m.File, m.Line, m.Rule}] = true
 	}
 	for _, o := range scanned.OptOuts {
-		path := byAbs[o.File]
+		path := o.File
 		if !touched.has(path, o.Line) {
 			if o.Problem == "" {
 				legacyOptOut[site{path, o.Line, o.Rule}] = true
@@ -149,7 +140,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		optOutCount++
 	}
 	for _, m := range scanned.Matches {
-		path := byAbs[m.File]
+		path := m.File
 		if !touched.has(path, m.Line) {
 			if req.Legacy && !legacyOptOut[site{path, m.Line, m.Rule}] {
 				ds = append(ds, diag.Diagnostic{File: path, Line: m.Line, Col: m.Col, Code: m.Rule, Sev: diag.Warning, Kind: diag.Legacy, Msg: m.Msg})

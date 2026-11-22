@@ -1,14 +1,17 @@
 package check
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -192,94 +195,32 @@ func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, 
 		return refuse("git could not locate the working directory (%s). Fix: run git status to see why", gitCause(err))
 	}
 	prefix = strings.TrimSuffix(prefix, "\n")
+	// A local run (no staged diff, no ref range) judges the worktree, so it also sees untracked files,
+	// and a tracked file that is absent because of a sparse checkout.
+	local := !staged && toRef == ""
 	absent := map[string]bool{}
-	if !staged && toRef == "" {
-		untracked, err := git(ctx, env, "", "ls-files", "--others", "--exclude-standard", "-z", "--")
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, scope{}, nil, ctx.Err()
-			}
-			return refuse("git could not list untracked files (%v). Fix: run git status to see why", err)
+	if local {
+		fresh, bad, err := untrackedPython(ctx, env)
+		if bad != nil || err != nil {
+			return nil, scope{}, bad, err
 		}
-		var entries strings.Builder
-		if untracked != "" {
-			empty, err := git(ctx, env, "", "hash-object", "--stdin")
+		var flagged []string
+		if absent, flagged, bad, err = indexFlags(ctx, env, prefix); bad != nil || err != nil {
+			return nil, scope{}, bad, err
+		}
+		// The caller's index is read as it is, stat cache and all, unless it cannot show the worktree
+		// as it is: untracked files are not in it, and a flag on an entry can hide an edit from a diff.
+		if len(fresh) > 0 || len(flagged) > 0 {
+			dir, err := os.MkdirTemp("", "june-git-")
 			if err != nil {
-				if ctx.Err() != nil {
-					return nil, scope{}, nil, ctx.Err()
-				}
-				return refuse("git could not prepare untracked files (%s). Fix: run git status to see why", gitCause(err))
+				return refuse("a temporary git index cannot be created. Fix: check temporary directory permissions and run june again")
 			}
-			for _, name := range strings.Split(strings.TrimSuffix(untracked, "\x00"), "\x00") {
-				if path.Ext(name) != ".py" {
-					continue
-				}
-				info, err := os.Lstat(filepath.Join(env.Dir, filepath.FromSlash(name)))
-				if err != nil {
-					return refuse("untracked file %q cannot be inspected. Fix: check its permissions and run june again", name)
-				}
-				if !info.Mode().IsRegular() {
-					continue
-				}
-				mode := "100644"
-				if info.Mode().Perm()&0o111 != 0 {
-					mode = "100755"
-				}
-				fmt.Fprintf(&entries, "%s %s 0\t%s%s\x00", mode, strings.TrimSpace(empty), prefix, name)
+			defer func() { _ = os.RemoveAll(dir) }()
+			var bad *string
+			if env, bad, err = overlayIndex(ctx, env, dir, prefix, fresh, flagged); bad != nil || err != nil {
+				return nil, scope{}, bad, err
 			}
 		}
-		tracked, err := git(ctx, env, "", "ls-files", "--stage", "-t", "-z", "--", ":/")
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, scope{}, nil, ctx.Err()
-			}
-			return refuse("git could not list tracked files (%s). Fix: run git status to see why", gitCause(err))
-		}
-		var skipped strings.Builder
-		for _, record := range strings.Split(tracked, "\x00") {
-			if record == "" {
-				continue
-			}
-			metadata, name, _ := strings.Cut(record[2:], "\t")
-			repoPath := path.Join(prefix, name)
-			fmt.Fprintf(&entries, "%s\t%s\x00", metadata, repoPath)
-			if record[0] != 'S' {
-				continue
-			}
-			if _, err := os.Lstat(filepath.Join(env.Dir, filepath.FromSlash(name))); os.IsNotExist(err) {
-				skipped.WriteString(name)
-				skipped.WriteByte(0)
-				absent[repoPath] = true
-			} else if err != nil {
-				return refuse("sparse file %q cannot be inspected. Fix: check its permissions and run june again", name)
-			}
-		}
-		dir, err := os.MkdirTemp("", "june-git-")
-		if err != nil {
-			return refuse("a temporary git index cannot be created. Fix: check temporary directory permissions and run june again")
-		}
-		defer func() { _ = os.RemoveAll(dir) }()
-		vars := make(map[string]string, len(env.Vars)+1)
-		for k, v := range env.Vars {
-			vars[k] = v
-		}
-		vars["GIT_INDEX_FILE"] = filepath.Join(dir, "index")
-		env.Vars = vars
-		if _, err := git(ctx, env, entries.String(), "-c", "core.ignorestat=false", "update-index", "--no-split-index", "-z", "--index-info"); err != nil {
-			if ctx.Err() != nil {
-				return nil, scope{}, nil, ctx.Err()
-			}
-			return refuse("a temporary git index cannot be prepared (%s). Fix: run git status and check temporary directory permissions", gitCause(err))
-		}
-		if skipped.Len() > 0 {
-			if _, err := git(ctx, env, skipped.String(), "-c", "core.ignorestat=false", "update-index", "--no-split-index", "--skip-worktree", "-z", "--stdin"); err != nil {
-				if ctx.Err() != nil {
-					return nil, scope{}, nil, ctx.Err()
-				}
-				return refuse("a temporary git index cannot be prepared (%s). Fix: run git status and check temporary directory permissions", gitCause(err))
-			}
-		}
-
 	}
 	// -M forces rename detection whatever diff.renames says, so a pure rename shows no hunk.
 	// --no-textconv and --no-ext-diff keep the diff a pure function of the trees.
@@ -301,36 +242,81 @@ func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, 
 		}
 		return refuse("git could not diff against the merge base with %q (%v). Fix: run git diff %s to see why", sc.base, err, sc.base)
 	}
-	var paths []string
+	// The names are all the patch needs to be told. Each Python destination has one source that the
+	// full diff paired it with, or none; a patch limited to Python files can pair it otherwise,
+	// when its source is not Python or another file competes for it, so those are diffed as pairs below.
+	type origin struct {
+		from string // "" unless the file was renamed
+		pure bool   // renamed with no change of content
+	}
+	want := map[string]origin{}
 	for records := strings.Split(changes, "\x00"); len(records) >= 2; {
 		status, source := records[0], records[1]
 		records = records[2:]
 		destination := source
+		o := origin{}
 		if strings.HasPrefix(status, "R") {
 			destination = records[0]
 			records = records[1:]
+			o = origin{from: source, pure: status == "R100"}
 		}
-		if path.Ext(destination) != ".py" || !strings.HasPrefix(destination, prefix) {
-			continue
-		}
-		paths = append(paths, exactPathspec(source))
-		if destination != source {
-			paths = append(paths, exactPathspec(destination))
+		if path.Ext(destination) == ".py" && strings.HasPrefix(destination, prefix) {
+			want[destination] = o
 		}
 	}
-	if len(paths) == 0 {
-		return touchedSet{}, sc, nil, ctx.Err()
-	}
-	args := append(append([]string{"-c", "core.quotepath=off", "diff"}, cached...), "--text", "--no-relative", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "-M", "--unified=0", "--inter-hunk-context=0", strings.TrimSpace(mb))
-	args = append(append(args, tip...), "--")
-	patch, err := git(ctx, env, "", append(args, paths...)...)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, scope{}, nil, ctx.Err()
+	parsed := touchedSet{}
+	if len(want) > 0 {
+		// One patch for every Python file: its size does not depend on how many files changed.
+		args := append(append([]string{"-c", "core.quotepath=off", "diff"}, cached...), patchFlags...)
+		args = append(append(args, strings.TrimSpace(mb)), tip...)
+		patch, err := git(ctx, env, "", append(args, "--", pythonPathspec)...)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, scope{}, nil, ctx.Err()
+			}
+			return refuse("git could not diff against the merge base with %q (%v). Fix: run git diff %s to see why", sc.base, err, sc.base)
 		}
-		return refuse("git could not diff against the merge base with %q (%v). Fix: run git diff %s to see why", sc.base, err, sc.base)
+		parsed = parsePatch(patch)
+		got := renamedFrom(patch)
+		var redo []rename
+		for destination, o := range want {
+			if got[destination] == o.from {
+				continue
+			}
+			delete(parsed, destination)
+			if !o.pure { // a pure rename has no hunk to read
+				redo = append(redo, rename{o.from, destination})
+			}
+		}
+		sort.Slice(redo, func(i, j int) bool { return redo[i].to < redo[j].to })
+		for start := 0; start < len(redo); {
+			end, size := start, 0
+			for end < len(redo) && (end == start || size+redo[end].size() <= pathspecBudget) {
+				size += redo[end].size()
+				end++
+			}
+			var specs []string
+			for _, r := range redo[start:end] {
+				if r.from != "" {
+					specs = append(specs, exactPathspec(r.from))
+				}
+				specs = append(specs, exactPathspec(r.to))
+			}
+			patch, err := git(ctx, env, "", append(append(args, "--"), specs...)...)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil, scope{}, nil, ctx.Err()
+				}
+				return refuse("git could not diff against the merge base with %q (%v). Fix: run git diff %s to see why", sc.base, err, sc.base)
+			}
+			for destination, spans := range parsePatch(patch) {
+				if _, ok := want[destination]; ok {
+					parsed[destination] = spans
+				}
+			}
+			start = end
+		}
 	}
-	parsed := parsePatch(patch)
 	var post map[string]postBlob
 	if staged || toRef != "" {
 		rawArgs := append(append([]string{"diff"}, cached...), "--raw", "--abbrev=64", "--diff-filter=d", "-z", "--no-relative", "--no-color", "--no-ext-diff", "--no-textconv", "-M", strings.TrimSpace(mb))
@@ -342,6 +328,23 @@ func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, 
 			return refuse("git could not diff against the merge base with %q (%v). Fix: run git diff %s to see why", sc.base, err, sc.base)
 		}
 		post = parseRaw(raw)
+	}
+	var blobs map[string][]byte
+	if post != nil {
+		// One process reads every post-image blob, however many files changed.
+		var shas []string
+		for _, name := range parsed.pythonFiles() {
+			if blob, ok := post[name]; ok && strings.HasPrefix(name, prefix) && strings.HasPrefix(blob.mode, "100") {
+				shas = append(shas, blob.sha)
+			}
+		}
+		var err error
+		if blobs, err = readBlobs(ctx, env, shas); err != nil {
+			if ctx.Err() != nil {
+				return nil, scope{}, nil, ctx.Err()
+			}
+			return refuse("git could not read the changed files (%v). Fix: run git status to see why", err)
+		}
 	}
 	set := touchedSet{}
 	for _, name := range parsed.pythonFiles() {
@@ -358,14 +361,9 @@ func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, 
 			if !strings.HasPrefix(blob.mode, "100") {
 				continue
 			}
-			out, err := git(ctx, env, "", "cat-file", "blob", blob.sha)
-			if err != nil {
-				if ctx.Err() != nil {
-					return nil, scope{}, nil, ctx.Err()
-				}
+			if content, ok = blobs[blob.sha]; !ok {
 				return refuse("changed file %q cannot be read. Fix: check its permissions and run june again", rel)
 			}
-			content = []byte(out)
 		} else {
 			abs := filepath.Join(env.Dir, filepath.FromSlash(rel))
 			info, err := os.Lstat(abs)
@@ -399,6 +397,165 @@ func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, 
 	sc.scanDir = scanDir
 	keepScan = true
 	return set, sc, nil, nil
+}
+
+// patchFlags make the zero-context patch a pure function of the trees.
+var patchFlags = []string{"--text", "--no-relative", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "-M", "--unified=0", "--inter-hunk-context=0"}
+
+// pythonPathspec limits a diff to Python files, whatever their number: a pathspec per file would
+// overflow argv on a large change. A patch without it would read every changed file, binary assets included.
+const pythonPathspec = ":(top,glob)**/*.py"
+
+// pathspecBudget bounds the pathspec bytes of one git process, far below the smallest argv limit.
+const pathspecBudget = 48 << 10
+
+// rename is a file to diff against its own source, or by itself when from is empty.
+type rename struct{ from, to string }
+
+func (r rename) size() int { return 2*(len(r.from)+len(r.to)) + 2*len(":(top,glob)") + 2 }
+
+// untrackedPython lists the regular untracked Python files below env.Dir, ignored files excluded.
+// The returned message is a complete "<cause>. Fix: <instruction>" refusal.
+func untrackedPython(ctx context.Context, env Env) ([]string, *string, error) {
+	refuse := func(format string, a ...any) ([]string, *string, error) {
+		msg := fmt.Sprintf(format, a...)
+		return nil, &msg, nil
+	}
+	untracked, err := git(ctx, env, "", "ls-files", "--others", "--exclude-standard", "-z", "--")
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+		return refuse("git could not list untracked files (%v). Fix: run git status to see why", err)
+	}
+	var names []string
+	if untracked == "" {
+		return nil, nil, nil
+	}
+	for _, name := range strings.Split(strings.TrimSuffix(untracked, "\x00"), "\x00") {
+		if path.Ext(name) != ".py" {
+			continue
+		}
+		info, err := os.Lstat(filepath.Join(env.Dir, filepath.FromSlash(name)))
+		if err != nil {
+			return refuse("untracked file %q cannot be inspected. Fix: check its permissions and run june again", name)
+		}
+		if info.Mode().IsRegular() {
+			names = append(names, name)
+		}
+	}
+	return names, nil, nil
+}
+
+// indexFlags reads how the caller's index marks its tracked files, in one listing.
+// absent holds the repository paths that a sparse checkout left out of the worktree.
+// flagged lists the entries a diff against the worktree would misread: one marked assume-unchanged,
+// or skip-worktree while its file is present, hides edits. Each is an index line "mode sha stage<TAB>path".
+func indexFlags(ctx context.Context, env Env, prefix string) (absent map[string]bool, flagged []string, bad *string, err error) {
+	refuse := func(format string, a ...any) (map[string]bool, []string, *string, error) {
+		msg := fmt.Sprintf(format, a...)
+		return nil, nil, &msg, nil
+	}
+	listing, err := git(ctx, env, "", "ls-files", "--stage", "-t", "-v", "-z", "--", ":/")
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, nil, ctx.Err()
+		}
+		return refuse("git could not list tracked files (%s). Fix: run git status to see why", gitCause(err))
+	}
+	absent = map[string]bool{}
+	for _, record := range strings.Split(listing, "\x00") {
+		if len(record) < 3 {
+			continue
+		}
+		tag, entry := record[0], record[2:]
+		assumed := tag >= 'a' && tag <= 'z'
+		if tag != 'S' && tag != 's' && !assumed {
+			continue
+		}
+		_, name, _ := strings.Cut(entry, "\t")
+		if tag == 'S' || tag == 's' {
+			_, err := os.Lstat(filepath.Join(env.Dir, filepath.FromSlash(name)))
+			if os.IsNotExist(err) {
+				absent[path.Join(prefix, name)] = true // skip-worktree: a diff never looks at the worktree for it
+				continue
+			}
+			if err != nil {
+				return refuse("sparse file %q cannot be inspected. Fix: check its permissions and run june again", name)
+			}
+		}
+		flagged = append(flagged, metaOf(entry)+"\t"+path.Join(prefix, name))
+	}
+	return absent, flagged, nil, nil
+}
+
+// metaOf is the "mode sha stage" part of an index line.
+func metaOf(entry string) string {
+	meta, _, _ := strings.Cut(entry, "\t")
+	return meta
+}
+
+// overlayIndex returns env pointing at a private copy of the caller's index, which keeps its stat cache,
+// changed so that a diff of the worktree against a tree sees the worktree as it is:
+//   - each untracked Python file is a tracked, empty one, so the diff reports its whole content as added,
+//     and can pair it with a deleted file as a rename;
+//   - each flagged entry is replaced by a plain one with no stat data, so git reads the file instead of trusting a flag.
+//
+// Only those files are read, so the cost follows them and not the size of the repository.
+// dir holds the copy and is the caller's to remove.
+func overlayIndex(ctx context.Context, env Env, dir, prefix string, fresh, flagged []string) (Env, *string, error) {
+	fail := func(msg string) (Env, *string, error) {
+		if ctx.Err() != nil {
+			return env, nil, ctx.Err()
+		}
+		return env, &msg, nil
+	}
+	const prepare = "a temporary git index cannot be prepared. Fix: run git status and check temporary directory permissions"
+	located, err := git(ctx, env, "", "rev-parse", "--git-path", "index")
+	if err != nil {
+		return fail(fmt.Sprintf("git could not locate its index (%s). Fix: run git status to see why", gitCause(err)))
+	}
+	real := strings.TrimSuffix(located, "\n")
+	if !filepath.IsAbs(real) {
+		real = filepath.Join(env.Dir, real)
+	}
+	copyTo := filepath.Join(dir, "index")
+	if data, err := os.ReadFile(real); err == nil {
+		if err := os.WriteFile(copyTo, data, 0o600); err != nil {
+			return fail(prepare)
+		}
+	} else if !os.IsNotExist(err) {
+		return fail(prepare)
+	}
+	vars := make(map[string]string, len(env.Vars)+1)
+	for k, v := range env.Vars {
+		vars[k] = v
+	}
+	vars["GIT_INDEX_FILE"] = copyTo
+	env.Vars = vars
+
+	var entries strings.Builder
+	for _, entry := range flagged {
+		entries.WriteString(entry)
+		entries.WriteByte(0)
+	}
+	if len(fresh) > 0 {
+		empty, err := git(ctx, env, "", "hash-object", "--stdin")
+		if err != nil {
+			return fail(fmt.Sprintf("git could not prepare untracked files (%s). Fix: run git status to see why", gitCause(err)))
+		}
+		for _, name := range fresh {
+			mode := "100644"
+			if info, err := os.Lstat(filepath.Join(env.Dir, filepath.FromSlash(name))); err == nil && info.Mode().Perm()&0o111 != 0 {
+				mode = "100755"
+			}
+			fmt.Fprintf(&entries, "%s %s 0\t%s%s\x00", mode, strings.TrimSpace(empty), prefix, name)
+		}
+	}
+	if _, err := git(ctx, env, entries.String(), "-c", "core.ignorestat=false", "update-index", "--no-split-index", "-z", "--index-info"); err != nil {
+		return fail(fmt.Sprintf("a temporary git index cannot be prepared (%s). Fix: run git status and check temporary directory permissions", gitCause(err)))
+	}
+	return env, nil, nil
 }
 
 // postBlob is one destination in a raw diff: mode is the git file mode and sha is the post-image blob.
@@ -487,8 +644,8 @@ var scrubbedVars = map[string]bool{
 	"GIT_NOGLOB_PATHSPECS":  true,
 }
 
-// git runs git in env.Dir and returns its standard output.
-func git(ctx context.Context, env Env, input string, args ...string) (string, error) {
+// gitCommand prepares git to run in env.Dir with a scrubbed, read-only, non-interactive environment.
+func gitCommand(ctx context.Context, env Env, input string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = env.Dir
 	cmd.Env = make([]string, 0, len(env.Vars)+4)
@@ -500,6 +657,76 @@ func git(ctx context.Context, env Env, input string, args ...string) (string, er
 	// Later entries win, so these fix the language and keep git read-only and non-interactive.
 	cmd.Env = append(cmd.Env, "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0")
 	cmd.Stdin = strings.NewReader(input)
+	return cmd
+}
+
+// readBlobs reads the contents of the given blobs with one git process, by object id.
+// An id git does not have is absent from the result.
+func readBlobs(ctx context.Context, env Env, shas []string) (map[string][]byte, error) {
+	blobs := make(map[string][]byte, len(shas))
+	if len(shas) == 0 {
+		return blobs, nil
+	}
+	var want strings.Builder
+	for _, sha := range shas {
+		want.WriteString(sha)
+		want.WriteByte('\n')
+	}
+	cmd := gitCommand(ctx, env, want.String(), "cat-file", "--batch")
+	var errOut bytes.Buffer
+	cmd.Stderr = &errOut
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	r := bufio.NewReaderSize(out, 1<<16)
+	var readErr error
+	for range shas {
+		header, err := r.ReadString('\n')
+		if err != nil {
+			readErr = err
+			break
+		}
+		fields := strings.Fields(header) // "<id> <type> <size>", or "<id> missing"
+		if len(fields) != 3 {
+			continue
+		}
+		size, err := strconv.Atoi(fields[2])
+		if err != nil || size < 0 {
+			readErr = fmt.Errorf("unexpected cat-file header %q", strings.TrimSpace(header))
+			break
+		}
+		content := make([]byte, size+1) // the object, then the newline that ends it
+		if _, err := io.ReadFull(r, content); err != nil {
+			readErr = err
+			break
+		}
+		if fields[1] == "blob" {
+			blobs[fields[0]] = content[:size]
+		}
+	}
+	if readErr != nil {
+		_ = cmd.Process.Kill()
+	}
+	waitErr := cmd.Wait()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if waitErr != nil {
+		if msg := strings.TrimSpace(errOut.String()); msg != "" {
+			return nil, &gitError{err: waitErr, stderr: firstLine(msg)}
+		}
+		return nil, waitErr
+	}
+	return blobs, nil
+}
+
+// git runs git in env.Dir and returns its standard output.
+func git(ctx context.Context, env Env, input string, args ...string) (string, error) {
+	cmd := gitCommand(ctx, env, input, args...)
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut
@@ -584,6 +811,33 @@ func parsePatch(patch string) touchedSet {
 		}
 	}
 	return set
+}
+
+// renamedFrom reads which source each destination of a patch was paired with.
+func renamedFrom(patch string) map[string]string {
+	out := map[string]string{}
+	var from string
+	for _, line := range strings.Split(patch, "\n") {
+		switch {
+		case strings.HasPrefix(line, "diff --git "):
+			from = ""
+		case strings.HasPrefix(line, "rename from "):
+			from = unquotePath(strings.TrimPrefix(line, "rename from "))
+		case strings.HasPrefix(line, "rename to "):
+			out[unquotePath(strings.TrimPrefix(line, "rename to "))] = from
+		}
+	}
+	return out
+}
+
+// unquotePath decodes a path that git quoted, if it did.
+func unquotePath(s string) string {
+	if strings.HasPrefix(s, `"`) {
+		if unquoted, err := strconv.Unquote(s); err == nil {
+			return unquoted
+		}
+	}
+	return s
 }
 
 // postImagePath decodes the "+++" path of a diff, or "" for /dev/null.

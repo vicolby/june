@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vicolby/june/internal/rules"
 )
@@ -113,7 +114,7 @@ func TestScanAnchorsAtFirstLine(t *testing.T) {
 	txt := filepath.Join(dir, "notes.txt")
 	write(t, txt, "x = []\n")
 
-	got, err := rs.Scan(context.Background(), []string{py, txt})
+	got, err := scanFiles(context.Background(), rs, py, txt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,11 +139,11 @@ func TestScanReadsOnlyGivenPythonFiles(t *testing.T) {
 	rs := loadGood(t)
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "other.py"), "x = [1]\n")
-	got, err := rs.Scan(context.Background(), nil)
+	got, err := scanFiles(context.Background(), rs)
 	if err != nil || len(got.Matches) != 0 {
 		t.Errorf("Scan(nil) = %+v, %v, want nothing", got, err)
 	}
-	got, err = rs.Scan(context.Background(), []string{filepath.Join(dir, "notes.md")})
+	got, err = scanFiles(context.Background(), rs, filepath.Join(dir, "notes.md"))
 	if err != nil || len(got.Matches) != 0 {
 		t.Errorf("Scan(non-python) = %+v, %v, want nothing", got, err)
 	}
@@ -154,7 +155,7 @@ func TestScanCancelled(t *testing.T) {
 	cancel()
 	py := filepath.Join(t.TempDir(), "a.py")
 	write(t, py, "x = [1]\n")
-	if _, err := rs.Scan(ctx, []string{py}); err == nil {
+	if _, err := scanFiles(ctx, rs, py); err == nil {
 		t.Error("Scan with a cancelled context returned no error")
 	}
 }
@@ -245,7 +246,7 @@ func TestScanRefusesIncompleteInput(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got, err := rs.Scan(context.Background(), []string{good, bad})
+			got, err := scanFiles(context.Background(), rs, good, bad)
 			if err == nil || len(got.Matches) != 0 {
 				t.Fatalf("Scan = %+v, %v, want an error and no partial matches", got, err)
 			}
@@ -264,7 +265,7 @@ func TestScanLargeFile(t *testing.T) {
 	rs := loadGood(t)
 	py := filepath.Join(t.TempDir(), "large.py")
 	write(t, py, "#"+strings.Repeat(" ", 4*1024*1024)+"\nx = []\n")
-	got, err := rs.Scan(context.Background(), []string{py})
+	got, err := scanFiles(context.Background(), rs, py)
 	if err != nil || len(got.Matches) != 1 || got.Matches[0].Line != 2 {
 		t.Fatalf("Scan = %+v, %v, want the finding after the large comment", got, err)
 	}
@@ -284,7 +285,7 @@ func TestScanPreservesDirectiveTextInStrings(t *testing.T) {
 	py := filepath.Join(dir, "app.py")
 	source := "x = '# ast-grep-ignore'\ntext = '''\n# ast-grep-ignore\n'''\n# ast-grep-ignore\n"
 	write(t, py, source)
-	got, err := rs.Scan(context.Background(), []string{py})
+	got, err := scanFiles(context.Background(), rs, py)
 	if err != nil || len(got.Matches) != 2 || got.Matches[0].Line != 1 || got.Matches[1].Line != 2 {
 		t.Fatalf("Scan = %+v, %v, want both original string literals", got, err)
 	}
@@ -311,7 +312,7 @@ func TestScanUnavailableEngine(t *testing.T) {
 	}
 	py := filepath.Join(dir, "app.py")
 	write(t, py, "x = []\n")
-	got, err := rs.Scan(context.Background(), []string{py})
+	got, err := scanFiles(context.Background(), rs, py)
 	if err == nil || len(got.Matches) != 0 || strings.Contains(err.Error(), dir) {
 		t.Fatalf("Scan = %+v, %v, want a refusal without absolute paths", got, err)
 	}
@@ -419,7 +420,7 @@ func TestRunIgnoresProjectConfigInWorkingDirectory(t *testing.T) {
 
 	py := filepath.Join(t.TempDir(), "a.py")
 	write(t, py, "x = [1]  # ast-grep-ignore\ny = [2]\n")
-	got, err := rs.Scan(context.Background(), []string{py})
+	got, err := scanFiles(context.Background(), rs, py)
 	if err != nil {
 		t.Fatalf("Scan with a project sgconfig.yml in the working directory: %v", err)
 	}
@@ -456,7 +457,7 @@ u = []  #  june: ignore[LST01] why
 v = []  # june:  ignore[LST01] why
 w = []  # june: ignore[	LST01	] why
 `)
-	got, err := rs.Scan(context.Background(), []string{py})
+	got, err := scanFiles(context.Background(), rs, py)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -604,5 +605,204 @@ func TestLoadReportsEveryBadDirectory(t *testing.T) {
 func TestLoadWithoutDirectoriesIsAFault(t *testing.T) {
 	if rs, faults := rules.Load(context.Background()); rs != nil || len(faults) != 1 {
 		t.Fatalf("Load = %v, %v, want one fault", rs, faults)
+	}
+}
+
+// scanFiles scans files that share one directory, and reports their matches under the absolute paths it was given,
+// so a test reads like the files it wrote. A non-text error names that same path.
+func scanFiles(ctx context.Context, rs *rules.RuleSet, files ...string) (rules.Scanned, error) {
+	if len(files) == 0 {
+		return rs.Scan(ctx, "", nil)
+	}
+	root := filepath.Dir(files[0])
+	rel := make([]string, len(files))
+	for i, f := range files {
+		rel[i] = filepath.Base(f)
+	}
+	got, err := rs.Scan(ctx, root, rel)
+	for i := range got.Matches {
+		got.Matches[i].File = filepath.Join(root, got.Matches[i].File)
+	}
+	for i := range got.OptOuts {
+		got.OptOuts[i].File = filepath.Join(root, got.OptOuts[i].File)
+	}
+	var notText *rules.NotTextError
+	if errors.As(err, &notText) {
+		for i, name := range rel {
+			if name == notText.File {
+				return got, &rules.NotTextError{File: files[i]}
+			}
+		}
+	}
+	return got, err
+}
+
+// manyRules writes n rules, each matching its own call target_NNN() and padded to size bytes,
+// with the sidecar examples Load requires.
+func manyRules(t *testing.T, n, size int) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "rule-tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("BIG%03d", i)
+		head := fmt.Sprintf("id: %s\nlanguage: python\nseverity: error\nrule:\n  pattern: target_%03d()\nmessage: 'Fix: ", id, i)
+		pad := strings.Repeat("x", max(0, size-len(head)-1))
+		write(t, filepath.Join(dir, id+".yml"), head+pad+"'\n")
+		write(t, filepath.Join(dir, "rule-tests", id+"-test.yml"),
+			fmt.Sprintf("id: %s\nvalid: ['other()']\ninvalid: ['target_%03d()']\n", id, i))
+	}
+	return dir
+}
+
+// Linux caps one argv string at 128 KiB and macOS the whole argv at 1 MiB; a rule set must not depend on either.
+func TestScanRuleSetsBeyondArgvLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		rules, size int
+	}{
+		{"270 rules just over the Linux string limit", 270, 500},
+		{"300 rules over the macOS total limit", 300, 4500},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rs, faults := rules.Load(context.Background(), manyRules(t, tc.rules, tc.size))
+			if rs == nil {
+				t.Fatalf("Load: %v", faults)
+			}
+			dir := t.TempDir()
+			write(t, filepath.Join(dir, "app.py"), "target_007()\nother()\ntarget_269()\n")
+			got, err := rs.Scan(context.Background(), dir, []string{"app.py"})
+			if err != nil {
+				t.Fatalf("Scan: %v", err)
+			}
+			if len(got.Matches) != 2 || got.Matches[0].Rule != "BIG007" || got.Matches[0].Line != 1 || got.Matches[1].Rule != "BIG269" || got.Matches[1].Line != 3 {
+				t.Fatalf("matches = %+v, want BIG007 on line 1 and BIG269 on line 3", got.Matches)
+			}
+		})
+	}
+}
+
+// A failed scan says why in ast-grep's own first line, without the scratch path it ran in.
+func TestScanErrorCarriesAstGrepReason(t *testing.T) {
+	real, err := exec.LookPath("ast-grep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	script := "#!/bin/sh\n[ \"$1\" = test ] && exec " + real + " \"$@\"\necho \"Error: boom at $PWD/rules\" >&2\necho 'second line' >&2\nexit 2\n"
+	write(t, filepath.Join(bin, "ast-grep"), script)
+	if err := os.Chmod(filepath.Join(bin, "ast-grep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	rs := loadGood(t)
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "app.py"), "x = []\n")
+	_, err = rs.Scan(context.Background(), dir, []string{"app.py"})
+	if err == nil || !strings.Contains(err.Error(), "ast-grep could not complete the scan: Error: boom at") || strings.Contains(err.Error(), "second line") {
+		t.Fatalf("Scan error = %v, want ast-grep's first stderr line only", err)
+	}
+	if strings.Contains(err.Error(), os.TempDir()) || strings.Contains(err.Error(), dir) {
+		t.Errorf("error exposes an absolute path: %v", err)
+	}
+}
+
+// One scan serves any number of files: it must stay one process and one tree walk, not one process per file.
+func TestScanThreeThousandFilesWithinBudget(t *testing.T) {
+	rs := loadGood(t)
+	dir := t.TempDir()
+	files := make([]string, 3000)
+	for i := range files {
+		files[i] = fmt.Sprintf("pkg%d/mod%d.py", i%50, i)
+		if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(files[i])), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(dir, files[i]), "x = []\ny = 1  # june: ignore[LST01] kept\n")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	got, err := rs.Scan(ctx, dir, files)
+	if err != nil {
+		t.Fatalf("scanning %d files did not finish within the 5s budget: %v", len(files), err)
+	}
+	if len(got.Matches) != len(files) || len(got.OptOuts) != len(files) {
+		t.Fatalf("got %d matches and %d opt-outs, want %d of each", len(got.Matches), len(got.OptOuts), len(files))
+	}
+	for i, m := range got.Matches {
+		if m.File != files[i] {
+			t.Fatalf("match %d is in %s, want results in the order files were given (%s)", i, m.File, files[i])
+		}
+	}
+}
+
+// A file keeps its identity however its path looks to ast-grep: dot directories are scanned, a path given
+// twice is reported twice, and a name that is not UTF-8 cannot be lost or mistaken for another file.
+func TestScanStagesEveryPathFaithfully(t *testing.T) {
+	rs := loadGood(t)
+	dir := t.TempDir()
+	names := []string{".hidden/.deeper/a.py", "sp ace/q\"uote.py", "plain.py", "plain.py"}
+	odd := "bad\xffname.py"
+	if err := os.WriteFile(filepath.Join(dir, odd), []byte("x = []\n"), 0o644); err == nil {
+		names = append(names, odd)
+	}
+	for _, n := range names {
+		if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(n)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(dir, n), "x = []\n")
+	}
+	got, err := rs.Scan(context.Background(), dir, names)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var have []string
+	for _, m := range got.Matches {
+		have = append(have, m.File)
+	}
+	if strings.Join(have, "|") != strings.Join(names, "|") {
+		t.Fatalf("matches in %q, want one per given path in order %q", have, names)
+	}
+}
+
+func TestScanRefusesPathsOutsideRoot(t *testing.T) {
+	rs := loadGood(t)
+	outer := t.TempDir()
+	root := filepath.Join(outer, "root")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(outer, "escape.py"), "x = []\n")
+	for _, f := range []string{"../escape.py", filepath.Join(outer, "escape.py")} {
+		if got, err := rs.Scan(context.Background(), root, []string{f}); err == nil || len(got.Matches) != 0 {
+			t.Errorf("Scan(%q) = %+v, %v, want a refusal", f, got, err)
+		}
+	}
+}
+
+// Path filters inside a rule have never applied, and a scan that stages real paths must not start applying them:
+// honouring `files` and `ignores` is a decision of its own, so a rule keeps matching every file it is given.
+func TestScanDoesNotApplyRulePathFilters(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "rule-tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "PATH01.yml"), "id: PATH01\nlanguage: python\nseverity: error\nmessage: 'Fix: no lists'\nfiles: ['**/only/**']\nignores: ['**/legacy/**']\nrule:\n  kind: list\n")
+	write(t, filepath.Join(dir, "rule-tests", "PATH01-test.yml"), "id: PATH01\nvalid: ['x = 1']\ninvalid: ['x = [1]']\n")
+	rs, faults := rules.Load(context.Background(), dir)
+	if rs == nil {
+		t.Fatalf("Load: %v", faults)
+	}
+	src := t.TempDir()
+	files := []string{"legacy/b.py", "elsewhere/c.py", "only/d.py"}
+	for _, f := range files {
+		if err := os.MkdirAll(filepath.Join(src, filepath.Dir(f)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(src, f), "x = [1]\n")
+	}
+	got, err := rs.Scan(context.Background(), src, files)
+	if err != nil || len(got.Matches) != len(files) {
+		t.Fatalf("Scan = %+v, %v, want a match in each of %v", got.Matches, err, files)
 	}
 }

@@ -61,10 +61,13 @@ type entry struct {
 	examples int
 }
 
+// ruleSource is one verified rule, as the text ast-grep reads from a file named after its id.
+type ruleSource struct{ id, text string }
+
 // RuleSet is a set of rules whose examples all behaved.
 type RuleSet struct {
 	bin      string
-	inline   string
+	docs     []ruleSource
 	ids      map[string]bool
 	rules    int
 	examples int
@@ -168,15 +171,15 @@ func Load(ctx context.Context, dirs ...string) (*RuleSet, []Fault) {
 	if faults := verify(ctx, bin, dirs, entries); len(faults) > 0 {
 		return nil, faults
 	}
-	docs := make([]string, len(entries))
+	docs := make([]ruleSource, len(entries))
 	ids := make(map[string]bool, len(entries))
 	total := 0
 	for i, e := range entries {
-		docs[i] = e.doc
+		docs[i] = ruleSource{id: e.id, text: e.doc}
 		ids[e.id] = true
 		total += e.examples
 	}
-	return &RuleSet{bin: bin, inline: strings.Join(docs, "\n---\n"), ids: ids, rules: len(entries), examples: total}, nil
+	return &RuleSet{bin: bin, docs: docs, ids: ids, rules: len(entries), examples: total}, nil
 }
 
 // knownID reports the file that already owns id. Comparison is case-insensitive because staging uses the id as a filename.
@@ -196,92 +199,256 @@ type NotTextError struct{ File string }
 func (e *NotTextError) Error() string { return "a Python file is not UTF-8 text" }
 
 // Scan runs the rules over the given files and keeps only Python files.
-// Matches are anchored at their first line. File is reported as given.
-func (rs *RuleSet) Scan(ctx context.Context, files []string) (Scanned, error) {
-	var out Scanned
-	var config string
+// Files are slash-separated paths relative to root. Matches are anchored at their first line.
+// File is reported as given, and results come back in the order the files were given.
+//
+// One scratch tree holds the rules and every file at its given relative path, so ast-grep makes one
+// comment pass and one scan however many files and rules there are. Nothing travels through argv.
+func (rs *RuleSet) Scan(ctx context.Context, root string, files []string) (Scanned, error) {
+	var py []string
 	for _, f := range files {
-		if filepath.Ext(f) != pythonExtension {
-			continue
+		if filepath.Ext(f) == pythonExtension {
+			py = append(py, f)
 		}
-		source, err := os.ReadFile(f)
+	}
+	if len(py) == 0 {
+		return Scanned{}, nil
+	}
+	scratch, err := scratchDir()
+	if err != nil {
+		return Scanned{}, errScanSetup
+	}
+	defer func() { _ = os.RemoveAll(scratch) }() // Best-effort scratch cleanup cannot change the scan result.
+	if err := rs.writeRules(scratch); err != nil {
+		return Scanned{}, errScanSetup
+	}
+
+	// Read and stage every file before ast-grep starts, so an unreadable one refuses the whole scan.
+	// A file that may hold a comment of interest is also staged in a tree of its own for the comment pass.
+	var marked []int // indexes into py
+	sources := map[int][]byte{}
+	staged := make([]string, len(py)) // the path each file has under treeDir
+	byStaged := make(map[string]int, len(py))
+	for i, f := range py {
+		if !filepath.IsLocal(filepath.FromSlash(f)) {
+			return Scanned{}, errors.New("a Python file is not inside the scanned tree")
+		}
+		source, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(f)))
 		if err != nil {
 			return Scanned{}, errors.New("a Python file cannot be read")
 		}
 		if !utf8.Valid(source) || bytes.IndexByte(source, 0) >= 0 {
 			return Scanned{}, &NotTextError{File: f}
 		}
-		if config == "" {
-			dir, err := os.MkdirTemp("", "june-scan-")
-			if err != nil {
-				return Scanned{}, errors.New("the scan cannot create its configuration")
-			}
-			defer func() { _ = os.RemoveAll(dir) }() // Best-effort scratch cleanup cannot change the scan result.
-			if config, err = writeConfig(dir); err != nil {
-				return Scanned{}, errors.New("the scan cannot create its configuration")
-			}
+		name, err := stageSource(filepath.Join(scratch, treeDir), f, i, source)
+		if err != nil {
+			return Scanned{}, errScanSetup
 		}
-		var cs []comment
+		staged[i], byStaged[name] = name, i
 		if bytes.Contains(source, []byte(optOutMarker)) || bytes.Contains(source, []byte(suppressionMarker)) {
-			if cs, err = rs.comments(ctx, config, source); err != nil {
-				return Scanned{}, err
+			if err := writeFile(filepath.Join(scratch, commentsDir, filepath.FromSlash(name)), source); err != nil {
+				return Scanned{}, errScanSetup
 			}
+			marked = append(marked, i)
+			sources[i] = source
 		}
-		out.OptOuts = append(out.OptOuts, rs.optOuts(f, source, cs)...)
-		disableSuppressions(source, cs)
-		stdout, err := runASTGrep(ctx, rs.bin, config, source, "scan", "--inline-rules", rs.inline, "--json=stream")
+	}
+
+	var out Scanned
+	if len(marked) > 0 {
+		comments, err := rs.comments(ctx, scratch, byStaged)
 		if err != nil {
 			return Scanned{}, err
 		}
-		dec := json.NewDecoder(bytes.NewReader(stdout))
-		for {
-			var m struct {
-				RuleID   string `json:"ruleId"`
-				Severity string `json:"severity"`
-				Message  string `json:"message"`
-				Range    struct {
-					Start struct{ Line, Column int } `json:"start"`
-				} `json:"range"`
+		for _, i := range marked {
+			cs := comments[i]
+			if err := checkComments(cs, len(sources[i])); err != nil {
+				return Scanned{}, err
 			}
-			if err := dec.Decode(&m); err != nil {
-				if errors.Is(err, io.EOF) {
-					break
-				}
-				return Scanned{}, errors.New("ast-grep scan returned unreadable output")
+			out.OptOuts = append(out.OptOuts, rs.optOuts(py[i], sources[i], cs)...)
+			disableSuppressions(sources[i], cs)
+			// The staged file is replaced by the same text with ast-grep's own suppression comments defused.
+			if err := writeFile(filepath.Join(scratch, treeDir, filepath.FromSlash(staged[i])), sources[i]); err != nil {
+				return Scanned{}, errScanSetup
 			}
-			out.Matches = append(out.Matches, Match{
-				File: f, Line: m.Range.Start.Line + 1, Col: m.Range.Start.Column + 1,
-				Rule: m.RuleID, Severity: m.Severity, Msg: m.Message,
-			})
 		}
+	}
+
+	stdout, err := rs.run(ctx, scratch, "scan", "--json=stream", treeDir)
+	if err != nil {
+		return Scanned{}, err
+	}
+	type found struct {
+		file int
+		Match
+	}
+	var all []found
+	dec := json.NewDecoder(bytes.NewReader(stdout))
+	for {
+		var m struct {
+			File     string `json:"file"`
+			RuleID   string `json:"ruleId"`
+			Severity string `json:"severity"`
+			Message  string `json:"message"`
+			Range    struct {
+				Start struct{ Line, Column int } `json:"start"`
+			} `json:"range"`
+		}
+		if err := dec.Decode(&m); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return Scanned{}, errors.New("ast-grep scan returned unreadable output")
+		}
+		i, ok := byStaged[strings.TrimPrefix(filepath.ToSlash(m.File), treeDir+"/")]
+		if !ok {
+			return Scanned{}, errors.New("ast-grep scan returned unreadable output")
+		}
+		all = append(all, found{i, Match{
+			File: py[i], Line: m.Range.Start.Line + 1, Col: m.Range.Start.Column + 1,
+			Rule: m.RuleID, Severity: m.Severity, Msg: m.Message,
+		}})
+	}
+	// ast-grep scans files on a thread pool, so its stream has no stable order.
+	sort.SliceStable(all, func(a, b int) bool {
+		x, y := all[a], all[b]
+		switch {
+		case x.file != y.file:
+			return x.file < y.file
+		case x.Line != y.Line:
+			return x.Line < y.Line
+		case x.Col != y.Col:
+			return x.Col < y.Col
+		}
+		return x.Rule < y.Rule
+	})
+	for _, f := range all {
+		out.Matches = append(out.Matches, f.Match)
 	}
 	return out, nil
 }
 
-// writeConfig lays out the isolated ast-grep configuration in dir and returns its path.
-func writeConfig(dir string) (string, error) {
-	if err := os.MkdirAll(filepath.Join(dir, "rules"), 0o755); err != nil {
+var errScanSetup = errors.New("the scan cannot create its configuration")
+
+const (
+	treeDir     = "tree"     // the files to scan, at the paths they have under the scanned root
+	commentsDir = "comments" // the files whose comments are read, at the same paths
+	altDir      = "_june"    // where a file lands when its own path cannot be staged
+)
+
+// scratchDir makes a scratch directory whose path is free of symlinks, so output can be scrubbed of it.
+func scratchDir() (string, error) {
+	dir, err := os.MkdirTemp("", "june-scan-")
+	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, "sgconfig.yml")
-	return path, os.WriteFile(path, []byte(isolatedConfig), 0o644)
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		return real, nil
+	}
+	return dir, nil
 }
 
-func runASTGrep(ctx context.Context, bin, config string, source []byte, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, bin, append(args, "--config", config, "--stdin", "--color=never")...)
-	cmd.Dir = filepath.Dir(config)
-	cmd.Stdin = bytes.NewReader(source)
-	stdout, err := cmd.Output()
+// writeConfig lays out the isolated ast-grep configuration in dir.
+func writeConfig(dir string) error {
+	if err := os.MkdirAll(filepath.Join(dir, "rules"), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "sgconfig.yml"), []byte(isolatedConfig), 0o644)
+}
+
+// writeRules lays out the configuration in dir and every rule once, in the file named after its id.
+func (rs *RuleSet) writeRules(dir string) error {
+	if err := writeConfig(dir); err != nil {
+		return err
+	}
+	for _, r := range rs.docs {
+		if err := os.WriteFile(filepath.Join(dir, "rules", r.id+".yml"), []byte(r.text), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// stageSource writes source under tree at its own relative path and returns that path.
+// A path ast-grep could not report faithfully (not UTF-8), or one that is already taken
+// (a case-insensitive twin, a duplicate), is staged under a name of its own instead.
+func stageSource(tree, rel string, n int, source []byte) (string, error) {
+	if utf8.ValidString(rel) {
+		if err := writeNew(filepath.Join(tree, filepath.FromSlash(rel)), source); err == nil {
+			return rel, nil
+		}
+	}
+	alt := fmt.Sprintf("%s/%d.py", altDir, n)
+	return alt, writeNew(filepath.Join(tree, filepath.FromSlash(alt)), source)
+}
+
+// writeNew creates path and its directories, and fails when path already exists.
+func writeNew(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(data)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	return werr
+}
+
+// writeFile creates or replaces path and its directories.
+func writeFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+// run runs ast-grep in scratch against its configuration, one process for every staged file.
+// Exit 1 only says that error-severity matches were found.
+// A failure carries the first line ast-grep wrote to standard error, without the scratch path.
+func (rs *RuleSet) run(ctx context.Context, scratch string, args ...string) ([]byte, error) {
+	args = append(args, "--config", filepath.Join(scratch, "sgconfig.yml"), "--color=never")
+	// The staged tree is not a repository: no ignore file, dot directory or parent directory may hide a file in it.
+	for _, kind := range []string{"hidden", "dot", "vcs", "parent", "global", "exclude"} {
+		args = append(args, "--no-ignore", kind)
+	}
+	cmd := exec.CommandContext(ctx, rs.bin, args...)
+	cmd.Dir = scratch
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
 	if err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
-			return nil, errors.New("ast-grep could not complete the scan")
+			msg := "ast-grep could not complete the scan"
+			if reason := reasonLine(stderr.String(), scratch); reason != "" {
+				msg += ": " + reason
+			}
+			return nil, errors.New(msg)
 		}
 	}
-	return stdout, nil
+	return stdout.Bytes(), nil
+}
+
+// reasonLine is the first non-blank line of ast-grep's standard error, with the scratch path removed and a bounded length.
+func reasonLine(stderr, scratch string) string {
+	stderr = strings.ReplaceAll(stderr, scratch+string(filepath.Separator), "")
+	stderr = strings.ReplaceAll(stderr, scratch, ".")
+	for _, l := range strings.Split(stderr, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			if r := []rune(l); len(r) > 200 {
+				l = string(r[:200]) + "..."
+			}
+			return l
+		}
+	}
+	return ""
 }
 
 // comment is a Python comment node. Line and Col are one-based, start and end are byte offsets.
@@ -289,16 +456,18 @@ type comment struct {
 	line, col, start, end int
 }
 
-// comments finds the comment nodes of source, so a marker inside a string literal is never one.
-func (rs *RuleSet) comments(ctx context.Context, config string, source []byte) ([]comment, error) {
-	stdout, err := runASTGrep(ctx, rs.bin, config, source, "run", "--lang", "python", "--kind", "comment", "--json=stream")
+// comments finds the comment nodes of every file in the comments tree, so a marker inside a string literal is never one.
+// It returns them by file index, each file's in source order.
+func (rs *RuleSet) comments(ctx context.Context, scratch string, byStaged map[string]int) (map[int][]comment, error) {
+	stdout, err := rs.run(ctx, scratch, "run", "--lang", "python", "--kind", "comment", "--json=stream", commentsDir)
 	if err != nil {
 		return nil, err
 	}
-	var cs []comment
+	out := map[int][]comment{}
 	dec := json.NewDecoder(bytes.NewReader(stdout))
 	for {
 		var m struct {
+			File  string
 			Range struct {
 				ByteOffset struct{ Start, End int }
 				Start      struct{ Line, Column int }
@@ -306,16 +475,30 @@ func (rs *RuleSet) comments(ctx context.Context, config string, source []byte) (
 		}
 		if err := dec.Decode(&m); err != nil {
 			if errors.Is(err, io.EOF) {
-				return cs, nil
+				break
 			}
 			return nil, errors.New("ast-grep returned unreadable comment ranges")
 		}
-		start, end := m.Range.ByteOffset.Start, m.Range.ByteOffset.End
-		if start < 0 || end <= start || end > len(source) {
-			return nil, errors.New("ast-grep returned invalid comment ranges")
+		i, ok := byStaged[strings.TrimPrefix(filepath.ToSlash(m.File), commentsDir+"/")]
+		if !ok {
+			return nil, errors.New("ast-grep returned unreadable comment ranges")
 		}
-		cs = append(cs, comment{line: m.Range.Start.Line + 1, col: m.Range.Start.Column + 1, start: start, end: end})
+		out[i] = append(out[i], comment{line: m.Range.Start.Line + 1, col: m.Range.Start.Column + 1, start: m.Range.ByteOffset.Start, end: m.Range.ByteOffset.End})
 	}
+	for _, cs := range out {
+		sort.Slice(cs, func(a, b int) bool { return cs[a].start < cs[b].start })
+	}
+	return out, nil
+}
+
+// checkComments refuses comment ranges that do not lie inside a source of the given size.
+func checkComments(cs []comment, size int) error {
+	for _, c := range cs {
+		if c.start < 0 || c.end <= c.start || c.end > size {
+			return errors.New("ast-grep returned invalid comment ranges")
+		}
+	}
+	return nil
 }
 
 // disableSuppressions defuses ast-grep's own suppression comments in place, so only june opt-outs suppress.
@@ -424,7 +607,36 @@ func readRule(dir, name string) (string, string, int, []Fault) {
 	if len(ex.Valid) == 0 || len(ex.Invalid) == 0 {
 		return "", "", 0, []Fault{{Path: sidecar, Cause: fmt.Sprintf("rule %s needs both valid and invalid examples", doc.ID), Fix: "add at least one of each"}}
 	}
-	return strings.TrimRight(string(raw), "\n"), doc.ID, len(ex.Valid) + len(ex.Invalid), nil
+	return strings.TrimRight(string(withoutPathFilters(raw)), "\n"), doc.ID, len(ex.Valid) + len(ex.Invalid), nil
+}
+
+// pathFilters are the rule keys ast-grep matches against the path of the file it scans.
+var pathFilters = map[string]bool{"files": true, "ignores": true}
+
+// withoutPathFilters drops the path filters from a rule, so it keeps matching every file it is given.
+// A scan that stages files at their real paths would otherwise start applying them, and honouring them is its own change.
+// A rule without such keys comes back byte for byte.
+func withoutPathFilters(raw []byte) []byte {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return raw
+	}
+	top := doc.Content[0]
+	kept := make([]*yaml.Node, 0, len(top.Content))
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		if !pathFilters[top.Content[i].Value] {
+			kept = append(kept, top.Content[i], top.Content[i+1])
+		}
+	}
+	if len(kept) == len(top.Content) {
+		return raw
+	}
+	top.Content = kept
+	out, err := yaml.Marshal(&doc)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 func decodeDocument(raw []byte, out any) error {
@@ -517,7 +729,7 @@ type stagedFile struct {
 // stage lays rule files and examples out the way ast-grep test expects them.
 // A destination that already exists is a duplicate rule id and is left untouched.
 func stage(scratch string, dirs []string, entries []entry) []Fault {
-	if _, err := writeConfig(scratch); err != nil {
+	if err := writeConfig(scratch); err != nil {
 		return []Fault{{Cause: "the examples cannot be run", Fix: "make the rules directory readable"}}
 	}
 	if err := os.MkdirAll(filepath.Join(scratch, testsDir), 0o755); err != nil {

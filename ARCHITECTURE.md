@@ -71,13 +71,14 @@ It hides: repo discovery, CI detection and the inference table, merge-base and s
 
 ```go
 func Load(ctx context.Context, dirs ...string) (*RuleSet, []Fault) // faults non-empty means nil set, never a partial set
-func (*RuleSet) Scan(ctx context.Context, files []string) (Scanned, error)
+func (*RuleSet) Scan(ctx context.Context, root string, files []string) (Scanned, error) // files are relative to root
 ```
 
 A `*RuleSet` exists only if every example behaved, including a rule whose severity is off, so an unverified rule cannot produce a verdict.
 Faults: unparseable rule, empty message, failing example, zero rules, a rule id defined in two files.
 A fault names the directory it concerns, and a duplicate id names both files. Ids that differ only by case are the same id.
 Scan reads only the given files, anchors each match at its first line, and reports comments so `check` never learns a comment marker.
+It runs ast-grep once for the comments and once for the matches, however many files and rules there are, so its cost and its limits do not depend on argv.
 
 It hides: the location of the ast-grep binary on PATH, the invocation, zero-based to one-based lines, the rule schema, the sidecar example file `rule-tests/<id>-test.yml` with `valid:` and `invalid:` (ast-grep rejects unknown keys inside a rule), and the `.py` filter.
 
