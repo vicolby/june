@@ -22,7 +22,7 @@ func TestVersion(t *testing.T) {
 	if code := run(context.Background(), []string{"--version"}, strings.NewReader(""), &out, &errOut, check.Env{Dir: t.TempDir()}); code != 0 {
 		t.Fatalf("exit = %d, want 0", code)
 	}
-	if got, want := out.String(), "june "+version+"\n"; got != want {
+	if got, want := out.String(), "june "+version+"\n"+check.ASTGrep(context.Background())+"\n"; got != want || !strings.HasPrefix(check.ASTGrep(context.Background()), "ast-grep 0.") {
 		t.Errorf("stdout = %q, want %q", got, want)
 	}
 	if errOut.Len() != 0 {
@@ -158,7 +158,7 @@ func TestRulesFlagRepeats(t *testing.T) {
 
 	out.Reset()
 	code = run(context.Background(), []string{"verify", "--rules", ".june/rules", "--rules", "shared"}, nil, &out, &errOut, env)
-	if code != 0 || out.String() != "june: verified 2 rules, 21 examples\n" {
+	if code != 0 || out.String() != "june: verified 2 rules, 21 examples with "+check.ASTGrep(context.Background())+"\n" {
 		t.Errorf("verify exit = %d, stdout = %q", code, out.String())
 	}
 
@@ -239,7 +239,7 @@ func TestMissingWorkingDirectoryExplainsItself(t *testing.T) {
 func TestVerifyPrintsCounts(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := run(context.Background(), []string{"verify"}, strings.NewReader(""), &out, &errOut, project(t))
-	if code != 0 || out.String() != "june: verified 1 rule, 19 examples\n" || errOut.Len() != 0 {
+	if code != 0 || out.String() != "june: verified 1 rule, 19 examples with "+check.ASTGrep(context.Background())+"\n" || errOut.Len() != 0 {
 		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
 	}
 }
@@ -340,7 +340,7 @@ func TestFixtureFundamentals(t *testing.T) {
 	env := check.Env{Dir: dir}
 
 	var out, errOut bytes.Buffer
-	if code := run(context.Background(), []string{"verify", "--rules", rulesDir}, strings.NewReader(""), &out, &errOut, env); code != 0 || out.String() != "june: verified 5 rules, 135 examples\n" || errOut.Len() != 0 {
+	if code := run(context.Background(), []string{"verify", "--rules", rulesDir}, strings.NewReader(""), &out, &errOut, env); code != 0 || out.String() != "june: verified 5 rules, 135 examples with "+check.ASTGrep(context.Background())+"\n" || errOut.Len() != 0 {
 		t.Fatalf("verify exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
 	}
 

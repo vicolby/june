@@ -8,13 +8,17 @@
 #   JUNE_INSTALL_DIR       Where the june binary goes. Default: /usr/local/bin as root,
 #                          $HOME/.local/bin otherwise.
 #   JUNE_OS, JUNE_ARCH     Override the detected platform (linux or darwin, amd64 or arm64).
-#   JUNE_INSTALL_AST_GREP  Set to 1 to also run `npm install --global @ast-grep/cli`.
+#   JUNE_INSTALL_AST_GREP  Set to 1 to also install the tested ast-grep with
+#                          `npm install --global @ast-grep/cli@$ast_grep_version`.
 #   JUNE_RELEASES_URL      Release base URL. Default: https://github.com/vicolby/june/releases.
 #
 # In CI set JUNE_VERSION and fetch this script from a release tag, not main.
 # The script downloads the archive and checksums.txt, verifies the sha256 and only then installs.
 
 set -eu
+
+# The ast-grep release june is tested against (same as .ast-grep-version). june refuses anything older than its floor.
+ast_grep_version=0.51.3
 
 say() {
 	printf '%s\n' "$*"
@@ -127,7 +131,7 @@ main() {
 	if [ "${JUNE_INSTALL_AST_GREP:-}" = 1 ]; then
 		need npm
 		say "Installing ast-grep"
-		npm install --global @ast-grep/cli || fail "npm install of @ast-grep/cli failed"
+		npm install --global "@ast-grep/cli@$ast_grep_version" || fail "npm install of @ast-grep/cli@$ast_grep_version failed"
 	fi
 
 	installed=$("$install_dir/june" --version) || fail "$install_dir/june --version failed"
@@ -139,7 +143,7 @@ main() {
 	*) say "note: $install_dir is not on PATH" ;;
 	esac
 	if ! command -v ast-grep >/dev/null 2>&1; then
-		say "note: ast-grep is not on PATH; june needs it (rerun with JUNE_INSTALL_AST_GREP=1 or npm install --global @ast-grep/cli)"
+		say "note: ast-grep is not on PATH; june needs it (rerun with JUNE_INSTALL_AST_GREP=1 or npm install --global @ast-grep/cli@$ast_grep_version)"
 	fi
 }
 

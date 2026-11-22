@@ -66,4 +66,4 @@ jobs:
           JUNE_RELEASES_URL="file://$base" JUNE_VERSION="$version" \
             JUNE_INSTALL_DIR="$RUNNER_TEMP/bin" \
             sh install.sh
-          test "$("$RUNNER_TEMP/bin/june" --version)" = "june $version"
+          test "$("$RUNNER_TEMP/bin/june" --version | head -n 1)" = "june $version"

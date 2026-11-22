@@ -14,7 +14,7 @@ Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`, whic
 
 - `cmd/june` is a shell and owns no decision. It maps flags to a `check.Request`, snapshots the environment, writes the output and report files, and returns the exit code.
 - `check` is the deep module. It decides one change: which lines are touched, which findings land on them, which opt-outs apply, and the exit code. It hides repo discovery, CI detection and scope inference, merge-base and shallow-clone handling, diff parsing, the changed-lines list parser, opt-out matching and sorting.
-- `rules` owns ast-grep rules and their sidecar examples (`rule-tests/<id>-test.yml`). A rule set loads only if every example behaves, so an unverified rule never produces a verdict. It runs ast-grep and hides the invocation, source encodings, and the zero-based to one-based line shift.
+- `rules` owns ast-grep rules and their sidecar examples (`rule-tests/<id>-test.yml`). A rule set loads only if every example behaves, so an unverified rule never produces a verdict. It checks the ast-grep version before verifying examples, runs ast-grep and hides the invocation, source encodings, and the zero-based to one-based line shift. `RuleSet.Version` is the version a verdict used.
 - `diag` is the one ruff-shaped vocabulary for findings, opt-outs, legacy matches, rule faults and june's own failures, and renders it as text, GitHub, GitLab, JSON or SARIF.
 
 ## Invariants
@@ -29,7 +29,7 @@ Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`, whic
 - Every opt-out on a touched line is printed, honoured or not.
 - The same touched lines yield the same exit code and the same findings. Each format renders them differently: text, JSON and GitLab paths stay relative to the working directory, GitHub annotations and SARIF use repository-root paths when that root is known, and SARIF omits the summary. The summary's base label names the base and where it came from.
 - Output is sorted, with no clock and no ANSI. The safe.directory fix may name the repository path.
-- A rule fault anywhere refuses the whole run, never a partial rule set.
+- A rule fault anywhere refuses the whole run, never a partial rule set. An unsupported or unreadable ast-grep version is a rule fault.
 - Nothing is fetched. The check path uses no network, model or clock.
 
 ## Where things are
@@ -37,6 +37,7 @@ Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`, whic
 - Scope inference order and the CLI contract: `internal/check/git.go`, `cmd/june/main.go` (`june --help`).
 - Output formats: `internal/diag`.
 - Behavior by example: the scenario tests in `internal/check` (real git, real ast-grep), plus `internal/rules` and `internal/diag` tests.
+- ast-grep compatibility and the tested pin: `internal/rules/version.go`, `.ast-grep-version`, and [README.md](README.md#install). Scheduled floor/latest suite runs: `.github/workflows/ast-grep-canary.yml`.
 - Install and release: `install.sh`, `.goreleaser.yaml`, `.github/workflows/release.yml`, and [README.md](README.md#install).
 
 ## House rules

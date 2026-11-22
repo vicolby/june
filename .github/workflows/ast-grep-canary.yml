@@ -1,0 +1,37 @@
+name: ast-grep canary
+
+# Runs the suite against the oldest supported ast-grep and the newest release, so a grammar change
+# or a floor that no longer holds shows up here instead of in a user's verdict.
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  suite:
+    name: ast-grep ${{ matrix.which }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        which: [floor, latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - name: Install ast-grep
+        run: |
+          set -eu
+          if [ "${{ matrix.which }}" = floor ]; then
+            version=$(sed -n 's/^const MinVersion = "\(.*\)"$/\1/p' internal/rules/version.go)
+          else
+            version=latest
+          fi
+          test -n "$version"
+          npm install --global "@ast-grep/cli@$version"
+          ast-grep --version
+      - run: go test -count=1 ./...

@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -211,7 +212,23 @@ func Rules(ctx context.Context, env Env, dirs []string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	return render(req, 0, nil, fmt.Sprintf("june: verified %s, %s", count(rs.Rules(), "rule"), count(rs.Examples(), "example"))), nil
+	return render(req, 0, nil, fmt.Sprintf("june: verified %s, %s with ast-grep %s", count(rs.Rules(), "rule"), count(rs.Examples(), "example"), rs.Version())), nil
+}
+
+// ASTGrep describes the ast-grep on PATH for june --version: its version, and a note when june would refuse it.
+func ASTGrep(ctx context.Context) string {
+	bin, err := exec.LookPath("ast-grep")
+	if err != nil {
+		return "ast-grep not found on PATH"
+	}
+	v, err := rules.Version(ctx, bin)
+	if err != nil {
+		return "ast-grep version unreadable (" + err.Error() + ")"
+	}
+	if !rules.Supported(v) {
+		return fmt.Sprintf("ast-grep %s (unsupported: june needs %s or newer)", v, rules.MinVersion)
+	}
+	return "ast-grep " + v
 }
 
 // load verifies the rules in dirs. A rule fault comes back as a refusal.
