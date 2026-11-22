@@ -273,7 +273,7 @@ There is no pip package and no container image.
 Pushing a `v*` tag runs `.github/workflows/release.yml`, which runs GoReleaser (`.goreleaser.yaml`) to build darwin and linux binaries for amd64 and arm64, publish a GitHub release, and write `Formula/june.rb` to `vicolby/homebrew-tap`.
 Each archive holds the `june` binary and `rules/`; the formula installs the binary to `bin`, the rules to `share/june/rules`, and depends on Homebrew's `ast-grep`.
 The workflow needs the repository secret `HOMEBREW_TAP_TOKEN`, a token with contents write access to the tap.
-An archive extracts to `june` and `rules/` with no top-level directory and does not install `ast-grep`. Each release also attaches `install.sh`, which installs one archive after the `checksums.txt` check; [README.md](README.md#install-script) covers the install.
+An archive extracts to `june` and `rules/` with no top-level directory and does not install `ast-grep`. Each release also attaches `install.sh`, which installs one archive after the `checksums.txt` check; [README.md](README.md#install) covers the install.
 The formula takes the Homebrew `ast-grep`, not the version pinned in `.ast-grep-version` for tests.
 Check the config with `goreleaser check`; it reports `brews` as deprecated, but that is the only block that generates a Formula, and GoReleaser removes deprecated options only in a major version.
 
