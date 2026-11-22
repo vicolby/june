@@ -201,11 +201,21 @@ func TestMissingListFileExitsTwo(t *testing.T) {
 func TestInterruptedRunExplainsItself(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	want := "june: error: june was interrupted before it reached a verdict. Fix: run june again and let it finish\n"
 	var out, errOut bytes.Buffer
 	code := run(ctx, []string{"--changed-lines", "-"}, strings.NewReader("app.py:2\n"), &out, &errOut, project(t))
-	want := "june: error: june was interrupted before it reached a verdict. Fix: run june again and let it finish\n"
 	if code != 2 || errOut.String() != want || out.Len() != 0 {
 		t.Errorf("exit = %d, stderr = %q, stdout = %q, want 2 and %q", code, errOut.String(), out.String(), want)
+	}
+
+	for _, path := range []string{os.Getenv("PATH"), t.TempDir()} {
+		t.Setenv("PATH", path)
+		out.Reset()
+		errOut.Reset()
+		code = run(ctx, []string{"--version"}, strings.NewReader(""), &out, &errOut, check.Env{Dir: t.TempDir()})
+		if code != 2 || errOut.String() != want || out.Len() != 0 {
+			t.Errorf("--version PATH=%q: exit = %d, stderr = %q, stdout = %q, want 2 and %q", path, code, errOut.String(), out.String(), want)
+		}
 	}
 }
 

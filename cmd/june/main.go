@@ -101,7 +101,11 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return usageError(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
 	}
 	if *showVersion {
-		fmt.Fprintf(stdout, "june %s\n%s\n", version, check.ASTGrep(ctx))
+		line := check.ASTGrep(ctx)
+		if err := ctx.Err(); err != nil {
+			return finish(env.Dir, stdout, stderr, check.Result{}, err)
+		}
+		fmt.Fprintf(stdout, "june %s\n%s\n", version, line)
 		return 0
 	}
 
