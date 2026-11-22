@@ -61,24 +61,13 @@ june --version
 june --rules "$(brew --prefix)/share/june/rules/python" --base main
 ```
 
-```text
-app/orders.py:1:23: PY012 Mutable default argument. Fix: default the parameter to None and create the value inside the function.
-june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 12 changed lines; base main (--base)
-```
-
 Without `--base` or `--changed-lines`, june infers the base, first hit wins: pre-commit refs, pull request or merge request base in CI, pre-commit staged diff, upstream branch, remote default branch. The summary names the one used. When the touched lines cannot be determined (a shallow clone, say) june exits 2 and names the fix.
 
 ## Rules
 
 Bundled [ast-grep](https://ast-grep.github.io) rules; only an error fails the check.
 
-| Rule | Catches |
-| --- | --- |
-| `PY012` | Mutable default argument |
-| `PY013` | Bare `except` |
-| `PY014` | Comparison to `None` with `==` or `!=` |
-| `PY015` | `except` block that only passes |
-| `PY016` | `assert` on a tuple |
+`PY012` mutable default argument, `PY013` bare `except`, `PY014` comparison to `None` with `==` or `!=`, `PY015` `except` that only passes, `PY016` `assert` on a tuple.
 
 Every rule has `valid` and `invalid` examples in `rule-tests/`. A normal run verifies the rules it loads first; run `june verify --rules DIR` in the CI of a repo that keeps its own rules.
 
