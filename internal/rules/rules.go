@@ -767,7 +767,21 @@ func verify(ctx context.Context, bin string, dirs []string, entries []entry) []F
 		return faults
 	}
 	if strings.Contains(text, "Cannot parse glob pattern") {
-		return []Fault{{Cause: "a rule has a files or ignores pattern that is not a valid glob (" + oneLine(failureReason(text)) + ")", Fix: "fix the glob in the rule's files or ignores"}}
+		for _, e := range entries {
+			args := append(slices.Clone(cmd.Args[1:]), "--filter", "^"+regexp.QuoteMeta(e.id)+"$")
+			filtered := exec.CommandContext(ctx, bin, args...)
+			filtered.Dir = scratch
+			out, _ := filtered.CombinedOutput()
+			if ctx.Err() != nil {
+				return []Fault{{Cause: "the examples were cancelled", Fix: "run june again"}}
+			}
+			if text := string(out); strings.Contains(text, "Cannot parse glob pattern") {
+				faults = append(faults, Fault{Dir: e.place.Dir, Path: e.place.Path, Cause: "a rule has a files or ignores pattern that is not a valid glob (" + oneLine(failureReason(text)) + ")", Fix: "fix the glob in the rule's files or ignores"})
+			}
+		}
+		if len(faults) > 0 {
+			return faults
+		}
 	}
 	if m := parseLine.FindStringSubmatch(text); m != nil {
 		at := where[strings.TrimSuffix(strings.TrimPrefix(m[1], "rules"+string(filepath.Separator)), ".yml")]

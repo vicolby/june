@@ -303,6 +303,43 @@ func TestVerifyArguments(t *testing.T) {
 	}
 }
 
+func TestInvalidRuleGlobsNameTheirSource(t *testing.T) {
+	for _, key := range []string{"files", "ignores"} {
+		t.Run(key, func(t *testing.T) {
+			env := project(t)
+			shared := filepath.Join(env.Dir, "shared")
+			if err := os.MkdirAll(filepath.Join(shared, "rule-tests"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			rule := "id: BAD[01]\nlanguage: python\nseverity: off\nmessage: No lists.\nrule:\n  kind: list\n"
+			path := filepath.Join(shared, "odd name.yaml")
+			if err := os.WriteFile(path, []byte(rule+key+": ['src/**', '[unclosed']\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(shared, "rule-tests", "BAD[01]-test.yml"), []byte("id: BAD[01]\nvalid: ['x = 1']\ninvalid: ['x = [1]']\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for _, dirs := range [][]string{{".june/rules", "shared"}, {"shared", ".june/rules"}} {
+				for _, command := range [][]string{{"verify"}, {"--changed-lines", "-"}} {
+					args := append(append([]string{}, command...), "--rules", dirs[0], "--rules", dirs[1])
+					var out, errOut bytes.Buffer
+					code := run(context.Background(), args, strings.NewReader("app.py:1\n"), &out, &errOut, env)
+					if code != 2 || !strings.HasPrefix(out.String(), "june: error: shared/odd name.yaml: ") || !strings.Contains(out.String(), "not a valid glob") || strings.Count(out.String(), "june: error:") != 1 || errOut.Len() != 0 {
+						t.Errorf("%v: exit = %d, stdout = %q, stderr = %q", args, code, out.String(), errOut.String())
+					}
+				}
+			}
+			if err := os.WriteFile(path, []byte(rule+key+": ['src/**']\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var out, errOut bytes.Buffer
+			if code := run(context.Background(), []string{"verify", "--rules", ".june/rules", "--rules", "shared"}, nil, &out, &errOut, env); code != 0 || !strings.HasPrefix(out.String(), "june: verified 2 rules, 21 examples with ") || errOut.Len() != 0 {
+				t.Errorf("valid glob: exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+			}
+		})
+	}
+}
+
 func TestLegacyFlag(t *testing.T) {
 	env := project(t)
 	args := []string{"--changed-lines", "-"}
