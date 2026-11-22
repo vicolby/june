@@ -63,13 +63,18 @@ func TestVersionOfRealASTGrep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	out, err := exec.CommandContext(context.Background(), bin, "--version").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.TrimSpace(string(out))
 	v, err := rules.Version(context.Background(), bin)
-	if err != nil || !rules.Supported(v) {
-		t.Fatalf("Version = %q, %v, want a supported version", v, err)
+	if err != nil || "ast-grep "+v != want {
+		t.Fatalf("Version = %q, %v, want the token in %q", v, err, want)
 	}
 	rs := loadGood(t)
-	if rs.Version() != v {
-		t.Errorf("RuleSet.Version = %q, want %q", rs.Version(), v)
+	if got := "ast-grep " + rs.Version(); got != want {
+		t.Errorf("RuleSet.Version = %q, want the token in %q", rs.Version(), want)
 	}
 }
 
