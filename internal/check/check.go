@@ -31,11 +31,14 @@ type Request struct {
 	// Rules lists the rules directories, merged into one set; empty means ./.june/rules.
 	// A directory named twice counts once, and a rule id defined in two files is a rule fault.
 	Rules []string
-	// Format is the output format; empty is inferred, and is plain text outside GitLab CI.
+	// Format is the output format; empty is inferred: GitHub under GitHub Actions, GitLab under GitLab CI, else text.
 	Format diag.Format
 	// Legacy also lists rule matches on untouched lines of the checked files, as information only.
 	// They never change Exit; off by default.
 	Legacy bool
+
+	// root is the working directory's path under the repository root, with a trailing slash, for native formats.
+	root string
 }
 
 // Result is the verdict and its rendering.
@@ -57,9 +60,8 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	if req.Format == "" {
-		req.Format = inferFormat(env)
-	}
+	req.Format = formatFor(env, req)
+	req.root = repoPrefix(ctx, env, req.Format)
 	touched, sc, bad, err := findTouched(ctx, env, req)
 	if err != nil {
 		return Result{}, err
@@ -171,14 +173,19 @@ func Rules(ctx context.Context, env Env, dirs []string) (Result, error) {
 	if env.Dir == "" {
 		return Result{}, errors.New("check: Env.Dir is empty")
 	}
-	rs, refusal, err := load(ctx, env, dirs, Request{})
+	req := Request{}
+	req.Format = formatFor(env, req)
+	if req.Format == diag.GitLab {
+		req.Format = diag.Text // verify has no findings, and an empty report would stand for a clean check
+	}
+	rs, refusal, err := load(ctx, env, dirs, req)
 	if refusal != nil {
 		return *refusal, nil
 	}
 	if err != nil {
 		return Result{}, err
 	}
-	return render(Request{}, 0, nil, fmt.Sprintf("june: verified %s, %s", count(rs.Rules(), "rule"), count(rs.Examples(), "example"))), nil
+	return render(req, 0, nil, fmt.Sprintf("june: verified %s, %s", count(rs.Rules(), "rule"), count(rs.Examples(), "example"))), nil
 }
 
 // load verifies the rules in dirs. A rule fault comes back as a refusal.
@@ -237,6 +244,33 @@ func count(n int, noun string) string {
 	return fmt.Sprintf("%d %ss", n, noun)
 }
 
+// formatFor is the requested format, else the native one of the CI that env says it runs in.
+func formatFor(env Env, req Request) diag.Format {
+	if req.Format != "" {
+		return req.Format
+	}
+	switch {
+	case onGitHub(env):
+		return diag.GitHub
+	case gitlab(env):
+		return diag.GitLab
+	}
+	return diag.Text
+}
+
+// repoPrefix is where env.Dir sits under the repository root, "" at the root or outside git.
+// Only GitHub annotations read paths from the root, so no other format asks git.
+func repoPrefix(ctx context.Context, env Env, f diag.Format) string {
+	if f != diag.GitHub {
+		return ""
+	}
+	out, err := git(ctx, env, "", "rev-parse", "--show-prefix")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
 // findTouched picks the touched-line adapter: the supplied list, else git against Base or an inferred base.
 // The scope is zero for a supplied list. The touched set is never "every line": what cannot be known is refused.
 func findTouched(ctx context.Context, env Env, req Request) (touchedSet, scope, *string, error) {
@@ -293,17 +327,12 @@ func mergeRequestBase(ctx context.Context, env Env) string {
 	}
 }
 
-// inferFormat picks the output format of the CI the run is in; the plain text is the same everywhere.
-func inferFormat(env Env) diag.Format {
-	if gitlab(env) {
-		return diag.GitLab
-	}
-	return diag.Text
-}
-
-// refuse explains why there is no verdict. A refusal is text only: a report would read as a clean run.
+// refuse explains why there is no verdict. A GitLab refusal is text only, since a report would read as a clean run;
+// GitHub annotates it as an error.
 func refuse(req Request, msgs ...string) Result {
-	req.Format = diag.Text
+	if req.Format == diag.GitLab {
+		req.Format = diag.Text
+	}
 	ds := make([]diag.Diagnostic, len(msgs))
 	for i, m := range msgs {
 		ds[i] = diag.Diagnostic{Kind: diag.Failure, Sev: diag.Error, Msg: m}
@@ -312,7 +341,17 @@ func refuse(req Request, msgs ...string) Result {
 }
 
 func render(req Request, exit int, ds []diag.Diagnostic, summary string) Result {
-	out, files := diag.Render(ds, summary, req.Format)
+	shown := ds
+	if req.root != "" {
+		shown = make([]diag.Diagnostic, len(ds))
+		for i, d := range ds {
+			if d.File != "" {
+				d.Path = req.root + d.File
+			}
+			shown[i] = d
+		}
+	}
+	out, files := diag.Render(shown, summary, req.Format)
 	return Result{Exit: exit, Out: out, Files: files, Diags: ds}
 }
 

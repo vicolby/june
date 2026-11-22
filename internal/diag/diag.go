@@ -3,6 +3,7 @@ package diag
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -40,6 +41,8 @@ type Format string
 
 const (
 	Text Format = "text"
+	// GitHub is one GitHub Actions workflow command per diagnostic, followed by the plain text.
+	GitHub Format = "github"
 	// GitLab renders the plain text and a GitLab Code Quality report beside it.
 	GitLab Format = "gitlab"
 )
@@ -48,7 +51,10 @@ const (
 const GitLabReport = "gl-code-quality-report.json"
 
 type Diagnostic struct {
-	File      string
+	File string
+	// Path is File relative to the repository root, for formats whose consumer reads it that way.
+	// Empty means File already is. Plain text always prints File.
+	Path      string
 	Line, Col int
 	Code      string
 	Sev       Severity
@@ -63,7 +69,8 @@ type File struct {
 }
 
 // Render returns sorted plain-text diagnostics, followed by summary when it is not empty.
-// The text is identical in every format; GitLab adds its Code Quality report as a File. The output carries no ANSI.
+// The text is the same for every format; a format adds its native report: GitHub as workflow commands before it,
+// GitLab as a Code Quality File beside it. The closed switch below is the only place a format is chosen. The output carries no ANSI.
 func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File) {
 	sorted := append([]Diagnostic(nil), ds...)
 	sort.SliceStable(sorted, func(i, j int) bool { return less(sorted[i], sorted[j]) })
@@ -83,10 +90,48 @@ func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File
 		fmt.Fprintf(&b, "%s\n", escapeControls(summary))
 	}
 	switch f {
+	case GitHub:
+		// Commands lead so the text still ends with the summary line, as it does everywhere.
+		var a bytes.Buffer
+		for _, d := range sorted {
+			a.WriteString(annotation(d))
+		}
+		return append(a.Bytes(), b.Bytes()...), nil
 	case GitLab:
 		return b.Bytes(), []File{{Path: GitLabReport, Data: codeQuality(sorted)}}
+	default: // Text, and "" before a caller has chosen one.
+		return b.Bytes(), nil
 	}
-	return b.Bytes(), nil
+}
+
+// annotation is a GitHub Actions workflow command for d, ending in a newline.
+// A failure has no location, so it is annotated without a file.
+// Legacy matches and opt-outs are information, so they are notices.
+func annotation(d Diagnostic) string {
+	level := "notice"
+	switch {
+	case d.Kind == Failure:
+		level = "error"
+	case d.Kind == Finding && d.Sev == Error:
+		level = "error"
+	case d.Kind == Finding:
+		level = "warning"
+	}
+	if d.Kind == Failure {
+		return fmt.Sprintf("::%s title=june::%s\n", level, commandData(d.Msg))
+	}
+	return fmt.Sprintf("::%s file=%s,line=%d,col=%d,title=%s::%s\n", level,
+		commandProperty(cmp.Or(d.Path, d.File)), d.Line, d.Col, commandProperty(d.Code), commandData(d.Msg))
+}
+
+// commandData escapes a workflow command message after control characters are made visible.
+func commandData(s string) string {
+	return strings.ReplaceAll(escapeControls(s), "%", "%25")
+}
+
+// commandProperty also escapes the characters that separate properties.
+func commandProperty(s string) string {
+	return strings.NewReplacer(":", "%3A", ",", "%2C").Replace(commandData(s))
 }
 
 // codeQuality renders findings and opt-outs as a GitLab Code Quality report.

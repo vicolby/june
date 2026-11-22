@@ -110,9 +110,10 @@ Each is an error with a corrective message and its own valid and invalid example
 The list contains one `path:7` or `path:7-12` entry per line, with one-based, inclusive line ranges and paths relative to the working directory.
 Blank lines are ignored; whitespace in filenames is preserved, and only `.py` files are checked.
 `--base REF` judges lines added or edited since the merge base with REF, including committed changes, worktree changes and untracked files; the list wins when both are given.
-Without either, a bare `june` infers the base. A GitLab merge request pipeline takes the merge request diff base, described below; otherwise inference is local and first hit wins: the upstream branch of HEAD, then the default branch of `origin` (`refs/remotes/origin/HEAD`). Nothing is fetched.
+Without either, a bare `june` infers the base. A GitLab merge request pipeline takes the merge request diff base, described below; otherwise inference is local and first hit wins: the GitHub pull request base (`origin/$GITHUB_BASE_REF` on a `pull_request` or `pull_request_target` run), the upstream branch of HEAD, then the default branch of `origin` (`refs/remotes/origin/HEAD`). Nothing is fetched.
+Under GitHub Actions a push event has no base: even when the checked-out branch tracks an upstream, which there is HEAD itself, it exits 2 naming `--base REF` with `fetch-depth: 0`, and a pull request whose base was not fetched exits 2 naming `fetch-depth: 0`.
 When no base can be inferred, git is missing or the directory is not in a work tree, or the merge base is missing (a shallow clone), june exits 2 naming the fix; the touched set is never every line.
-The current check emits plain text. Completed checks (exit 0 or 1) end with a summary line, `june: 1 error, 0 warnings, 0 opt-outs; checked 2 files, 5 changed lines`; a git run adds `; base origin/main (upstream branch)`, naming the base and its source (`--base`, `merge request diff base`, `upstream branch` or `remote default branch`), and a supplied list adds none; refusals (exit 2) have no summary.
+The check emits plain text. Under GitHub Actions (`GITHUB_ACTIONS=true`) it also emits one workflow command per diagnostic before the text: findings as `::error` or `::warning` annotations, opt-outs and legacy lines as `::notice`, and refusals as `::error`. Annotation paths are relative to the repository root, so they land on the right file under `working-directory:`; the text keeps paths relative to the working directory. The text itself is identical everywhere. Completed checks (exit 0 or 1) end with a summary line, `june: 1 error, 0 warnings, 0 opt-outs; checked 2 files, 5 changed lines`; a git run adds `; base origin/main (upstream branch)`, naming the base and its source (`--base`, `merge request diff base`, `pull request base`, `upstream branch` or `remote default branch`), and a supplied list adds none; refusals (exit 2) have no summary.
 Coverage counts distinct touched Python files and changed lines, counting overlapping ranges only once; the opt-out count is every opt-out printed on a touched line, honoured or not.
 `--legacy` also lists matches on untouched lines of the checked files, one `legacy: file:line:col: CODE message` line each after the findings, and the summary gains `; 2 legacy violations listed`.
 Legacy lines never change the exit code, are off by default, and a valid opt-out on the untouched line hides its legacy line.
@@ -123,7 +124,7 @@ A merge request pipeline takes its base after `--base` and before local inferenc
 A detached pipeline (`CI_MERGE_REQUEST_DIFF_BASE_SHA` set) uses that sha.
 A merged results or merge train pipeline (`CI_MERGE_REQUEST_EVENT_TYPE` of `merged_result` or `merge_train`) uses the merge commit's first parent, `HEAD^1`, resolved to its sha for the summary; `CI_MERGE_REQUEST_TARGET_BRANCH_SHA` is ignored, since on a later merge train car it is the target tip and not the first parent.
 A clone too shallow to hold the base exits 2 pointing at `GIT_DEPTH: 0`.
-Pre-commit refs, the GitHub pull request base, staged diffs and the GitHub format remain planned.
+Pre-commit refs and staged diffs remain planned.
 
 `cmd/june` is a shell and owns no decision.
 It maps flags to a `Request`, snapshots the environment, writes `Out` and `Files`, and returns `Exit`.
