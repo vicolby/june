@@ -1069,9 +1069,7 @@ func TestOptOutFollowsOtherComments(t *testing.T) {
 func TestOptOutCoversExactlyOneMatch(t *testing.T) {
 	env := tree(t, map[string]string{"a.py": "def a(x=[], y=[]):  # june: ignore[PY012] two on one line\n    pass\n"})
 	res := change(t, env, "a.py:1\n")
-	out := string(res.Out)
-	if res.Exit != 1 || !strings.Contains(out, "(suppresses nothing: 2 PY012 findings on this line, an opt-out covers exactly one.") ||
-		strings.Count(out, "PY012 ") < 3 {
-		t.Errorf("Exit = %d, Out = %q, want both findings kept and the opt-out refused", res.Exit, out)
-	}
+	expect(t, res, 1, "a.py:1:21: PY012 opt-out: two on one line (suppresses nothing: 2 PY012 findings on this line, an opt-out covers exactly one. Fix: fix a violation or split the line)\n"+
+		"a.py:1:9: "+py012+
+		"a.py:1:15: "+py012)
 }
