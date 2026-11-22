@@ -86,7 +86,7 @@ Opt out of one rule on a line with a reason:
 def tag(items, cache={}):  # june: ignore[MY001] cache is shared on purpose
 ```
 
-The marker can follow another comment, as in `# noqa: E501  # june: ignore[MY001] reason`. Name exactly one rule and give a nonblank reason after the `]`. An opt-out covers exactly one finding: if a line has several findings of that rule, it suppresses none of them and says so. A malformed comment suppresses nothing and says why. Every opt-out a change adds is printed and counted in the summary.
+The marker can follow another comment, as in `# noqa: E501  # june: ignore[MY001] reason`. A later `june:` without its own `#`, such as `# type: ignore june: ignore[MY001] reason`, warns and suppresses nothing, even on a line with no finding. Name exactly one rule and give a nonblank reason after the `]`. An opt-out covers exactly one finding: if a line has several findings of that rule, it suppresses none of them and says so. A malformed comment suppresses nothing and says why. Every opt-out a change adds is printed and counted in the summary.
 
 ## CI
 

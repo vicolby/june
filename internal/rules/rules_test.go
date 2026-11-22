@@ -551,6 +551,7 @@ z = []  # noqa: E501 june: ignore[LST01] no hash before the marker
 		{8, "", "", true},
 		{9, "", "", true},
 		{10, "", "", true},
+		{12, "", "", true},
 		{14, "", "", true},
 		{15, "", "", true},
 		{16, "LST01", "", true},
@@ -563,6 +564,7 @@ z = []  # noqa: E501 june: ignore[LST01] no hash before the marker
 		{23, "", "", true},
 		{24, "LST01", "after another comment", false},
 		{25, "LST01", "", true},
+		{26, "", "", true},
 	}
 	if fmt.Sprint(have) != fmt.Sprint(want) {
 		t.Errorf("opt-outs = %v, want %v", have, want)
