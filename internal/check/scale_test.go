@@ -209,15 +209,77 @@ func TestChangeNewFileIsNotPairedWithFileThatBecameNotPython(t *testing.T) {
 	expect(t, against(t, env, "main"), 1, want)
 }
 
-// A new Python file that resembles the source of a rename from a non-Python path is still new, even when
-// both are re-diffed in the same batch: each file's pairing must not depend on the other files.
+// A new Python file that shares a redo batch with a rename from a non-Python path is still new.
+// fresh.py copies a.txt's mutable default onto line 81. The full diff leaves fresh.py unpaired, so
+// that line is checked. Git keeps four rename candidates per destination: s0.txt through s3.txt
+// outscore a.txt for fresh.py and are claimed by t0.dat through t3.dat. decoy.py is renamed to
+// decoy.txt, which is not Python, so the Python-only diff pairs decoy.py with fresh.py and fresh.py
+// joins the redo batch of moved.py. Pairing a.txt with fresh.py would hide line 81, and treating
+// moved.py as new would report the mutable default it copied onto line 101.
 func TestChangeNewFileIsNotPairedWithSourceOfAnotherRename(t *testing.T) {
-	shared := "import os\nimport sys\nx = 1\ny = 2\nz = 3\n"
-	env := repo(t, map[string]string{"a.txt": shared, "b.txt": "import json\nimport re\nq = 1\nr = 2\ns = 3\n"})
+	const (
+		freshViol = 80  // line 81 of fresh.py, copied from a.txt
+		movedViol = 200 // line 101 of moved.py, copied from a.txt
+	)
+	line := func(id int) string {
+		switch id {
+		case freshViol:
+			return old
+		case movedViol:
+			return "def g(b=[]): pass\n" // same length as old, so it stays one rename chunk
+		default:
+			return fmt.Sprintf("v%012d = 1\n", id)
+		}
+	}
+	text := func(groups ...[]int) string {
+		var b strings.Builder
+		for _, group := range groups {
+			for _, id := range group {
+				b.WriteString(line(id))
+			}
+		}
+		return b.String()
+	}
+	span := func(from, to int) []int {
+		ids := make([]int, to-from)
+		for i := range ids {
+			ids[i] = from + i
+		}
+		return ids
+	}
+	// Every file is 200 equal lines, so a rename score is the share of those lines.
+	// fresh.py shares 180 with each sN.txt, 160 with a.txt and 130 with decoy.py.
+	// tN.dat shares 195 with sN.txt, moved.py shares 140 with a.txt, decoy.txt shares 190 with decoy.py.
+	fs, rest := span(0, 180), span(180, 200)
+	mo, pad := span(200, 240), span(240, 300)
+	body := func(name string, groups ...[]int) string {
+		t.Helper()
+		out := text(groups...)
+		if n := strings.Count(out, "\n"); n != 200 {
+			t.Fatalf("%s has %d lines, want 200", name, n)
+		}
+		return out
+	}
+	base := map[string]string{
+		"a.txt":    body("a.txt", span(0, 140), rest, mo),
+		"decoy.py": body("decoy.py", rest, span(70, 180), span(1500, 1570)),
+	}
+	for n := 0; n < 4; n++ {
+		base[fmt.Sprintf("s%d.txt", n)] = body(fmt.Sprintf("s%d.txt", n), fs, span(1000+n*100, 1020+n*100))
+	}
+	env := repo(t, base)
+	for n := 0; n < 4; n++ {
+		dst := fmt.Sprintf("t%d.dat", n)
+		git(t, env.Dir, "mv", fmt.Sprintf("s%d.txt", n), dst)
+		uniq := span(1000+n*100, 1020+n*100)
+		write(t, filepath.Join(env.Dir, dst), body(dst, fs, uniq[:15], span(1400+n*100, 1405+n*100)))
+	}
 	git(t, env.Dir, "mv", "a.txt", "moved.py")
-	write(t, filepath.Join(env.Dir, "moved.py"), shared+old)
-	write(t, filepath.Join(env.Dir, "fresh.py"), shared+"w = 4\n"+old)
-	want := "fresh.py:7:9: " + py012 + "moved.py:6:9: " + py012
+	write(t, filepath.Join(env.Dir, "moved.py"), body("moved.py", span(0, 80), rest, mo, pad))
+	git(t, env.Dir, "mv", "decoy.py", "decoy.txt")
+	write(t, filepath.Join(env.Dir, "decoy.txt"), body("decoy.txt", rest, span(70, 180), span(1500, 1560), span(1600, 1610)))
+	write(t, filepath.Join(env.Dir, "fresh.py"), body("fresh.py", fs, rest))
+	want := "fresh.py:81:9: " + py012
 	expect(t, against(t, env, "main"), 1, want)
 	git(t, env.Dir, "add", "-A")
 	expect(t, against(t, env, "main"), 1, want)
