@@ -81,12 +81,19 @@ func skippedText(file, reason string) string {
 func wantSkippedSummary(t *testing.T, res check.Result, n int) {
 	t.Helper()
 	noun := "files"
+	warn := "warnings"
 	if n == 1 {
 		noun = "file"
+		warn = "warning"
 	}
-	want := fmt.Sprintf("%d %s skipped, not readable as text", n, noun)
-	if !strings.Contains(summaryOf(res), want) {
-		t.Errorf("summary = %q, want it to contain %q", summaryOf(res), want)
+	sum := summaryOf(res)
+	for _, want := range []string{
+		fmt.Sprintf("%d %s skipped, not readable as text", n, noun),
+		fmt.Sprintf("%d %s,", n, warn),
+	} {
+		if !strings.Contains(sum, want) {
+			t.Errorf("summary = %q, want it to contain %q", sum, want)
+		}
 	}
 }
 
@@ -447,6 +454,18 @@ func TestWarningOnTouchedLinePrintsAndExitsZero(t *testing.T) {
 	res := change(t, env, "app.py:2\n")
 	expect(t, res, 0, "app.py:2:1: "+lst02)
 	if got, want := summaryOf(res), "june: 0 errors, 1 warning, 0 opt-outs; checked 1 file, 1 changed line"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+}
+
+func TestSkippedFileCountsAsAWarningAlongsideRuleWarnings(t *testing.T) {
+	env := withWarningRule(t, tree(t, map[string]string{
+		"app.py": "tmp = 2\n",
+		"bad.py": "x = '\xe9'\n",
+	}))
+	res := change(t, env, "app.py:1\nbad.py:1\n")
+	expect(t, res, 0, "app.py:1:1: "+lst02+skippedText("bad.py", "it is not valid UTF-8 and declares no other encoding"))
+	if got, want := summaryOf(res), "june: 0 errors, 2 warnings, 0 opt-outs; checked 1 file, 1 changed line; 1 file skipped, not readable as text"; got != want {
 		t.Errorf("summary = %q, want %q", got, want)
 	}
 }

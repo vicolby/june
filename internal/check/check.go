@@ -103,13 +103,14 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	// A file that cannot be read as text is left out loudly: a warning naming it, and a count in the summary.
 	// Scan reports the slash-separated path it was given, already relative to the working directory.
 	skipped := map[string]bool{}
+	var errs, warns, optOutCount int
 	for _, s := range scanned.Skipped {
 		skipped[s.File] = true
+		warns++
 		ds = append(ds, diag.Diagnostic{File: s.File, Line: 1, Col: 1, Code: "ENCODING", Sev: diag.Warning, Kind: diag.Finding,
 			Msg: "file not scanned: " + s.Reason + ". Fix: add a PEP 263 coding declaration for a supported encoding, or save it as UTF-8"})
 	}
 	exit := 0
-	var errs, warns, optOutCount int
 	type site struct {
 		file string
 		line int

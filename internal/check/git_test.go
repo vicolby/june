@@ -870,6 +870,7 @@ func TestNonUTF8PythonFilesAreTranscodedOrSkippedLoudly(t *testing.T) {
 		"ok.py:2:",
 		"pkg/legacy.py:3:",
 		`pkg/broken.py:1:1: ENCODING file not scanned: it is not valid UTF-8 and declares no other encoding.`,
+		"1 warning,",
 		"; 1 file skipped, not readable as text;",
 		"checked 2 files",
 	} {
