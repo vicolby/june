@@ -188,6 +188,33 @@ june:
 The report lists findings and opt-outs on touched lines; an error is `major`, a warning `minor` and an opt-out `info`.
 A detached pipeline uses the merge request diff base; a merged results or merge train pipeline uses the first parent of the merge commit.
 
+### Run on the default branch too
+
+The merge request Code Quality widget compares the merge request's report with the report from the latest pipeline on the target branch. If no pipeline on that branch has produced `gl-code-quality-report.json`, for example when the job only runs in merge request pipelines, the widget has nothing to compare against and shows no useful result.
+So also run june on the default branch with the same `artifacts.reports.codequality`.
+A branch pipeline has no merge request base, so june exits 2 unless you pass `--base`; `HEAD~1` judges the lines the latest commit changed:
+
+```yaml
+june:
+  image: <an image with june and ast-grep installed>
+  variables:
+    GIT_DEPTH: 0
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - |
+      if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
+        june --rules .june/rules
+      else
+        june --rules .june/rules --base HEAD~1
+      fi
+  artifacts:
+    when: always
+    reports:
+      codequality: gl-code-quality-report.json
+```
+
 ## Exit codes
 
 | Code | Meaning |
