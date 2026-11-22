@@ -2,7 +2,6 @@ package rules_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -220,7 +219,7 @@ func TestLoadRejectsMismatchedIdentityAndExtraDocuments(t *testing.T) {
 
 func TestScanRefusesIncompleteInput(t *testing.T) {
 	rs := loadGood(t)
-	for _, name := range []string{"missing", "unreadable", "invalid UTF-8", "NUL", "directory"} {
+	for _, name := range []string{"missing", "unreadable", "directory"} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			good := filepath.Join(dir, "good.py")
@@ -237,10 +236,6 @@ func TestScanRefusesIncompleteInput(t *testing.T) {
 						t.Error(err)
 					}
 				})
-			case "invalid UTF-8":
-				write(t, bad, "# coding: latin-1\nx = '\xe9'\ny = []\n")
-			case "NUL":
-				write(t, bad, "\x00\nx = []\n")
 			case "directory":
 				if err := os.Mkdir(bad, 0o755); err != nil {
 					t.Fatal(err)
@@ -253,11 +248,66 @@ func TestScanRefusesIncompleteInput(t *testing.T) {
 			if strings.Contains(err.Error(), dir) {
 				t.Errorf("error exposes an absolute path: %v", err)
 			}
-			var notText *rules.NotTextError
-			if isText := name == "invalid UTF-8" || name == "NUL"; errors.As(err, &notText) != isText || (isText && notText.File != bad) {
-				t.Errorf("error = %#v, want a NotTextError naming %s only for non-text input", err, bad)
+		})
+	}
+}
+
+func TestScanTranscodesDeclaredEncodings(t *testing.T) {
+	rs := loadGood(t)
+	for name, tc := range map[string]struct{ src, want string }{
+		"latin-1 first line":  {"# -*- coding: latin-1 -*-\nx = '\xe9'\ny = []\n", ""},
+		"iso-8859-1 line two": {"#!/usr/bin/env python\n# vim: set fileencoding=iso-8859-1 :\nx = '\xe9'\ny = []\n", ""},
+		"cp1252":              {"# coding=cp1252\nx = '\x93q\x94'\ny = []\n", ""},
+		"latin-1 but UTF-8":   {"# coding: latin-1\nx = '\u00e9'\ny = []\n", ""},
+		"ascii":               {"# coding: ascii\nx = 1\ny = []\n", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			py := filepath.Join(t.TempDir(), "legacy.py")
+			write(t, py, tc.src)
+			got, err := scanFiles(context.Background(), rs, py)
+			if err != nil || len(got.Skipped) != 0 || len(got.Matches) != 1 || got.Matches[0].Line != strings.Count(tc.src, "\n") {
+				t.Fatalf("Scan = %+v, %v, want one finding on the last line", got, err)
 			}
 		})
+	}
+}
+
+func TestScanSkipsUnreadableTextAndKeepsOtherFiles(t *testing.T) {
+	rs := loadGood(t)
+	dir := t.TempDir()
+	good := filepath.Join(dir, "good.py")
+	write(t, good, "x = []\n")
+	for name, src := range map[string]string{
+		"no declaration":   "x = '\xe9'\ny = []\n",
+		"NUL":              "\x00\nx = []\n",
+		"unsupported":      "# coding: shift_jis\nx = []\n",
+		"declared utf-8":   "# coding: utf-8\nx = '\xe9'\ny = []\n",
+		"cp1252 undefined": "# coding: cp1252\nx = '\x81'\n",
+		"ascii high byte":  "# coding: ascii\nx = '\xe9'\n",
+		"BOM with latin-1": "\xef\xbb\xbf# coding: latin-1\nx = []\n",
+		"declaration late": "x = 1\n# coding: latin-1\ny = '\xe9'\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := filepath.Join(dir, "bad.py")
+			write(t, bad, src)
+			got, err := scanFiles(context.Background(), rs, bad, good)
+			if err != nil || len(got.Skipped) != 1 || got.Skipped[0].File != bad || got.Skipped[0].Reason == "" || strings.Contains(got.Skipped[0].Reason, dir) {
+				t.Fatalf("Scan = %+v, %v, want only %s skipped with a reason", got, err, bad)
+			}
+			if len(got.Matches) != 1 || got.Matches[0].File != good {
+				t.Errorf("Matches = %+v, want the finding in the readable file", got.Matches)
+			}
+		})
+	}
+}
+
+func TestScanOnlyUnreadableFilesIsNotAFailure(t *testing.T) {
+	rs := loadGood(t)
+	bad := filepath.Join(t.TempDir(), "bad.py")
+	write(t, bad, "x = '\xe9'\n")
+	got, err := scanFiles(context.Background(), rs, bad)
+	if err != nil || len(got.Skipped) != 1 || len(got.Matches) != 0 {
+		t.Fatalf("Scan = %+v, %v, want one skipped file and no error", got, err)
 	}
 }
 
@@ -609,7 +659,7 @@ func TestLoadWithoutDirectoriesIsAFault(t *testing.T) {
 }
 
 // scanFiles scans files that share one directory, and reports their matches under the absolute paths it was given,
-// so a test reads like the files it wrote. A non-text error names that same path.
+// so a test reads like the files it wrote. A skipped file is named by that same path.
 func scanFiles(ctx context.Context, rs *rules.RuleSet, files ...string) (rules.Scanned, error) {
 	if len(files) == 0 {
 		return rs.Scan(ctx, "", nil)
@@ -626,13 +676,8 @@ func scanFiles(ctx context.Context, rs *rules.RuleSet, files ...string) (rules.S
 	for i := range got.OptOuts {
 		got.OptOuts[i].File = filepath.Join(root, got.OptOuts[i].File)
 	}
-	var notText *rules.NotTextError
-	if errors.As(err, &notText) {
-		for i, name := range rel {
-			if name == notText.File {
-				return got, &rules.NotTextError{File: files[i]}
-			}
-		}
+	for i := range got.Skipped {
+		got.Skipped[i].File = filepath.Join(root, got.Skipped[i].File)
 	}
 	return got, err
 }

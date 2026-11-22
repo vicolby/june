@@ -96,15 +96,18 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		if ctx.Err() != nil {
 			return Result{}, ctx.Err()
 		}
-		var notText *rules.NotTextError
-		if errors.As(err, &notText) {
-			// Scan reports the slash-separated path it was given, already relative to the working directory.
-			return refuse(req, fmt.Sprintf("%q is not UTF-8 text, so it cannot be scanned. Fix: save it as UTF-8 without NUL bytes and run june again", notText.File)), nil
-		}
 		return refuse(req, "ast-grep failed while scanning ("+err.Error()+"). Fix: run ast-grep scan on the changed files to see why"), nil
 	}
 
 	var ds []diag.Diagnostic
+	// A file that cannot be read as text is left out loudly: a warning naming it, and a count in the summary.
+	// Scan reports the slash-separated path it was given, already relative to the working directory.
+	skipped := map[string]bool{}
+	for _, s := range scanned.Skipped {
+		skipped[s.File] = true
+		ds = append(ds, diag.Diagnostic{File: s.File, Line: 1, Col: 1, Code: "ENCODING", Sev: diag.Warning, Kind: diag.Finding,
+			Msg: "file not scanned: " + s.Reason + ". Fix: add a PEP 263 coding declaration for a supported encoding, or save it as UTF-8"})
+	}
 	exit := 0
 	var errs, warns, optOutCount int
 	type site struct {
@@ -165,10 +168,17 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		ds = append(ds, diag.Diagnostic{File: path, Line: m.Line, Col: m.Col, Code: m.Rule, Sev: sev, Kind: diag.Finding, Msg: m.Msg})
 	}
 	lines := 0
+	checked := 0
 	for _, f := range files {
-		lines += touched.lineCount(f)
+		if !skipped[f] {
+			checked++
+			lines += touched.lineCount(f)
+		}
 	}
-	sum := summary(errs, warns, optOutCount, len(files), lines)
+	sum := summary(errs, warns, optOutCount, checked, lines)
+	if n := len(scanned.Skipped); n > 0 {
+		sum += "; " + count(n, "file") + " skipped, not readable as text"
+	}
 	if sc.base != "" {
 		sum += "; base " + sc.base + " (" + sc.source + ")"
 	}

@@ -65,6 +65,10 @@ june --rules path/to/rules --base main
 
 Without `--base` or `--changed-lines`, june infers the base, first hit wins: pre-commit refs, pull request or merge request base in CI, pre-commit staged diff, upstream branch, remote default branch. The summary names the one used. When the touched lines cannot be determined (a shallow clone, say) june exits 2 and names the fix.
 
+### Source encoding
+
+june reads a Python file as Python does: UTF-8, or the encoding its first two lines declare (PEP 263, e.g. `# -*- coding: latin-1 -*-`). It transcodes `utf-8`, `latin-1`, `ascii` and `cp1252` files, so line numbers are unchanged. A file it cannot read (another declared encoding, invalid bytes, NUL bytes) is not scanned: june prints `file:1:1: ENCODING file not scanned: <reason>` as a warning and ends the summary with `N files skipped`. Other files are still judged, and a skipped file never changes the exit code.
+
 ## Rules
 
 june ships no rules: write your own [ast-grep](https://ast-grep.github.io) rules and keep them in `.june/rules`, or pass `--rules DIR`. A run with neither stops with an error that says to supply rules. Only an error fails the check.

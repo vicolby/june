@@ -833,10 +833,26 @@ func TestOtherRevParseFailuresQuoteGitInsteadOfClaimingNoWorkTree(t *testing.T) 
 	}
 }
 
-func TestNonUTF8PythonFileIsNamedAndBlamesNeitherAstGrepNorTheScope(t *testing.T) {
+func TestNonUTF8PythonFilesAreTranscodedOrSkippedLoudly(t *testing.T) {
 	env := repo(t, map[string]string{"ok.py": "x = 1\n"})
-	write(t, filepath.Join(env.Dir, "pkg", "legacy.py"), "# -*- coding: latin-1 -*-\nx = '\xe9'\n")
+	write(t, filepath.Join(env.Dir, "ok.py"), "x = 1\ndef f(a=[]): pass\n")
+	write(t, filepath.Join(env.Dir, "pkg", "legacy.py"), "# -*- coding: latin-1 -*-\nx = '\xe9'\ndef g(a=[]): pass\n")
+	write(t, filepath.Join(env.Dir, "pkg", "broken.py"), "x = '\xe9'\n")
 	commit(t, env)
 	res := against(t, env, "main")
-	refused(t, res, "june: error: \"pkg/legacy.py\" is not UTF-8 text, so it cannot be scanned. Fix: save it as UTF-8 without NUL bytes and run june again\n")
+	out := string(res.Out)
+	for _, want := range []string{
+		"ok.py:2:",
+		"pkg/legacy.py:3:",
+		`pkg/broken.py:1:1: ENCODING file not scanned: it is not valid UTF-8 and declares no other encoding.`,
+		"; 1 file skipped, not readable as text;",
+		"checked 2 files",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("Out lacks %q:\n%s", want, out)
+		}
+	}
+	if res.Exit != 1 {
+		t.Errorf("Exit = %d, want 1 from the readable files", res.Exit)
+	}
 }

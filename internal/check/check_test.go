@@ -353,7 +353,15 @@ func TestFailureOutputHasNoAbsolutePaths(t *testing.T) {
 			case "reader":
 				req.Changed = iotest.ErrReader(&os.PathError{Op: "read", Path: filepath.Join(env.Dir, "changed.txt"), Err: os.ErrPermission})
 			case "scan":
-				write(t, filepath.Join(env.Dir, "app.py"), "# coding: latin-1\nx = '\xe9'\ndef f(a=[]): pass\n")
+				file := filepath.Join(env.Dir, "app.py")
+				if err := os.Chmod(file, 0); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := os.Chmod(file, 0o644); err != nil {
+						t.Error(err)
+					}
+				})
 			case "temporary directory":
 				t.Setenv("TMPDIR", filepath.Join(env.Dir, "missing"))
 			}
