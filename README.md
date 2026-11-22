@@ -41,7 +41,7 @@ june --rules "$HOME/.local/share/june/rules/python"
 
 To adopt them in a repo, copy `rules/python` to `.june/rules`, the default rules directory, and drop `--rules`.
 
-While the repository is private, release assets need a token. Download with `gh release download "v${VERSION}" --repo vicolby/june --pattern "${ARCHIVE}" --pattern checksums.txt` and `GH_TOKEN` set, instead of the `curl` lines.
+Release assets of a private fork or mirror need a token. Download with `gh release download "v${VERSION}" --repo vicolby/june --pattern "${ARCHIVE}" --pattern checksums.txt` and `GH_TOKEN` set, instead of the `curl` lines.
 
 ## Bundled rules
 
