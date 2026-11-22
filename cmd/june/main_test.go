@@ -475,16 +475,16 @@ func TestTerminatedRunCleansUpAndExplainsItself(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(30 * time.Second)
-	for {
+	const poll = 20 * time.Millisecond
+	for waited := time.Duration(0); ; waited += poll {
 		if _, err := os.Stat(scanning); err == nil {
 			break
 		}
-		if time.Now().After(deadline) {
+		if waited >= 30*time.Second {
 			_ = cmd.Process.Kill()
 			t.Fatalf("ast-grep never started scanning; stderr = %q", errOut.String())
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(poll)
 	}
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)

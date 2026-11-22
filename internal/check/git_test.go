@@ -798,7 +798,7 @@ func assertDubiousOwnershipFix(t *testing.T, res check.Result, root string) {
 		t.Fatalf("Exit = %d, Out = %q", res.Exit, res.Out)
 	}
 	word := strings.TrimSuffix(strings.TrimPrefix(out, prefix), "\n")
-	cmd := exec.Command("sh", "-c", "printf '%s' "+word)
+	cmd := exec.CommandContext(context.Background(), "sh", "-c", "printf '%s' "+word)
 	got, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("shell parse %q: %v", word, err)
