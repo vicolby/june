@@ -54,7 +54,7 @@ brews:
     directory: Formula
     homepage: https://github.com/vicolby/june
     description: Deterministic enforcement of code-guideline rules on the lines a change touches
-    license: ""
+    license: MIT
     dependencies:
       - name: ast-grep
     install: |
