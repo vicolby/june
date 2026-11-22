@@ -31,9 +31,11 @@ runs:
           esac
         fi
         bin="$RUNNER_TEMP/june-bin"
+        export npm_config_prefix="$RUNNER_TEMP/june-npm"
         # install.sh checks the release sha256 and installs the ast-grep release june is tested against.
         JUNE_VERSION=$version JUNE_INSTALL_DIR=$bin JUNE_INSTALL_AST_GREP=1 sh "$GITHUB_ACTION_PATH/install.sh"
         echo "$bin" >> "$GITHUB_PATH"
+        echo "$npm_config_prefix/bin" >> "$GITHUB_PATH"
     - name: Run june
       shell: bash
       env:

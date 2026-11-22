@@ -93,4 +93,4 @@ jobs:
         run: |
           set -eu
           test "$(june --version | head -n 1)" = "june ${{ steps.snapshot.outputs.version }}"
-          ast-grep --version
+          test "$(ast-grep --version)" = "ast-grep $(cat .ast-grep-version)"
