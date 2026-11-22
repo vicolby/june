@@ -51,12 +51,12 @@ func snapshotEnv(getwd func() (string, error)) (check.Env, error) {
 	return check.Env{Dir: dir, Vars: vars}, nil
 }
 
-// usage is the help text: `june --help`, `june -h` and `june help` print it to stdout and exit 0.
+// usage is the help text: `june --help` and `june -h` print it to stdout and exit 0.
 const usage = `usage:
   june [--legacy] [--rules DIR]... [--base REF | --changed-lines FILE]
   june verify [--rules DIR]...
   june --version
-  june --help | -h | help
+  june --help | -h
 
 flags:
   --base REF            judge lines changed since the merge base of REF and HEAD
@@ -73,10 +73,6 @@ exit codes:
 `
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, env check.Env) int {
-	if len(args) == 1 && args[0] == "help" {
-		fmt.Fprint(stdout, usage)
-		return 0
-	}
 	if len(args) > 0 && args[0] == "verify" {
 		return verify(ctx, args[1:], stdout, stderr, env)
 	}

@@ -30,7 +30,7 @@ func TestVersion(t *testing.T) {
 }
 
 func TestHelpPrintsUsageAndExitsZero(t *testing.T) {
-	for _, args := range [][]string{{"--help"}, {"-h"}, {"help"}, {"verify", "--help"}, {"verify", "-h"}, {"--legacy", "--help"}} {
+	for _, args := range [][]string{{"--help"}, {"-h"}, {"verify", "--help"}, {"verify", "-h"}, {"--legacy", "--help"}} {
 		var out, errOut bytes.Buffer
 		if code := run(context.Background(), args, strings.NewReader(""), &out, &errOut, check.Env{Dir: t.TempDir()}); code != 0 {
 			t.Errorf("%v: exit = %d, want 0", args, code)
@@ -42,15 +42,6 @@ func TestHelpPrintsUsageAndExitsZero(t *testing.T) {
 			if !strings.Contains(out.String(), want) {
 				t.Errorf("%v: stdout lacks %q: %q", args, want, out.String())
 			}
-		}
-	}
-}
-
-func TestHelpWithExtraArgumentsIsAUsageError(t *testing.T) {
-	for _, args := range [][]string{{"help", "me"}, {"help", "--legacy"}} {
-		var out, errOut bytes.Buffer
-		if code := run(context.Background(), args, strings.NewReader(""), &out, &errOut, check.Env{Dir: t.TempDir()}); code != 2 || out.Len() != 0 || !strings.Contains(errOut.String(), ". Fix: usage is") {
-			t.Errorf("%v: exit = %d, stdout = %q, stderr = %q", args, code, out.String(), errOut.String())
 		}
 	}
 }

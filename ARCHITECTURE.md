@@ -95,7 +95,7 @@ Output is text by default and carries no ANSI. Rendering escapes control charact
 
 ## cmd/june
 
-The current build supports `june --help`, `june -h`, `june help` (usage and flags on stdout, exit 0), `june --version`, `june verify [--rules DIR]...`, `june [--legacy] [--rules DIR]... [--base REF]` and `june [--legacy] [--rules DIR]... --changed-lines FILE`; `-` reads the list from stdin.
+The current build supports `june --help` and `june -h` (usage and flags on stdout, exit 0), `june --version`, `june verify [--rules DIR]...`, `june [--legacy] [--rules DIR]... [--base REF]` and `june [--legacy] [--rules DIR]... --changed-lines FILE`; `-` reads the list from stdin.
 An unstamped `june --version` prints `june dev`.
 With ast-grep on PATH, run the shipped Python fundamentals and their sidecar examples from the repository root:
 
