@@ -458,6 +458,19 @@ func TestGitScopeSymlinksTouchNothing(t *testing.T) {
 	}
 }
 
+func TestSkippedSymlinkIsNamedInTheSummary(t *testing.T) {
+	env := repo(t, map[string]string{"legacy.py": "x = 1\n"})
+	if err := os.Symlink("legacy.py", filepath.Join(env.Dir, "alias.py")); err != nil {
+		t.Fatal(err)
+	}
+	git(t, env.Dir, "add", "alias.py")
+	res := against(t, env, "main")
+	expect(t, res, 0, "")
+	if got, want := summaryOf(res), "1 changed .py path skipped, not regular files (symlink or submodule)"; !strings.Contains(got, want) {
+		t.Errorf("summary = %q, want it to contain %q", got, want)
+	}
+}
+
 func TestBaseJudgesCommittedEdits(t *testing.T) {
 	env := repo(t, map[string]string{"app.py": old + "x = 1\n"})
 	expect(t, against(t, env, "main"), 0, "")
@@ -712,7 +725,7 @@ func TestBareJuneFallsBackToTheRemoteDefaultBranch(t *testing.T) {
 
 func TestExplicitBaseNamesItsSource(t *testing.T) {
 	env := repo(t, map[string]string{"app.py": old})
-	if got, want := summaryOf(against(t, env, "main")), "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; base main (--base)"; got != want {
+	if got, want := summaryOf(against(t, env, "main")), "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines"+noPython+"; base main (--base)"; got != want {
 		t.Errorf("summary = %q, want %q", got, want)
 	}
 }

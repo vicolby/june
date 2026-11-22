@@ -19,6 +19,9 @@ import (
 // version is stamped at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
+// issuesURL is where a june bug is reported.
+const issuesURL = "https://github.com/vicolby/june/issues"
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -172,7 +175,7 @@ func finish(dir string, stdout, stderr io.Writer, res check.Result, err error) i
 		return fail(stderr, "june was interrupted before it reached a verdict. Fix: run june again and let it finish")
 	}
 	if err != nil {
-		return fail(stderr, fmt.Sprintf("%v. Fix: report this as a june bug", err))
+		return fail(stderr, fmt.Sprintf("%v. Fix: report this as a june bug at %s with june %s and the command you ran", err, issuesURL, version))
 	}
 	_, _ = stdout.Write(res.Out) // Output write failures have no recovery path, as with fail.
 	for _, f := range res.Files {

@@ -20,7 +20,11 @@ import (
 // scope names the base a git run judged against and where june got it.
 // scanDir is a temporary tree of the diff post-image for a staged or ref run; empty means the worktree.
 // The caller removes scanDir when it is set.
-type scope struct{ base, source, scanDir string }
+type scope struct {
+	base, source, scanDir string
+	// notRegular counts changed .py paths june left out because they are not regular files.
+	notRegular int
+}
 
 // fullDepth is the fix for a GitLab clone too shallow to hold the merge request diff base.
 const fullDepth = "clone the full history, with GIT_DEPTH: 0 in the GitLab CI job variables"
@@ -447,6 +451,7 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 				return refuse("changed file %q cannot be read. Fix: check its permissions and run june again", rel)
 			}
 			if !strings.HasPrefix(blob.mode, "100") {
+				sc.notRegular++
 				continue
 			}
 			content, ok := blobs[blob.sha]
@@ -466,6 +471,7 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 				return refuse("changed file %q cannot be inspected. Fix: check its permissions and run june again", rel)
 			}
 			if !info.Mode().IsRegular() {
+				sc.notRegular++
 				continue
 			}
 			if _, err = os.ReadFile(abs); err != nil {

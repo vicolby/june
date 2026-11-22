@@ -20,6 +20,9 @@ import (
 	"github.com/vicolby/june/internal/rules"
 )
 
+// noPython is the note june adds when no changed Python file was found.
+const noPython = "; note: no changed Python files found - june reads .py files only, not .pyi or scripts without an extension - so if some were expected, check --base and the checkout"
+
 const py012 = "PY012 Mutable default argument. Fix: default the parameter to None and create the value inside the function.\n"
 
 // tree builds a temp tree with the fixture Python rules at .june/rules and the given files.
@@ -73,7 +76,7 @@ func change(t *testing.T, env check.Env, list string) check.Result {
 	return res
 }
 
-var summaryLine = regexp.MustCompile(`^june: \d+ errors?, \d+ warnings?, \d+ opt-outs?; checked \d+ files?, \d+ changed lines?(; \d+ files? skipped, not readable as text)?(; base \S+ \([a-z -]+\))?(; \d+ files? excluded)?\n$`)
+var summaryLine = regexp.MustCompile(`^june: \d+ errors?, \d+ warnings?, \d+ opt-outs?; checked \d+ files?, \d+ changed lines?(; \d+ files? skipped, not readable as text)?(; \d+ changed \.py paths? skipped[^;]*)?(; note: [^;]*)?(; base \S+ \([a-z -]+\))?(; \d+ files? excluded)?\n$`)
 
 // skippedText is the warning june prints when a Python file is left out of the scan.
 func skippedText(file, reason string) string {
@@ -492,7 +495,7 @@ func TestSeverityComesFromTheRule(t *testing.T) {
 func TestSummaryCountsCoverage(t *testing.T) {
 	env := tree(t, map[string]string{"a.py": "x = 1\ny = 2\nz = 3\n", "b.py": "x = 1\n", "notes.md": "text\n"})
 	cases := []struct{ list, want string }{
-		{"", "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines"},
+		{"", "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines" + noPython},
 		{"a.py:1-2\na.py:2-3\na.py:3\n", "june: 0 errors, 0 warnings, 0 opt-outs; checked 1 file, 3 changed lines"},
 		{"a.py:1\nb.py:1\nnotes.md:1\n", "june: 0 errors, 0 warnings, 0 opt-outs; checked 2 files, 2 changed lines"},
 	}
@@ -1088,4 +1091,38 @@ func TestOptOutCoversExactlyOneMatch(t *testing.T) {
 	expect(t, res, 1, "a.py:1:21: PY012 opt-out: two on one line (suppresses nothing: 2 PY012 findings on this line, an opt-out covers exactly one. Fix: fix a violation or split the line)\n"+
 		"a.py:1:9: "+py012+
 		"a.py:1:15: "+py012)
+}
+
+func TestZeroFilesCheckedSaysSo(t *testing.T) {
+	env := tree(t, map[string]string{"notes.md": "text\n", "stubs.pyi": "def f(a=[]): ...\n"})
+	res := change(t, env, "notes.md:1\nstubs.pyi:1\n")
+	expect(t, res, 0, "")
+	if got, want := summaryOf(res), "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines"+noPython; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+	// With a Python file in scope there is nothing to explain.
+	env = tree(t, map[string]string{"a.py": "x = 1\n"})
+	if got := summaryOf(change(t, env, "a.py:1\n")); strings.Contains(got, "note:") {
+		t.Errorf("summary = %q, want no note", got)
+	}
+}
+
+func TestTouchedLineInsideSyntaxErrorWarns(t *testing.T) {
+	env := tree(t, map[string]string{"bad.py": "x = 1\ndef broken(:\n    return (1,\n", "ok.py": "x = 1\n"})
+	res := change(t, env, "bad.py:2\nok.py:1\n")
+	want := "bad.py:2:1: PARSE a touched line is inside a syntax error, so rules may have checked less than they appear to. Fix: fix the syntax error and run june again\n"
+	expect(t, res, 0, want)
+	if got, want := summaryOf(res), "june: 0 errors, 1 warning, 0 opt-outs; checked 2 files, 2 changed lines"; got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+
+	// A syntax error never turns a clean exit into a failure, and a valid file adds no warning.
+	res = change(t, env, "ok.py:1\n")
+	expect(t, res, 0, "")
+}
+
+func TestSyntaxErrorOnUntouchedLinesIsQuiet(t *testing.T) {
+	env := tree(t, map[string]string{"bad.py": "x = 1\n\n\n\n\ny = (\n"})
+	res := change(t, env, "bad.py:1\n")
+	expect(t, res, 0, "")
 }

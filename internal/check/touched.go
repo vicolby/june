@@ -26,6 +26,18 @@ func (t touchedSet) has(file string, line int) bool {
 	return false
 }
 
+// firstIn is the first touched line of file within from..to, if any.
+func (t touchedSet) firstIn(file string, from, to int) (int, bool) {
+	best := 0
+	for _, s := range t[file] {
+		lo, hi := max(s.from, from), min(s.to, to)
+		if lo <= hi && (best == 0 || lo < best) {
+			best = lo
+		}
+	}
+	return best, best != 0
+}
+
 // pythonFiles includes excluded paths retained for summary counts, sorted.
 func (t touchedSet) pythonFiles() []string {
 	var files []string

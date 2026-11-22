@@ -424,7 +424,7 @@ func TestBaseFlagJudgesGitChanges(t *testing.T) {
 		}
 	}
 	var out, errOut bytes.Buffer
-	if code := run(context.Background(), []string{"--base", "main"}, strings.NewReader(""), &out, &errOut, env); code != 0 || out.String() != "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; base main (--base)\n" || errOut.Len() != 0 {
+	if code := run(context.Background(), []string{"--base", "main"}, strings.NewReader(""), &out, &errOut, env); code != 0 || out.String() != "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; note: no changed Python files found - june reads .py files only, not .pyi or scripts without an extension - so if some were expected, check --base and the checkout; base main (--base)\n" || errOut.Len() != 0 {
 		t.Fatalf("unchanged tree: exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
 	}
 	if err := os.WriteFile(filepath.Join(env.Dir, "new.py"), []byte("def g(b={}): pass\n"), 0o644); err != nil {
@@ -586,7 +586,7 @@ func TestPublishedHookInThePreCommitEnvironment(t *testing.T) {
 	git("commit", "-q", "-m", "base") // app.py already holds a violation; it is legacy and must not fail
 	var out, errOut bytes.Buffer
 	args := strings.Fields(strings.TrimPrefix(h.Entry, "june"))
-	if code := run(context.Background(), args, nil, &out, &errOut, env); code != 0 || out.String() != "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; base HEAD (staged diff)\n" || errOut.Len() != 0 {
+	if code := run(context.Background(), args, nil, &out, &errOut, env); code != 0 || out.String() != "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; note: no changed Python files found - june reads .py files only, not .pyi or scripts without an extension - so if some were expected, check --base and the checkout; base HEAD (staged diff)\n" || errOut.Len() != 0 {
 		t.Fatalf("nothing staged: exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
 	}
 	if err := os.WriteFile(filepath.Join(env.Dir, "new.py"), []byte("def g(b={}): pass\n"), 0o644); err != nil {
@@ -787,5 +787,17 @@ func TestIgnoreWhitespaceFlagRefusesChangedLines(t *testing.T) {
 	code := run(context.Background(), []string{"--ignore-whitespace", "--changed-lines", "-"}, strings.NewReader("app.py:1\n"), &out, &errOut, project(t))
 	if code != 2 || !strings.Contains(out.String()+errOut.String(), "--ignore-whitespace has no effect on --changed-lines") {
 		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+}
+
+func TestInternalErrorNamesWhereToReportAndTheVersion(t *testing.T) {
+	var out, errOut bytes.Buffer
+	// An empty working directory is an internal error from check, not a usage problem.
+	if code := run(context.Background(), nil, strings.NewReader(""), &out, &errOut, check.Env{}); code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+	want := "Fix: report this as a june bug at https://github.com/vicolby/june/issues with june " + version
+	if !strings.Contains(errOut.String(), want) {
+		t.Errorf("stderr = %q, want it to contain %q", errOut.String(), want)
 	}
 }

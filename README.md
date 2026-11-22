@@ -11,7 +11,7 @@ june turns the guideline rules a tool can decide into CI failures that an AI age
 - **Same verdict everywhere.** No network, no model: the same input gives the same result locally, in GitHub Actions and in GitLab CI.
 - **Rules are verified.** A rule whose passing and failing examples misbehave is refused.
 
-Version 1 checks Python only.
+Version 1 checks Python only: files ending in `.py`. `.pyi` stubs and scripts with no extension (even with a Python shebang) are not read.
 
 ## Install
 
@@ -72,6 +72,14 @@ Without `--base` or `--changed-lines`, june infers the base, first hit wins: pre
 june defaults to UTF-8 and honors a PEP 263 coding declaration (e.g. `# -*- coding: latin-1 -*-`) on the first line, or the second when the first is blank or comment-only. Supported encodings are `utf-8`, `latin-1`, `ascii` and `cp1252`; transcoding preserves line numbers.
 
 Unsupported declarations, invalid bytes for the selected encoding, a conflicting UTF-8 byte order mark, NUL bytes, or a bare carriage return cause the file to be skipped. In text output, june prints `file:1:1: ENCODING file not scanned: <reason>` as a warning; the summary counts each skipped file as a warning and includes `N files skipped, not readable as text` (`1 file` for a single skip). Other files are still judged, and a skipped file never changes the exit code. File I/O failures still stop the run with exit 2.
+
+### Coverage notes
+
+Notes and warnings never change the exit code.
+
+- **Nothing checked.** When no changed `.py` file is found, the summary ends with `note: no changed Python files found`. If you expected some, check `--base` and the checkout (a `pull_request_target` checkout, say, has no diff).
+- **Paths left out.** A changed `.py` path that is a symlink or submodule is not read; the summary says `N changed .py paths skipped`.
+- **Syntax errors.** A touched line inside a region the parser could not read gets `file:line:col: PARSE ...` as a warning, because rules matched only what the parser recovered there. Fix the syntax error.
 
 ## Rules
 

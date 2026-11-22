@@ -25,6 +25,7 @@ Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`. Test
 - A touched line is one added or edited in the post-image. With `--ignore-whitespace`, a line whose only change is whitespace (`git diff -w`) is not touched; a line with any other edit still is. Pure deletions, mode changes and pure renames touch nothing. A new file touches every line, including an untracked file in a local run.
 - A match is judged on its first line only, so rules match the smallest wrong node.
 - Source files follow the [source-encoding contract](README.md#source-encoding).
+- Notes and warnings about coverage (nothing checked, paths left out, a touched line in a syntax error) never change the exit code. The syntax-error scan is a built-in rule with the reserved id `june-parse-error`.
 - If the touched set is unknowable, the exit is 2, never 0 and never every line. A GitHub push with no base and no changed-lines list is unknowable even when the branch tracks its remote.
 - Opt-out syntax, suppression limits and visibility follow the [opt-out contract](README.md#opt-outs).
 - The same input yields the same exit code and the same findings; CI event context is part of that input (see [GitHub Actions](README.md#github-actions)). Each format renders them differently: text, JSON and GitLab paths stay relative to the working directory, GitHub annotations and SARIF use repository-root paths when that root is known, and SARIF omits the summary. The summary's base label names the base and where it came from.
