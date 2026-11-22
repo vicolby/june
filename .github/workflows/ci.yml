@@ -70,8 +70,9 @@ jobs:
           test "$("$RUNNER_TEMP/bin/june" --version | head -n 1)" = "june $version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "releases=file://$base" >> "$GITHUB_OUTPUT"
-      # The composite action installs and runs june from the same snapshot; --base HEAD judges nothing, so it passes.
-      - name: Run the action
+      - name: Run the action at HEAD
+        id: action-refusal
+        continue-on-error: true
         uses: ./
         env:
           JUNE_RELEASES_URL: ${{ steps.snapshot.outputs.releases }}
@@ -79,6 +80,15 @@ jobs:
           version: ${{ steps.snapshot.outputs.version }}
           rules: testdata/rules/python
           base: HEAD
+      - name: Check the action outcome
+        env:
+          ACTION_OUTCOME: ${{ steps.action-refusal.outcome }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            test "$ACTION_OUTCOME" = failure
+          else
+            test "$ACTION_OUTCOME" = success
+          fi
       - name: Check what the action installed
         run: |
           set -eu

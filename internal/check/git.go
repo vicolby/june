@@ -41,32 +41,33 @@ func onGitHub(env Env) bool { return env.Vars["GITHUB_ACTIONS"] == "true" }
 
 // eventBase is the base a GitHub event names: the remote-tracking ref of the branch a pull request
 // targets (actions/checkout fetches it with fetch-depth: 0), or the commit a merge group is queued on.
-// It is "" outside those events, or when a merge_group payload carries no base_sha.
-func eventBase(env Env) (base, source string) {
+// It is "" outside those events.
+func eventBase(env Env) (base, source string, err error) {
 	if !onGitHub(env) {
-		return "", ""
+		return "", "", nil
 	}
 	switch env.Vars["GITHUB_EVENT_NAME"] {
 	case "pull_request", "pull_request_target":
 		if ref := env.Vars["GITHUB_BASE_REF"]; ref != "" {
-			return "origin/" + ref, sourcePull
+			return "origin/" + ref, sourcePull, nil
 		}
 	case "merge_group":
 		// GITHUB_BASE_REF is empty for a merge group; the event payload has merge_group.base_sha.
 		data, err := os.ReadFile(env.Vars["GITHUB_EVENT_PATH"])
 		if err != nil {
-			return "", ""
+			return "", "", fmt.Errorf("the merge group event payload cannot be read (%v). Fix: provide a readable GITHUB_EVENT_PATH, or pass --base REF", err)
 		}
 		var payload struct {
 			MergeGroup struct {
 				BaseSHA string `json:"base_sha"`
 			} `json:"merge_group"`
 		}
-		if json.Unmarshal(data, &payload) == nil && isObjectID(payload.MergeGroup.BaseSHA) {
-			return payload.MergeGroup.BaseSHA, sourceMerge
+		if json.Unmarshal(data, &payload) != nil || !isObjectID(payload.MergeGroup.BaseSHA) {
+			return "", "", errors.New("the merge group event payload has no valid merge_group.base_sha. Fix: provide the merge_group event payload in GITHUB_EVENT_PATH, or pass --base REF")
 		}
+		return payload.MergeGroup.BaseSHA, sourceMerge, nil
 	}
-	return "", ""
+	return "", "", nil
 }
 
 // isObjectID reports whether s is a full git object name in hex, SHA-1 or SHA-256.
@@ -82,8 +83,18 @@ func isObjectID(s string) bool {
 	return true
 }
 
-// onEventBase reports whether source is a base that a GitHub event named, where a change is always expected.
-func onEventBase(source string) bool { return source == sourcePull || source == sourceMerge }
+func changeEvent(env Env, sc scope) string {
+	if !onGitHub(env) || sc.base == "" || sc.source == sourceRefs || sc.source == sourceStaged {
+		return ""
+	}
+	switch env.Vars["GITHUB_EVENT_NAME"] {
+	case "pull_request", "pull_request_target":
+		return "pull request"
+	case "merge_group":
+		return "merge group"
+	}
+	return ""
+}
 
 // gitTouched finds the lines a change added or edited.
 // An empty base is inferred, first hit wins: pre-commit's from and to refs, a GitHub pull request base,
@@ -107,6 +118,10 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 			_ = os.RemoveAll(scanDir)
 		}
 	}()
+	refuse := func(format string, a ...any) (touchedSet, scope, *string, error) {
+		msg := fmt.Sprintf(format, a...)
+		return nil, scope{}, &msg, nil
+	}
 	// An explicit --base wins. Pre-commit refs, then a GitHub pull request base, outrank a merge
 	// request base the caller already resolved. The staged diff comes after that base.
 	if source != sourceFlag {
@@ -114,14 +129,16 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 		if from != "" && to != "" {
 			base, toRef = from, to
 			sc = scope{base: base, source: sourceRefs}
-		} else if eb, src := eventBase(env); eb != "" {
-			base = eb
-			sc = scope{base: base, source: src}
+		} else {
+			eb, src, err := eventBase(env)
+			if err != nil {
+				return refuse("%s", err)
+			}
+			if eb != "" {
+				base = eb
+				sc = scope{base: base, source: src}
+			}
 		}
-	}
-	refuse := func(format string, a ...any) (touchedSet, scope, *string, error) {
-		msg := fmt.Sprintf(format, a...)
-		return nil, scope{}, &msg, nil
 	}
 	if strings.HasPrefix(base, "-") {
 		return refuse("the base %q is not a git ref. Fix: pass a branch, tag or commit to --base", base)
@@ -214,12 +231,12 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 		}
 		// A pull request or merge group is a change, so HEAD at its base means the checkout is not the change
 		// (pull_request_target checks out the base branch by default) and a pass would judge nothing.
-		if onEventBase(sc.source) && toRef == "" {
+		if event := changeEvent(env, sc); event != "" {
 			head, herr := git(ctx, env, "", "rev-parse", "HEAD^{commit}")
 			target, terr := git(ctx, env, "", "rev-parse", base+"^{commit}")
 			if herr == nil && terr == nil && strings.TrimSpace(head) == strings.TrimSpace(target) {
 				return refuse("HEAD is the base %q of this %s, so nothing was judged. Fix: check out the change under review (with pull_request_target, set ref on actions/checkout to the pull request head), or run june on pull_request",
-					base, strings.TrimSuffix(sc.source, " base"))
+					base, event)
 			}
 		}
 		var err error
@@ -726,12 +743,9 @@ func writeScanFile(dir *string, rel string, content []byte) error {
 	return os.WriteFile(path, content, 0o644)
 }
 
-// inferBase picks the base of a bare run: a GitHub pull request base, else the upstream branch of HEAD, else the default branch of origin.
+// inferBase picks the base of a bare run: the upstream branch of HEAD, else the default branch of origin.
 // It returns "" when neither exists. Both are local reads; nothing is fetched.
 func inferBase(ctx context.Context, env Env) (base, source string) {
-	if eb, src := eventBase(env); eb != "" {
-		return eb, src
-	}
 	if out, err := git(ctx, env, "", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); err == nil {
 		if name := strings.TrimSpace(out); name != "" {
 			return name, sourceUpstream

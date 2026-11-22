@@ -2,6 +2,7 @@ package check_test
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -228,17 +229,57 @@ func TestMergeGroupUsesTheEventBaseSHA(t *testing.T) {
 	}
 }
 
-func TestMergeGroupWithoutAReadablePayloadIsRefused(t *testing.T) {
+func TestMergeGroupWithoutAValidPayloadIsRefused(t *testing.T) {
+	for _, fallback := range []string{"default", "upstream"} {
+		t.Run(fallback, func(t *testing.T) {
+			env, _ := mergeGroup(t)
+			git(t, env.Dir, "update-ref", "refs/remotes/origin/queue", "HEAD")
+			git(t, env.Dir, "remote", "set-head", "origin", "queue")
+			if fallback == "upstream" {
+				git(t, env.Dir, "branch", "--set-upstream-to=origin/queue", "feature")
+			}
+			for _, tc := range []struct{ name, payload string }{
+				{"unset-path", ""},
+				{"missing-file", ""},
+				{"directory", ""},
+				{"malformed", "{"},
+				{"missing-sha", `{"merge_group":{}}`},
+				{"null-group", `{"merge_group":null}`},
+				{"empty-sha", `{"merge_group":{"base_sha":""}}`},
+				{"wrong-type", `{"merge_group":{"base_sha":123}}`},
+				{"invalid-sha", `{"merge_group":{"base_sha":"--upload-pack=x"}}`},
+				{"nonhex-sha", `{"merge_group":{"base_sha":"` + strings.Repeat("z", 40) + `"}}`},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					payload := filepath.Join(t.TempDir(), "event.json")
+					if tc.name == "unset-path" {
+						payload = ""
+					} else if tc.name == "directory" {
+						payload = t.TempDir()
+					} else if tc.name != "missing-file" {
+						write(t, payload, tc.payload)
+					}
+					env.Vars["GITHUB_EVENT_PATH"] = payload
+					if res := infer(t, env); res.Exit != 2 || !strings.Contains(string(res.Out), "the merge group event payload") {
+						t.Errorf("Exit = %d, Out =\n%s\nwant a refusal instead of fallback to %s", res.Exit, res.Out, fallback)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestMergeGroupExplicitScopeDoesNotNeedPayload(t *testing.T) {
 	env, _ := mergeGroup(t)
 	env.Vars["GITHUB_EVENT_PATH"] = filepath.Join(t.TempDir(), "missing.json")
-	if res := infer(t, env); res.Exit != 2 || !strings.Contains(string(res.Out), "a merge_group event has no pull request base") {
-		t.Errorf("Exit = %d, Out =\n%s\nwant a refusal naming the event", res.Exit, res.Out)
-	}
-	bad := filepath.Join(t.TempDir(), "event.json")
-	write(t, bad, `{"merge_group":{"base_sha":"--upload-pack=x"}}`)
-	env.Vars["GITHUB_EVENT_PATH"] = bad
-	if res := infer(t, env); res.Exit != 2 {
-		t.Errorf("Exit = %d, want 2 for a base_sha that is not an object name\n%s", res.Exit, res.Out)
+	results := []check.Result{against(t, env, "origin/main"), change(t, env, "app.py:2\n")}
+	env.Vars["PRE_COMMIT_FROM_REF"] = "origin/main"
+	env.Vars["PRE_COMMIT_TO_REF"] = "HEAD"
+	results = append(results, infer(t, env))
+	for _, res := range results {
+		if res.Exit != 1 || !strings.Contains(string(res.Out), "\napp.py:2:9: "+py012) {
+			t.Errorf("Exit = %d, Out =\n%s", res.Exit, res.Out)
+		}
 	}
 }
 
@@ -252,12 +293,97 @@ func TestMergeGroupBaseThatWasNotFetchedNamesFetchDepth(t *testing.T) {
 }
 
 func TestPullRequestAtItsBaseIsRefused(t *testing.T) {
-	// pull_request_target checks out the base branch, so HEAD is the base and nothing would be judged.
-	env := onGitHub(pullRequest(t), "pull_request_target", "main")
-	git(t, env.Dir, "checkout", "-q", "--detach", "origin/main")
-	res := infer(t, env)
-	msg := "HEAD is the base \"origin/main\" of this pull request, so nothing was judged. Fix: check out the change under review (with pull_request_target, set ref on actions/checkout to the pull request head), or run june on pull_request"
-	refused(t, res, "::error title=june::"+msg+"\njune: error: "+msg+"\n")
+	for _, event := range []string{"pull_request", "pull_request_target"} {
+		t.Run(event, func(t *testing.T) {
+			env := onGitHub(pullRequest(t), event, "main")
+			git(t, env.Dir, "checkout", "-q", "--detach", "origin/main")
+			for _, base := range []string{"", "origin/main", "HEAD"} {
+				name := base
+				if name == "" {
+					name = "origin/main"
+				}
+				msg := "HEAD is the base \"" + name + "\" of this pull request, so nothing was judged. Fix: check out the change under review (with pull_request_target, set ref on actions/checkout to the pull request head), or run june on pull_request"
+				refused(t, against(t, env, base), "::error title=june::"+msg+"\njune: error: "+msg+"\n")
+			}
+		})
+	}
+}
+
+func TestPullRequestSafeguardsExcludeSuppliedLinesAndPreCommitRefs(t *testing.T) {
+	for _, event := range []string{"pull_request", "pull_request_target"} {
+		t.Run(event, func(t *testing.T) {
+			env := onGitHub(pullRequest(t), event, "main")
+			git(t, env.Dir, "checkout", "-q", "--detach", "origin/main")
+			for _, tc := range []struct {
+				list string
+				exit int
+			}{{"", 0}, {"app.py:1\n", 1}} {
+				res := change(t, env, tc.list)
+				if strings.Contains(string(res.Out), "judged 0 changed lines") || res.Exit != tc.exit {
+					t.Errorf("supplied lines: Exit = %d, Out =\n%s", res.Exit, res.Out)
+				}
+			}
+			env.Vars["PRE_COMMIT_FROM_REF"] = "origin/main"
+			for _, to := range []string{"HEAD", "feature"} {
+				env.Vars["PRE_COMMIT_TO_REF"] = to
+				res := infer(t, env)
+				want := 0
+				if to == "feature" {
+					want = 1
+				}
+				if res.Exit != want || strings.Contains(string(res.Out), "judged 0 changed lines") {
+					t.Errorf("pre-commit to %s: Exit = %d, Out =\n%s", to, res.Exit, res.Out)
+				}
+			}
+		})
+	}
+}
+
+func TestPullRequestExplicitBaseJudgesChanges(t *testing.T) {
+	for _, event := range []string{"pull_request", "pull_request_target"} {
+		env := onGitHub(pullRequest(t), event, "main")
+		res := against(t, env, "origin/main")
+		if res.Exit != 1 || !strings.Contains(string(res.Out), "\napp.py:2:9: "+py012) {
+			t.Errorf("%s: Exit = %d, Out =\n%s", event, res.Exit, res.Out)
+		}
+	}
+}
+
+func TestPullRequestExplicitBaseThatJudgesNothingWarns(t *testing.T) {
+	for _, event := range []string{"pull_request", "pull_request_target"} {
+		t.Run(event, func(t *testing.T) {
+			env := onGitHub(pullRequest(t), event, "main")
+			git(t, env.Dir, "reset", "-q", "--hard", "origin/main")
+			write(t, filepath.Join(env.Dir, "README.md"), "docs\n")
+			commit(t, env)
+			res := against(t, env, "origin/main")
+			if res.Exit != 0 || !strings.Contains(string(res.Out), "::warning title=june::this pull request judged 0 changed lines.") || !strings.Contains(summaryOf(res), "0 errors, 1 warning") {
+				t.Errorf("Exit = %d, Out =\n%s", res.Exit, res.Out)
+			}
+			res, err := check.Change(context.Background(), env, check.Request{Base: "origin/main", Format: diag.SARIF})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var log struct {
+				Runs []struct {
+					Invocations []struct {
+						ExecutionSuccessful        bool
+						ToolExecutionNotifications []struct{ Level string }
+					}
+				}
+			}
+			if err := json.Unmarshal(res.Out, &log); err != nil {
+				t.Fatal(err)
+			}
+			if res.Exit != 0 || len(log.Runs) != 1 || len(log.Runs[0].Invocations) != 1 {
+				t.Fatalf("Exit = %d, Out =\n%s", res.Exit, res.Out)
+			}
+			inv := log.Runs[0].Invocations[0]
+			if !inv.ExecutionSuccessful || len(inv.ToolExecutionNotifications) != 1 || inv.ToolExecutionNotifications[0].Level != "warning" {
+				t.Errorf("invocation = %+v", inv)
+			}
+		})
+	}
 }
 
 func TestMergeGroupAtItsBaseIsRefused(t *testing.T) {
@@ -298,5 +424,10 @@ func TestLocalRunThatJudgesNothingDoesNotWarn(t *testing.T) {
 	res := infer(t, env)
 	if res.Exit != 0 || strings.Contains(string(res.Out), "judged 0 changed lines") {
 		t.Errorf("Exit = %d, Out =\n%s\nwant a quiet pass outside a pull request event", res.Exit, res.Out)
+	}
+	env.Vars = map[string]string{"GITHUB_EVENT_NAME": "pull_request_target", "GITHUB_BASE_REF": "main"}
+	res = against(t, env, "HEAD")
+	if res.Exit != 0 || strings.Contains(string(res.Out), "judged 0 changed lines") {
+		t.Errorf("local --base HEAD: Exit = %d, Out =\n%s", res.Exit, res.Out)
 	}
 }
