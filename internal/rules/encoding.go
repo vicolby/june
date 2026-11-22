@@ -9,9 +9,9 @@ import (
 )
 
 // Python reads source in the encoding its first two lines declare (PEP 263), UTF-8 when none does.
-// ast-grep only reads UTF-8, so a file is transcoded before it is staged. Every supported encoding
-// maps each byte to one character and never to or from a line break, so line numbers are preserved
-// (columns count characters of the transcoded text). A bare carriage return is a Python line ending
+// ast-grep only reads UTF-8, so a file is transcoded before it is staged. The supported single-byte
+// encodings leave line-break bytes unchanged, and UTF-8 is kept as-is, preserving line numbers.
+// Columns use ast-grep's positions in the UTF-8 text. A bare carriage return is a Python line ending
 // the scanner does not share, so a file that contains one is skipped rather than shifted.
 
 // codingDeclaration is the PEP 263 pattern, matched against one line.

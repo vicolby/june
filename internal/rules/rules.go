@@ -225,7 +225,7 @@ func (rs *RuleSet) Scan(ctx context.Context, root string, files []string) (Scann
 		return Scanned{}, errScanSetup
 	}
 
-	// Read and stage every file before ast-grep starts, so an unreadable one refuses the whole scan.
+	// Read and stage files before ast-grep starts, so a file I/O failure refuses the whole scan.
 	// A file that may hold a comment of interest is also staged in a tree of its own for the comment pass.
 	var out Scanned
 	var marked []int // indexes into py
