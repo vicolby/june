@@ -97,7 +97,15 @@ func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, 
 		if errors.Is(err, exec.ErrNotFound) {
 			return refuse("git was not found, so the touched lines cannot be found. Fix: install git and put it on PATH, or pass --changed-lines FILE")
 		}
-		return refuse("the touched lines cannot be found because %s is not inside a git work tree. Fix: run june inside the repository, or pass --changed-lines FILE", filepath.Base(env.Dir))
+		said := gitSaid(err)
+		switch {
+		case strings.Contains(said, "dubious ownership"):
+			return refuse("git refuses to use this repository (%s). Fix: git config --global --add safe.directory \"$PWD\"", said)
+		case said == "" || strings.Contains(said, "not a git repository"):
+			return refuse("the touched lines cannot be found because %s is not inside a git work tree. Fix: run june inside the repository, or pass --changed-lines FILE", filepath.Base(env.Dir))
+		default:
+			return refuse("git could not inspect the repository (%s). Fix: run git rev-parse --is-inside-work-tree to see why", said)
+		}
 	}
 	if base == "" {
 		if env.Vars["PRE_COMMIT"] == "1" {
@@ -182,7 +190,7 @@ func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, 
 		if ctx.Err() != nil {
 			return nil, scope{}, nil, ctx.Err()
 		}
-		return refuse("git could not locate the working directory. Fix: run git status to see why")
+		return refuse("git could not locate the working directory (%s). Fix: run git status to see why", gitCause(err))
 	}
 	prefix = strings.TrimSuffix(prefix, "\n")
 	absent := map[string]bool{}
@@ -201,7 +209,7 @@ func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, 
 				if ctx.Err() != nil {
 					return nil, scope{}, nil, ctx.Err()
 				}
-				return refuse("git could not prepare untracked files. Fix: run git status to see why")
+				return refuse("git could not prepare untracked files (%s). Fix: run git status to see why", gitCause(err))
 			}
 			for _, name := range strings.Split(strings.TrimSuffix(untracked, "\x00"), "\x00") {
 				if path.Ext(name) != ".py" {
@@ -226,7 +234,7 @@ func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, 
 			if ctx.Err() != nil {
 				return nil, scope{}, nil, ctx.Err()
 			}
-			return refuse("git could not list tracked files. Fix: run git status to see why")
+			return refuse("git could not list tracked files (%s). Fix: run git status to see why", gitCause(err))
 		}
 		var skipped strings.Builder
 		for _, record := range strings.Split(tracked, "\x00") {
@@ -262,14 +270,14 @@ func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, 
 			if ctx.Err() != nil {
 				return nil, scope{}, nil, ctx.Err()
 			}
-			return refuse("a temporary git index cannot be prepared. Fix: run git status and check temporary directory permissions")
+			return refuse("a temporary git index cannot be prepared (%s). Fix: run git status and check temporary directory permissions", gitCause(err))
 		}
 		if skipped.Len() > 0 {
 			if _, err := git(ctx, env, skipped.String(), "-c", "core.ignorestat=false", "update-index", "--no-split-index", "--skip-worktree", "-z", "--stdin"); err != nil {
 				if ctx.Err() != nil {
 					return nil, scope{}, nil, ctx.Err()
 				}
-				return refuse("a temporary git index cannot be prepared. Fix: run git status and check temporary directory permissions")
+				return refuse("a temporary git index cannot be prepared (%s). Fix: run git status and check temporary directory permissions", gitCause(err))
 			}
 		}
 
@@ -498,11 +506,37 @@ func git(ctx context.Context, env Env, input string, args ...string) (string, er
 	cmd.Stderr = &errOut
 	if err := cmd.Run(); err != nil {
 		if msg := strings.TrimSpace(errOut.String()); msg != "" {
-			return "", fmt.Errorf("%w: %s", err, firstLine(msg))
+			return "", &gitError{err: err, stderr: firstLine(msg)}
 		}
 		return "", err
 	}
 	return out.String(), nil
+}
+
+// gitError is a failed git run with the first line of what git said on standard error.
+type gitError struct {
+	err    error
+	stderr string
+}
+
+func (e *gitError) Error() string { return e.err.Error() + ": " + e.stderr }
+func (e *gitError) Unwrap() error { return e.err }
+
+// gitSaid returns the first line git printed on standard error for err, or "" when git said nothing.
+func gitSaid(err error) string {
+	var ge *gitError
+	if errors.As(err, &ge) {
+		return ge.stderr
+	}
+	return ""
+}
+
+// gitCause names why a git command failed, in git's own words when it gave any.
+func gitCause(err error) string {
+	if said := gitSaid(err); said != "" {
+		return said
+	}
+	return err.Error()
 }
 
 func firstLine(s string) string {

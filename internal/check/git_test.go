@@ -739,3 +739,36 @@ func TestSuppliedListNeedsNeitherGitNorABase(t *testing.T) {
 		t.Errorf("summary = %q, want no base for a supplied list", got)
 	}
 }
+
+func TestDubiousOwnershipNamesGitAndTheSafeDirectoryFix(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": "x = 1\n"})
+	env.Vars = map[string]string{"GIT_TEST_ASSUME_DIFFERENT_OWNER": "1"}
+	res := against(t, env, "main")
+	out := string(res.Out)
+	if res.Exit != 2 || !strings.HasPrefix(out, "june: error: git refuses to use this repository (fatal: detected dubious ownership") ||
+		!strings.HasSuffix(out, "). Fix: git config --global --add safe.directory \"$PWD\"\n") || strings.Contains(out, "not inside a git work tree") {
+		t.Errorf("Exit = %d, Out = %q", res.Exit, res.Out)
+	}
+}
+
+func TestOtherRevParseFailuresQuoteGitInsteadOfClaimingNoWorkTree(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("not a gitfile\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := check.Env{Dir: dir, Vars: map[string]string{"GIT_CEILING_DIRECTORIES": filepath.Dir(dir)}}
+	res := against(t, env, "main")
+	out := string(res.Out)
+	if res.Exit != 2 || !strings.HasPrefix(out, "june: error: git could not inspect the repository (fatal: invalid gitfile format") ||
+		!strings.HasSuffix(out, "). Fix: run git rev-parse --is-inside-work-tree to see why\n") || strings.Contains(out, "not inside a git work tree") {
+		t.Errorf("Exit = %d, Out = %q", res.Exit, res.Out)
+	}
+}
+
+func TestNonUTF8PythonFileIsNamedAndBlamesNeitherAstGrepNorTheScope(t *testing.T) {
+	env := repo(t, map[string]string{"ok.py": "x = 1\n"})
+	write(t, filepath.Join(env.Dir, "pkg", "legacy.py"), "# -*- coding: latin-1 -*-\nx = '\xe9'\n")
+	commit(t, env)
+	res := against(t, env, "main")
+	refused(t, res, "june: error: \"pkg/legacy.py\" is not UTF-8 text, so it cannot be scanned. Fix: save it as UTF-8 without NUL bytes and run june again\n")
+}

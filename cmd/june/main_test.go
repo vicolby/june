@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -438,5 +439,67 @@ func TestPublishedHookInThePreCommitEnvironment(t *testing.T) {
 	code := run(context.Background(), args, nil, &out, &errOut, env)
 	if code != 1 || out.String() != "new.py:1:9: "+py012+"june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 1 changed line; base HEAD (staged diff)\n" || errOut.Len() != 0 {
 		t.Errorf("staged violation: exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+}
+
+// TestTerminatedRunCleansUpAndExplainsItself runs the built binary, stops it with SIGTERM
+// (CI cancel, docker stop, timeout) while ast-grep scans, and expects the SIGINT outcome:
+// the explanation, exit 2 and no june-scan-* directory left in TMPDIR.
+func TestTerminatedRunCleansUpAndExplainsItself(t *testing.T) {
+	realGrep, err := exec.LookPath("ast-grep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "june")
+	if out, err := exec.CommandContext(context.Background(), "go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	tools := t.TempDir()
+	scanning := filepath.Join(tools, "scanning")
+	wrapper := "#!/bin/sh\nif [ \"$1\" = scan ]; then : > " + scanning + "; exec sleep 60; fi\nexec " + realGrep + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(tools, "ast-grep"), []byte(wrapper), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	scratch := t.TempDir()
+	env := project(t)
+	list := filepath.Join(env.Dir, "changed.txt")
+	if err := os.WriteFile(list, []byte("app.py:2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var errOut bytes.Buffer
+	cmd := exec.CommandContext(context.Background(), bin, "--changed-lines", list)
+	cmd.Dir = env.Dir
+	cmd.Env = append(os.Environ(), "PATH="+tools+string(os.PathListSeparator)+os.Getenv("PATH"), "TMPDIR="+scratch)
+	cmd.Stderr = &errOut
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := os.Stat(scanning); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = cmd.Process.Kill()
+			t.Fatalf("ast-grep never started scanning; stderr = %q", errOut.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	err = cmd.Wait()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 2 {
+		t.Errorf("Wait = %v, want exit 2 like SIGINT", err)
+	}
+	want := "june: error: june was interrupted before it reached a verdict. Fix: run june again and let it finish\n"
+	if errOut.String() != want {
+		t.Errorf("stderr = %q, want %q", errOut.String(), want)
+	}
+	left, err := filepath.Glob(filepath.Join(scratch, "june-*"))
+	if err != nil || len(left) > 0 {
+		t.Errorf("temporary directories left behind: %v, %v", left, err)
 	}
 }

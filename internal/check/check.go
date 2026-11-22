@@ -98,6 +98,14 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		if ctx.Err() != nil {
 			return Result{}, ctx.Err()
 		}
+		var notText *rules.NotTextError
+		if errors.As(err, &notText) {
+			name := notText.File
+			if rel, ok := byAbs[name]; ok {
+				name = rel
+			}
+			return refuse(req, fmt.Sprintf("%q is not UTF-8 text, so it cannot be scanned. Fix: save it as UTF-8 without NUL bytes and run june again", name)), nil
+		}
 		return refuse(req, "ast-grep failed while scanning ("+err.Error()+"). Fix: run ast-grep scan on the changed files to see why"), nil
 	}
 
