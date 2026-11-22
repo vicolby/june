@@ -55,7 +55,7 @@ func snapshotEnv(getwd func() (string, error)) (check.Env, error) {
 
 // usage is the help text: `june --help` and `june -h` print it to stdout and exit 0.
 const usage = `usage:
-  june [--format FORMAT] [--legacy] [--rules DIR]... [--base REF | --changed-lines FILE]
+  june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--base REF | --changed-lines FILE]
   june verify [--rules DIR]...
   june --version
   june --help | -h
@@ -64,6 +64,7 @@ flags:
   --base REF            judge lines changed since the merge base of REF and HEAD
   --changed-lines FILE  file of touched lines, path:7 or path:7-12 per line; - reads stdin
   --format FORMAT       text, json, sarif, github or gitlab (default: github under GitHub Actions, gitlab under GitLab CI, else text)
+  --ignore-whitespace   do not count a line whose only change is whitespace as touched (git diff -w)
   --legacy              also list violations on untouched lines, information only
   --rules DIR           rules directory, repeatable (default ./.june/rules)
   --version             print the version
@@ -85,6 +86,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	base := fs.String("base", "", "git ref; judge lines changed since its merge base with HEAD")
 	changedLines := fs.String("changed-lines", "", "file of touched lines, path:7 or path:7-12 per line; - reads stdin")
 	format := fs.String("format", "", "output format: text, json, sarif, github or gitlab")
+	ignoreSpace := fs.Bool("ignore-whitespace", false, "do not count a line whose only change is whitespace as touched (git diff -w)")
 	legacy := fs.Bool("legacy", false, "also list violations on untouched lines, information only")
 	var rulesDirs dirList
 	fs.Var(&rulesDirs, "rules", "rules directory, repeatable (default ./.june/rules)")
@@ -103,7 +105,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return 0
 	}
 
-	req := check.Request{Rules: rulesDirs, Base: *base, Legacy: *legacy}
+	req := check.Request{Rules: rulesDirs, Base: *base, Legacy: *legacy, IgnoreSpace: *ignoreSpace}
 	if *format != "" {
 		f, ok := diag.ParseFormat(*format)
 		if !ok {
@@ -194,7 +196,7 @@ func appendFile(path string, data []byte) (err error) {
 }
 
 func usageError(stderr io.Writer, cause string) int {
-	return fail(stderr, cause+". Fix: usage is june [--format FORMAT] [--legacy] [--rules DIR]... [--base REF | --changed-lines FILE], june verify [--rules DIR]..., june --version, or june --help")
+	return fail(stderr, cause+". Fix: usage is june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--base REF | --changed-lines FILE], june verify [--rules DIR]..., june --version, or june --help")
 }
 
 func fail(stderr io.Writer, msg string) int {

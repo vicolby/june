@@ -39,21 +39,24 @@ func TestHelpPrintsUsageAndExitsZero(t *testing.T) {
 		if errOut.Len() != 0 {
 			t.Errorf("%v: stderr = %q, want empty", args, errOut.String())
 		}
-		for _, want := range []string{"usage:", "--base", "--changed-lines", "--legacy", "--rules", "--version", "--help", "june verify", "exit codes:"} {
+		for _, want := range []string{"usage:", "--base", "--changed-lines", "--legacy", "--ignore-whitespace", "--rules", "--version", "--help", "june verify", "exit codes:"} {
 			if !strings.Contains(out.String(), want) {
 				t.Errorf("%v: stdout lacks %q: %q", args, want, out.String())
 			}
+		}
+		if strings.Contains(out.String(), "--ignore-whitespace, -w") {
+			t.Errorf("%v: help advertises -w as an alias: %q", args, out.String())
 		}
 	}
 }
 
 func TestUnknownArgs(t *testing.T) {
-	var out, errOut bytes.Buffer
-	if code := run(context.Background(), []string{"--bogus"}, strings.NewReader(""), &out, &errOut, check.Env{Dir: t.TempDir()}); code != 2 {
-		t.Fatalf("exit = %d, want 2", code)
-	}
-	if out.Len() != 0 {
-		t.Errorf("stdout = %q, want empty", out.String())
+	for _, arg := range []string{"--bogus", "-w"} {
+		var out, errOut bytes.Buffer
+		code := run(context.Background(), []string{arg}, strings.NewReader(""), &out, &errOut, check.Env{Dir: t.TempDir()})
+		if code != 2 || out.Len() != 0 || !strings.Contains(errOut.String(), "flag provided but not defined: -"+strings.TrimLeft(arg, "-")) {
+			t.Errorf("%s: exit = %d, stdout = %q, stderr = %q", arg, code, out.String(), errOut.String())
+		}
 	}
 }
 
@@ -653,5 +656,13 @@ func TestVerifyIgnoresStepSummary(t *testing.T) {
 	}
 	if _, err := os.Stat(summary); !os.IsNotExist(err) {
 		t.Errorf("verify wrote a job summary (stat err = %v)", err)
+	}
+}
+
+func TestIgnoreWhitespaceFlagRefusesChangedLines(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"--ignore-whitespace", "--changed-lines", "-"}, strings.NewReader("app.py:1\n"), &out, &errOut, project(t))
+	if code != 2 || !strings.Contains(out.String()+errOut.String(), "--ignore-whitespace has no effect on --changed-lines") {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
 	}
 }
