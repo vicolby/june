@@ -98,14 +98,13 @@ func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, 
 			return refuse("git was not found, so the touched lines cannot be found. Fix: install git and put it on PATH, or pass --changed-lines FILE")
 		}
 		said := gitSaid(err)
-		switch {
-		case strings.Contains(said, "dubious ownership"):
-			return refuse("git refuses to use this repository (%s). Fix: git config --global --add safe.directory \"$PWD\"", said)
-		case said == "" || strings.Contains(said, "not a git repository"):
-			return refuse("the touched lines cannot be found because %s is not inside a git work tree. Fix: run june inside the repository, or pass --changed-lines FILE", filepath.Base(env.Dir))
-		default:
-			return refuse("git could not inspect the repository (%s). Fix: run git rev-parse --is-inside-work-tree to see why", said)
+		if root, ok := dubiousRoot(said); ok {
+			return refuse("git refuses to use this repository (%s). Fix: git config --global --add safe.directory %s", said, shellQuote(root))
 		}
+		if !strings.Contains(said, "dubious ownership") && (said == "" || strings.Contains(said, "not a git repository")) {
+			return refuse("the touched lines cannot be found because %s is not inside a git work tree. Fix: run june inside the repository, or pass --changed-lines FILE", filepath.Base(env.Dir))
+		}
+		return refuse("git could not inspect the repository (%s). Fix: run git rev-parse --is-inside-work-tree to see why", said)
 	}
 	if base == "" {
 		if env.Vars["PRE_COMMIT"] == "1" {
@@ -542,6 +541,26 @@ func gitCause(err error) string {
 func firstLine(s string) string {
 	line, _, _ := strings.Cut(s, "\n")
 	return line
+}
+
+// dubiousRoot is the repository path from "detected dubious ownership in repository at '<root>'".
+// Git wraps that path in single quotes and leaves a quote inside the path unescaped.
+func dubiousRoot(line string) (string, bool) {
+	const marker = "detected dubious ownership in repository at '"
+	_, rest, ok := strings.Cut(line, marker)
+	if !ok || !strings.HasSuffix(rest, "'") {
+		return "", false
+	}
+	root := strings.TrimSuffix(rest, "'")
+	if root == "" {
+		return "", false
+	}
+	return root, true
+}
+
+// shellQuote quotes s so a POSIX shell passes it as one literal argument.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // parsePatch reads a zero-context unified diff into the post-image lines it adds or edits.
