@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vicolby/june/internal/check"
+	"github.com/vicolby/june/internal/diag"
 )
 
 // onGitHub returns env with the variables GitHub Actions sets for the given event.
@@ -184,5 +185,20 @@ func TestAnnotationsUseRepositoryRootPathsFromASubdirectory(t *testing.T) {
 		if !strings.Contains(out, "\napp.py:1:9: "+py012) {
 			t.Errorf("%s: Out =\n%s\nwant the plain text relative to the working directory", name, out)
 		}
+	}
+}
+
+func TestSARIFUsesRepositoryRootPathsFromASubdirectory(t *testing.T) {
+	env := repo(t, map[string]string{"keep.py": "x = 1\n"})
+	write(t, filepath.Join(env.Dir, "sub", "app.py"), old)
+	copyDir(t, filepath.Join("..", "..", "testdata", "rules", "python"), filepath.Join(env.Dir, "sub", ".june", "rules"))
+	commit(t, env)
+	sub := check.Env{Dir: filepath.Join(env.Dir, "sub")}
+	res, err := check.Change(context.Background(), sub, check.Request{Changed: strings.NewReader("app.py:1\n"), Format: diag.SARIF})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := string(res.Out); !strings.Contains(out, `"uri": "sub/app.py"`) {
+		t.Errorf("Out =\n%s\nwant the result on sub/app.py", out)
 	}
 }

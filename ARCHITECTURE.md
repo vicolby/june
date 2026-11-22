@@ -88,15 +88,15 @@ It hides: the location of the ast-grep binary on PATH, the invocation, zero-base
 
 ```go
 type Diagnostic struct{ File string; Line, Col int; Code string; Sev Severity; Kind Kind; Msg string }
-func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File) // Format: Text | GitHub | GitLab
+func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File) // Format: Text | GitHub | GitLab | JSON | SARIF
 ```
 
-It hides workflow-command escaping, GitLab Code Quality fingerprints and severities, and summary placement.
+It hides workflow-command escaping, GitLab Code Quality fingerprints and severities, the JSON and SARIF documents, and summary placement. `StepSummary` renders the Markdown job summary.
 Output is text by default and carries no ANSI. Rendering escapes control characters in diagnostic fields and summaries as visible escapes (for example, ESC as `\x1b` and tab as `\t`), preserving other text.
 
 ## cmd/june
 
-The current build supports `june --help` and `june -h` (usage and flags on stdout, exit 0), `june --version`, `june verify [--rules DIR]...`, `june [--legacy] [--rules DIR]... [--base REF]` and `june [--legacy] [--rules DIR]... --changed-lines FILE`; `-` reads the list from stdin.
+The current build supports `june --help` and `june -h` (usage and flags on stdout, exit 0), `june --version`, `june verify [--rules DIR]...`, `june [--format FORMAT] [--legacy] [--rules DIR]... [--base REF]` and `june [--format FORMAT] [--legacy] [--rules DIR]... --changed-lines FILE`; `-` reads the list from stdin.
 An unstamped `june --version` prints `june dev`.
 june ships no rules: the caller supplies them. With ast-grep on PATH, run your rules and their sidecar examples:
 
@@ -119,7 +119,7 @@ Without either, a bare `june` infers its scope from the environment and git, fir
 Nothing is fetched.
 Under GitHub Actions a push event has no base: even when the checked-out branch tracks an upstream, which there is HEAD itself, it exits 2 naming `--base REF` with `fetch-depth: 0`, and a pull request whose base was not fetched exits 2 naming `fetch-depth: 0`.
 When no base can be inferred, git is missing or the directory is not in a work tree, or the merge base is missing (a shallow clone), june exits 2 naming the fix; the touched set is never every line.
-The check emits plain text. Under GitHub Actions (`GITHUB_ACTIONS=true`) it also emits one workflow command per diagnostic before the text: findings as `::error` or `::warning` annotations, opt-outs and legacy lines as `::notice`, and refusals as `::error`. Annotation paths are relative to the repository root, so they land on the right file under `working-directory:`; the text keeps paths relative to the working directory. Finding lines in that text match everywhere; only the summary's base label differs. Completed checks (exit 0 or 1) end with a summary line, `june: 1 error, 0 warnings, 0 opt-outs; checked 2 files, 5 changed lines`; a git run adds `; base origin/main (upstream branch)`, naming the base and its source (`--base`, `pre-commit refs`, `staged diff`, `merge request diff base`, `pull request base`, `upstream branch` or `remote default branch`), and a supplied list adds none; refusals (exit 2) have no summary.
+The check emits plain text. Under GitHub Actions (`GITHUB_ACTIONS=true`) it also emits one workflow command per diagnostic before the text: findings as `::error` or `::warning` annotations, opt-outs and legacy lines as `::notice`, and refusals as `::error`. Annotation paths are relative to the repository root, so they land on the right file under `working-directory:`; the text keeps paths relative to the working directory. Finding lines in that text match everywhere; only the summary's base label differs. `--format text|json|sarif|github|gitlab` overrides the inferred format anywhere. `json` and `sarif` print one document and no text: SARIF 2.1.0 with repository-root paths, findings at their level, opt-outs and legacy matches as notes, and a refusal as an unsuccessful invocation with its message, so stdout is always a valid log for `upload-sarif`. When `GITHUB_STEP_SUMMARY` is set, any format also appends a Markdown table of findings, opt-outs and refusals (capped at 100 rows) to that file; a summary that cannot be written warns on stderr and never changes the exit code. Text, GitHub and GitLab output for a completed check (exit 0 or 1) ends with a summary line, `june: 1 error, 0 warnings, 0 opt-outs; checked 2 files, 5 changed lines`; a git run adds `; base origin/main (upstream branch)`, naming the base and its source (`--base`, `pre-commit refs`, `staged diff`, `merge request diff base`, `pull request base`, `upstream branch` or `remote default branch`), and a supplied list adds none; refusals (exit 2) have no summary.
 Coverage counts distinct touched Python files and changed lines, counting overlapping ranges only once; the opt-out count is every opt-out printed on a touched line, honoured or not.
 `--legacy` also lists matches on untouched lines of the checked files, one `legacy: file:line:col: CODE message` line each after the findings, and the summary gains `; 2 legacy violations listed`.
 Legacy lines never change the exit code, are off by default, and a valid opt-out on the untouched line hides its legacy line.
@@ -281,7 +281,7 @@ Check the config with `goreleaser check`; it reports `brews` as deprecated, but 
 - The list is also a product feature, so `Request.Changed` is a caller input and not a test hook.
 - Pre-commit is covered by inference.
 - No patch, staged or fixed-set adapter exists, because the list already carries any scope.
-- **Output format, real, in `diag`:** three adapters, text, GitHub and GitLab, chosen by a closed switch.
+- **Output format, real, in `diag`:** five adapters, text, GitHub, GitLab, JSON and SARIF, chosen by a closed switch.
 - **ast-grep, hypothetical:** one engine, VISION refuses a second, no interface.
 - **Language, hypothetical:** Python lives in rule data and the `.py` filter.
 - A second language is the moment to cut a seam.

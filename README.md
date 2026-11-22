@@ -44,7 +44,7 @@ The script is plain POSIX [`install.sh`](install.sh); read it before piping to `
 ## Usage
 
 ```text
-june [--legacy] [--rules DIR]... [--base REF | --changed-lines FILE]
+june [--format FORMAT] [--legacy] [--rules DIR]... [--base REF | --changed-lines FILE]
 june verify [--rules DIR]...
 june --version
 june --help | -h
@@ -55,6 +55,7 @@ june --help | -h
 | `--rules DIR` | Rules directory, repeatable. Default: `./.june/rules`. |
 | `--base REF` | Judge lines changed since the merge base of `REF` and `HEAD`. |
 | `--changed-lines FILE` | Judge lines listed in `FILE`, one `path:7` or `path:7-12` per line; `-` reads stdin. |
+| `--format FORMAT` | `text`, `json`, `sarif`, `github` or `gitlab`. Default: `github` under GitHub Actions, `gitlab` under GitLab CI, else `text`. |
 | `--legacy` | Also list violations on untouched lines, as information only. |
 | `--help`, `-h` | Print usage and flags to stdout and exit 0. |
 
@@ -99,6 +100,20 @@ jobs:
       - run: brew install vicolby/tap/june
       - run: june --rules .june/rules
 ```
+
+When `GITHUB_STEP_SUMMARY` is set, june appends a Markdown table of findings, opt-outs and refusals to the job summary (at most 100 rows).
+
+For code scanning, write SARIF and upload it; `--format sarif` prints only the log, and the job still fails on an error:
+
+```yaml
+      - run: june --format sarif > june.sarif
+      - if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: june.sarif
+```
+
+`--format json` prints one document of every diagnostic, for any other tool. `--format gitlab` writes the Code Quality report outside GitLab CI too (Jenkins, Buildkite, CircleCI, Azure DevOps, Bitbucket).
 
 On `push` there is no PR base, so june exits 2: pass `--base origin/main` with `fetch-depth: 0`, or run on `pull_request`.
 

@@ -33,7 +33,7 @@ type Request struct {
 	// Rules lists the rules directories, merged into one set; empty means ./.june/rules.
 	// A directory named twice counts once, and a rule id defined in two files is a rule fault.
 	Rules []string
-	// Format is the output format; empty is inferred: GitHub under GitHub Actions, GitLab under GitLab CI, else text.
+	// Format is the output format, one of diag's; empty is inferred: GitHub under GitHub Actions, GitLab under GitLab CI, else text.
 	Format diag.Format
 	// Legacy also lists rule matches on untouched lines of the checked files, as information only.
 	// They never change Exit; off by default.
@@ -41,6 +41,8 @@ type Request struct {
 
 	// root is the working directory's path under the repository root, with a trailing slash, for native formats.
 	root string
+	// stepSummary is the path of the GitHub job summary, "" when there is none.
+	stepSummary string
 }
 
 // Result is the verdict and its rendering.
@@ -64,6 +66,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	}
 	req.Format = formatFor(env, req)
 	req.root = repoPrefix(ctx, env, req.Format)
+	req.stepSummary = env.Vars["GITHUB_STEP_SUMMARY"]
 	touched, sc, bad, err := findTouched(ctx, env, req)
 	if sc.scanDir != "" {
 		defer func() { _ = os.RemoveAll(sc.scanDir) }()
@@ -271,9 +274,9 @@ func formatFor(env Env, req Request) diag.Format {
 }
 
 // repoPrefix is where env.Dir sits under the repository root, "" at the root or outside git.
-// Only GitHub annotations read paths from the root, so no other format asks git.
+// Only GitHub annotations and SARIF read paths from the root, so no other format asks git.
 func repoPrefix(ctx context.Context, env Env, f diag.Format) string {
-	if f != diag.GitHub {
+	if f != diag.GitHub && f != diag.SARIF {
 		return ""
 	}
 	out, err := git(ctx, env, "", "rev-parse", "--show-prefix")
@@ -364,6 +367,9 @@ func render(req Request, exit int, ds []diag.Diagnostic, summary string) Result 
 		}
 	}
 	out, files := diag.Render(shown, summary, req.Format)
+	if req.stepSummary != "" {
+		files = append(files, diag.File{Path: req.stepSummary, Data: diag.StepSummary(shown, summary), Append: true})
+	}
 	return Result{Exit: exit, Out: out, Files: files, Diags: ds}
 }
 
