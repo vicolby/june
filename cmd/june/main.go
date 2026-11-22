@@ -55,7 +55,7 @@ func snapshotEnv(getwd func() (string, error)) (check.Env, error) {
 
 // usage is the help text: `june --help` and `june -h` print it to stdout and exit 0.
 const usage = `usage:
-  june [--format FORMAT] [--legacy] [--rules DIR]... [--base REF | --changed-lines FILE]
+  june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--base REF | --changed-lines FILE]
   june verify [--rules DIR]...
   june --version
   june --help | -h
@@ -198,7 +198,7 @@ func appendFile(path string, data []byte) (err error) {
 }
 
 func usageError(stderr io.Writer, cause string) int {
-	return fail(stderr, cause+". Fix: usage is june [--format FORMAT] [--legacy] [--rules DIR]... [--base REF | --changed-lines FILE], june verify [--rules DIR]..., june --version, or june --help")
+	return fail(stderr, cause+". Fix: usage is june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--base REF | --changed-lines FILE], june verify [--rules DIR]..., june --version, or june --help")
 }
 
 func fail(stderr io.Writer, msg string) int {
