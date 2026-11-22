@@ -1,6 +1,5 @@
 # Release config. A version tag (v*) triggers .github/workflows/release.yml, which runs goreleaser.
-# Archives carry the june binary and the bundled rules and are a supported install channel beside
-# Homebrew; the Homebrew formula installs them to <prefix>/share/june/rules.
+# Archives carry the june binary and are a supported install channel beside Homebrew.
 version: 2
 
 project_name: june
@@ -25,9 +24,9 @@ archives:
   - id: june
     formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # An empty files list makes GoReleaser add README and LICENSE. none* matches nothing, so the archive holds only the binary.
     files:
-      - src: rules/**/*
-        strip_parent: false
+      - none*
 
 checksum:
   name_template: checksums.txt
@@ -47,8 +46,8 @@ changelog:
       - '^test:'
       - '^chore:'
 
-# `brews` is the only block that generates a Formula (homebrew_casks is macOS-only and cannot install
-# shared data or declare the ast-grep dependency). goreleaser check reports it as deprecated; GoReleaser
+# `brews` is the only block that generates a Formula (homebrew_casks is macOS-only and cannot
+# declare the ast-grep dependency). goreleaser check reports it as deprecated; GoReleaser
 # removes deprecated options only in a major version, and the release workflow pins v2.
 brews:
   - name: june
@@ -66,7 +65,5 @@ brews:
       - name: ast-grep
     install: |
       bin.install "june"
-      (share/"june").install "rules"
     test: |
       assert_match version.to_s, shell_output("#{bin}/june --version")
-      assert_path_exists share/"june/rules"

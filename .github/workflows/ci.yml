@@ -64,7 +64,6 @@ jobs:
           mkdir -p "$base/download/v$version"
           cp dist/*.tar.gz dist/checksums.txt "$base/download/v$version/"
           JUNE_RELEASES_URL="file://$base" JUNE_VERSION="$version" \
-            JUNE_INSTALL_DIR="$RUNNER_TEMP/bin" JUNE_RULES_DIR="$RUNNER_TEMP/share/june/rules" \
+            JUNE_INSTALL_DIR="$RUNNER_TEMP/bin" \
             sh install.sh
           test "$("$RUNNER_TEMP/bin/june" --version)" = "june $version"
-          test -d "$RUNNER_TEMP/share/june/rules/python"

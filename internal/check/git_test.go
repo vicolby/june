@@ -13,7 +13,7 @@ import (
 	"github.com/vicolby/june/internal/check"
 )
 
-// repo builds a git repository on branch main whose first commit holds the shipped rules and the given files.
+// repo builds a git repository on branch main whose first commit holds the fixture rules and the given files.
 func repo(t *testing.T, files map[string]string) check.Env {
 	t.Helper()
 	env := tree(t, files)
@@ -553,7 +553,7 @@ func TestRunFromSubdirectoryUsesRelativePaths(t *testing.T) {
 	env := repo(t, map[string]string{"keep.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "sub", "app.py"), old)
 	write(t, filepath.Join(env.Dir, "top.py"), old)
-	copyDir(t, filepath.Join("..", "..", "rules", "python"), filepath.Join(env.Dir, "sub", ".june", "rules"))
+	copyDir(t, filepath.Join("..", "..", "testdata", "rules", "python"), filepath.Join(env.Dir, "sub", ".june", "rules"))
 	sub := check.Env{Dir: filepath.Join(env.Dir, "sub")}
 	expect(t, against(t, sub, "main"), 1, "app.py:1:9: "+py012)
 	git(t, env.Dir, "add", "-A")

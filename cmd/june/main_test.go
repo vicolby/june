@@ -63,7 +63,7 @@ const py012 = "PY012 Mutable default argument. Fix: default the parameter to Non
 func project(t *testing.T) check.Env {
 	t.Helper()
 	dir := t.TempDir()
-	src := filepath.Join("..", "..", "rules", "python")
+	src := filepath.Join("..", "..", "testdata", "rules", "python")
 	for _, rel := range []string{"PY012.yml", filepath.Join("rule-tests", "PY012-test.yml")} {
 		b, err := os.ReadFile(filepath.Join(src, rel))
 		if err != nil {
@@ -111,6 +111,21 @@ func TestRulesFlag(t *testing.T) {
 	want := "june: error: nowhere: the rules directory does not exist. Fix: create it or point --rules at an existing rules directory\n"
 	if code != 2 || out.String() != want {
 		t.Errorf("exit = %d, stdout = %q, want 2 and %q", code, out.String(), want)
+	}
+}
+
+func TestNoRulesSuppliedAsksForRules(t *testing.T) {
+	want := "june: error: no rules to run: june ships no rules. Fix: supply rules with --rules DIR or put them in .june/rules\n"
+	for _, args := range [][]string{{"--changed-lines", "-"}, {"verify"}} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "app.py"), []byte("x = 1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		var out, errOut bytes.Buffer
+		code := run(context.Background(), args, strings.NewReader("app.py:1\n"), &out, &errOut, check.Env{Dir: dir})
+		if code != 2 || out.String() != want {
+			t.Errorf("%v: exit = %d, stdout = %q, want 2 and %q", args, code, out.String(), want)
+		}
 	}
 }
 
@@ -306,8 +321,8 @@ func TestBareJuneOutsideGitWithoutAListExitsTwo(t *testing.T) {
 	}
 }
 
-func TestShippedFundamentals(t *testing.T) {
-	rulesDir, err := filepath.Abs(filepath.Join("..", "..", "rules", "python"))
+func TestFixtureFundamentals(t *testing.T) {
+	rulesDir, err := filepath.Abs(filepath.Join("..", "..", "testdata", "rules", "python"))
 	if err != nil {
 		t.Fatal(err)
 	}

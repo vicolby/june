@@ -15,7 +15,7 @@ cmd/june -> check -> rules   (Load, Scan)
                   -> diag    (Render)
 ```
 
-Layout: `cmd/june`, `internal/{check,rules,diag}`, `rules/python`.
+Layout: `cmd/june`, `internal/{check,rules,diag}`. Tests keep fixture rules in `testdata/rules`; june ships no rules.
 
 ## check
 
@@ -47,7 +47,7 @@ Invariants:
 - The touched set is unknowable means Exit 2, never 0 and never every line.
 - Out is a pure function of the request, the tree and the diff: sorted, no clock, no absolute path, no ANSI.
 - Exit and finding diagnostics are identical across formats and CI vendors.
-- The opt-out is a same-line Python comment `# june: ignore[PY012] <reason>`, naming exactly one rule from the loaded rules. The spaces after `#` and `june:` are literal single spaces, rule IDs have no surrounding whitespace, and a space must separate `]` from the required nonblank reason.
+- The opt-out is a same-line Python comment `# june: ignore[RULE_ID] <reason>`, naming exactly one rule from the loaded rules. The spaces after `#` and `june:` are literal single spaces, rule IDs have no surrounding whitespace, and a space must separate `]` from the required nonblank reason.
 - A comment whose content starts with `june:` after leading whitespace is an opt-out attempt; malformed attempts suppress nothing and explain why with a Fix. The same text in a string literal is not an opt-out.
 - Every opt-out on a touched line is printed, honoured or not. A valid opt-out with no matching finding says it suppresses nothing; opt-outs on untouched lines are silent.
 
@@ -97,14 +97,13 @@ Output is text by default and carries no ANSI. Rendering escapes control charact
 
 The current build supports `june --help` and `june -h` (usage and flags on stdout, exit 0), `june --version`, `june verify [--rules DIR]...`, `june [--legacy] [--rules DIR]... [--base REF]` and `june [--legacy] [--rules DIR]... --changed-lines FILE`; `-` reads the list from stdin.
 An unstamped `june --version` prints `june dev`.
-With ast-grep on PATH, run the shipped Python fundamentals and their sidecar examples from the repository root:
+june ships no rules: the caller supplies them. With ast-grep on PATH, run your rules and their sidecar examples:
 
 ```sh
-go run ./cmd/june --rules rules/python --changed-lines changed.txt
+go run ./cmd/june --rules path/to/rules --changed-lines changed.txt
 ```
 
-`rules/python` is the opt-in directory for the shipped fundamentals; adoption is under [Defaults where VISION is silent](#defaults-where-vision-is-silent). The rules are PY012 mutable default argument, PY013 bare `except`, PY014 comparison to `None` with `==` or `!=`, PY015 `except` block that only passes, and PY016 `assert` on a tuple.
-Each is an error with a corrective message and its own valid and invalid examples.
+A run with no `--rules` and no `./.june/rules` directory exits 2 and says to supply rules, with `--rules DIR` or `.june/rules`.
 
 The list contains one `path:7` or `path:7-12` entry per line, with one-based, inclusive line ranges and paths relative to the working directory.
 Blank lines are ignored; whitespace in filenames is preserved, and only `.py` files are checked.
@@ -123,7 +122,7 @@ The check emits plain text. Under GitHub Actions (`GITHUB_ACTIONS=true`) it also
 Coverage counts distinct touched Python files and changed lines, counting overlapping ranges only once; the opt-out count is every opt-out printed on a touched line, honoured or not.
 `--legacy` also lists matches on untouched lines of the checked files, one `legacy: file:line:col: CODE message` line each after the findings, and the summary gains `; 2 legacy violations listed`.
 Legacy lines never change the exit code, are off by default, and a valid opt-out on the untouched line hides its legacy line.
-`june verify` runs every example of every rule and prints `june: verified 5 rules, 135 examples` on success. Any fault exits 2, as it does for a normal run, and each fault is one line naming the rules directory, the rule file, or the sidecar, and, for a failing example, the example.
+`june verify` runs every example of every rule and prints `june: verified N rules, M examples` from the supplied rules on success. Any fault exits 2, as it does for a normal run, and each fault is one line naming the rules directory, the rule file, or the sidecar, and, for a failing example, the example.
 On a check in a GitLab CI job (`GITLAB_CI=true`) the format is inferred as GitLab, and `cmd/june` writes `Files` beside the text: `gl-code-quality-report.json` in the working directory, an empty array for a clean run and no file for a refusal. `june verify` stays text.
 Findings are `major` for an error and `minor` for a warning, opt-outs are `info`, and legacy matches stay out; each fingerprint hashes file, rule, message and the ordinal among identical ones.
 GitLab's merge request widget compares this report with the latest one from the target branch, so a job that runs only in merge request pipelines leaves the widget with no baseline; a default-branch run needs `--base`, since a branch pipeline has no merge request base.
@@ -269,9 +268,9 @@ The `# june: ignore[...]` opt-out names a loaded `rules` id and does not apply t
 Distribution is Homebrew (`brew install vicolby/tap/june`) and the release binaries attached to each GitHub release, with `checksums.txt`.
 There is no pip package and no container image.
 Pushing a `v*` tag runs `.github/workflows/release.yml`, which runs GoReleaser (`.goreleaser.yaml`) to build darwin and linux binaries for amd64 and arm64, publish a GitHub release, and write `Formula/june.rb` to `vicolby/homebrew-tap`.
-Each archive holds the `june` binary and `rules/`; the formula installs the binary to `bin`, the rules to `share/june/rules`, and depends on Homebrew's `ast-grep`.
+Each archive holds the `june` binary; the formula installs it to `bin` and depends on Homebrew's `ast-grep`.
 The workflow needs the repository secret `HOMEBREW_TAP_TOKEN`, a token with contents write access to the tap.
-An archive extracts to `june` and `rules/` with no top-level directory and does not install `ast-grep`. Each release also attaches `install.sh`, which installs one archive after the `checksums.txt` check; [README.md](README.md#install) covers the install.
+An archive extracts to `june` with no top-level directory and does not install `ast-grep`. Each release also attaches `install.sh`, which installs one archive after the `checksums.txt` check; [README.md](README.md#install) covers the install.
 The formula takes the Homebrew `ast-grep`, not the version pinned in `.ast-grep-version` for tests.
 Check the config with `goreleaser check`; it reports `brews` as deprecated, but that is the only block that generates a Formula, and GoReleaser removes deprecated options only in a major version.
 
@@ -305,8 +304,8 @@ Each is reversible and lives here until changed.
 - A finding is judged on its first line.
 - The opt-out syntax is as above.
 - The default rules directory is `./.june/rules`, used when no `--rules` is given.
-- `--rules` repeats, and the directories merge into one rule set, so a team can layer bundled, shared and repo-local rules.
-- Shared rules ship in the release archive under `rules/` and install to `<prefix>/share/june/rules`. They are opt-in: a repo copies one language directory, such as `python`, to `.june/rules` or passes `--rules`, and june never loads them implicitly.
+- `--rules` repeats, and the directories merge into one rule set, so a team can layer shared and repo-local rules.
+- june ships no rules. A repo keeps its own in `.june/rules` or passes `--rules`.
 - Shared rules are supplied by directory path; june never fetches, clones or updates them, and CI checks them out.
 - A rule id defined in two files is a rule fault, exit 2 naming both files, in either directory order. A successful verdict does not depend on that order.
 - A directory named twice counts once, after cleaning and symlink resolution, and an empty `--rules` value means the default directory.
