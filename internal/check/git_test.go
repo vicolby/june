@@ -739,3 +739,104 @@ func TestSuppliedListNeedsNeitherGitNorABase(t *testing.T) {
 		t.Errorf("summary = %q, want no base for a supplied list", got)
 	}
 }
+
+func TestDubiousOwnershipNamesGitAndTheSafeDirectoryFix(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": "x = 1\n"})
+	env.Vars = dubiousOwnershipEnv()
+	root, err := filepath.EvalSymlinks(env.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDubiousOwnershipFix(t, against(t, env, "main"), root)
+}
+
+func TestDubiousOwnershipFromASubdirectoryNamesTheRepositoryRoot(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "it's a repo")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "init", "-q", "-b", "main")
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := against(t, check.Env{Dir: sub, Vars: dubiousOwnershipEnv()}, "main")
+	assertDubiousOwnershipFix(t, res, root)
+	if subRoot, err := filepath.EvalSymlinks(sub); err != nil {
+		t.Fatal(err)
+	} else if strings.Contains(string(res.Out), subRoot) {
+		t.Errorf("Fix names the working directory %s\n%s", subRoot, res.Out)
+	}
+}
+
+func TestDubiousOwnershipWithoutARepositoryPathQuotesGitOnly(t *testing.T) {
+	bin := t.TempDir()
+	script := "#!/bin/sh\necho 'fatal: detected dubious ownership in repository' >&2\nexit 128\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	res := against(t, check.Env{Dir: t.TempDir()}, "main")
+	refused(t, res, "june: error: git could not inspect the repository (fatal: detected dubious ownership in repository). Fix: run git rev-parse --is-inside-work-tree to see why\n")
+}
+
+// dubiousOwnershipEnv makes git treat the work tree as someone else's.
+// GIT_CONFIG_NOSYSTEM drops host safe.directory exemptions. GitHub-hosted
+// runners set safe.directory=* in the system config, which would accept the
+// repository and hide the refusal.
+func dubiousOwnershipEnv() map[string]string {
+	return map[string]string{
+		"GIT_TEST_ASSUME_DIFFERENT_OWNER": "1",
+		"GIT_CONFIG_NOSYSTEM":             "1",
+	}
+}
+
+// assertDubiousOwnershipFix checks that the refusal's safe.directory value is root.
+// The path oracle is the work tree git checks (its resolved directory). The quoting oracle
+// is a POSIX shell: the suggested word must parse back to that path, which rejects $PWD,
+// the working directory, and a path cut at an apostrophe.
+func assertDubiousOwnershipFix(t *testing.T, res check.Result, root string) {
+	t.Helper()
+	out := string(res.Out)
+	gitLine := "fatal: detected dubious ownership in repository at '" + root + "'"
+	prefix := "june: error: git refuses to use this repository (" + gitLine + "). Fix: git config --global --add safe.directory "
+	if res.Exit != 2 || !strings.HasPrefix(out, prefix) || !strings.HasSuffix(out, "\n") || strings.Contains(out, "not inside a git work tree") || strings.Contains(out, "$PWD") {
+		t.Fatalf("Exit = %d, Out = %q", res.Exit, res.Out)
+	}
+	word := strings.TrimSuffix(strings.TrimPrefix(out, prefix), "\n")
+	cmd := exec.CommandContext(context.Background(), "sh", "-c", "printf '%s' "+word)
+	got, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("shell parse %q: %v", word, err)
+	}
+	if string(got) != root {
+		t.Fatalf("safe.directory = %q, want %q (shell word %q)", got, root, word)
+	}
+}
+
+func TestOtherRevParseFailuresQuoteGitInsteadOfClaimingNoWorkTree(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("not a gitfile\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := check.Env{Dir: dir, Vars: map[string]string{"GIT_CEILING_DIRECTORIES": filepath.Dir(dir)}}
+	res := against(t, env, "main")
+	out := string(res.Out)
+	if res.Exit != 2 || !strings.HasPrefix(out, "june: error: git could not inspect the repository (fatal: invalid gitfile format") ||
+		!strings.HasSuffix(out, "). Fix: run git rev-parse --is-inside-work-tree to see why\n") || strings.Contains(out, "not inside a git work tree") {
+		t.Errorf("Exit = %d, Out = %q", res.Exit, res.Out)
+	}
+}
+
+func TestNonUTF8PythonFileIsNamedAndBlamesNeitherAstGrepNorTheScope(t *testing.T) {
+	env := repo(t, map[string]string{"ok.py": "x = 1\n"})
+	write(t, filepath.Join(env.Dir, "pkg", "legacy.py"), "# -*- coding: latin-1 -*-\nx = '\xe9'\n")
+	commit(t, env)
+	res := against(t, env, "main")
+	refused(t, res, "june: error: \"pkg/legacy.py\" is not UTF-8 text, so it cannot be scanned. Fix: save it as UTF-8 without NUL bytes and run june again\n")
+}

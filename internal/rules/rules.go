@@ -189,6 +189,12 @@ func knownID(places map[string]Place, id string) (Place, bool) {
 	return Place{}, false
 }
 
+// NotTextError reports a Python file that is not UTF-8 text, so ast-grep cannot read it.
+// File is the path as given to Scan.
+type NotTextError struct{ File string }
+
+func (e *NotTextError) Error() string { return "a Python file is not UTF-8 text" }
+
 // Scan runs the rules over the given files and keeps only Python files.
 // Matches are anchored at their first line. File is reported as given.
 func (rs *RuleSet) Scan(ctx context.Context, files []string) (Scanned, error) {
@@ -203,7 +209,7 @@ func (rs *RuleSet) Scan(ctx context.Context, files []string) (Scanned, error) {
 			return Scanned{}, errors.New("a Python file cannot be read")
 		}
 		if !utf8.Valid(source) || bytes.IndexByte(source, 0) >= 0 {
-			return Scanned{}, errors.New("a Python file is not UTF-8 text")
+			return Scanned{}, &NotTextError{File: f}
 		}
 		if config == "" {
 			dir, err := os.MkdirTemp("", "june-scan-")

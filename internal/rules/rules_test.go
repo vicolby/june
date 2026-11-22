@@ -2,6 +2,7 @@ package rules_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -250,6 +251,10 @@ func TestScanRefusesIncompleteInput(t *testing.T) {
 			}
 			if strings.Contains(err.Error(), dir) {
 				t.Errorf("error exposes an absolute path: %v", err)
+			}
+			var notText *rules.NotTextError
+			if isText := name == "invalid UTF-8" || name == "NUL"; errors.As(err, &notText) != isText || (isText && notText.File != bad) {
+				t.Errorf("error = %#v, want a NotTextError naming %s only for non-text input", err, bad)
 			}
 		})
 	}
