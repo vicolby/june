@@ -100,7 +100,7 @@ type Match struct {
 type Scanned struct {
 	Matches []Match
 	OptOuts []OptOut
-	// ParseErrors lists, per file, the line spans where the parser recovered from a syntax error, in the order given.
+	// ParseErrors lists the line spans where the parser recovered from a syntax error, sorted by file path and starting line.
 	ParseErrors []ParseError
 	// Skipped lists the files that could not be read as text and so were not scanned, in the order given.
 	Skipped []Skipped
@@ -239,7 +239,7 @@ func knownID(places map[string]Place, id string) (Place, bool) {
 
 // Scan runs the rules over the given files and keeps only Python files.
 // Files are slash-separated paths relative to root. Matches are anchored at their first line.
-// File is reported as given, and results come back in the order the files were given.
+// File is reported as given. Matches, opt-outs and skipped files follow the order the files were given.
 //
 // One scratch tree holds the rules and every file at its given relative path, so ast-grep makes one
 // comment pass and one scan however many files and rules there are. Nothing travels through argv.
