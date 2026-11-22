@@ -309,9 +309,30 @@ func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, 
 				}
 				return refuse("git could not diff against the merge base with %q (%v). Fix: run git diff %s to see why", sc.base, err, sc.base)
 			}
-			for destination, spans := range parsePatch(patch) {
-				if _, ok := want[destination]; ok {
-					parsed[destination] = spans
+			// Git pairs renames across every pathspec of one process, so a file in the batch can take
+			// the source of another. A pairing that is not the full diff's is diffed again with no
+			// other file in the process, where it can only pair with its own source.
+			spans, got := parsePatch(patch), renamedFrom(patch)
+			for _, r := range redo[start:end] {
+				if got[r.to] == r.from {
+					if s, ok := spans[r.to]; ok {
+						parsed[r.to] = s
+					}
+					continue
+				}
+				specs := []string{exactPathspec(r.to)}
+				if r.from != "" {
+					specs = append(specs, exactPathspec(r.from))
+				}
+				alone, err := git(ctx, env, "", append(append(args, "--"), specs...)...)
+				if err != nil {
+					if ctx.Err() != nil {
+						return nil, scope{}, nil, ctx.Err()
+					}
+					return refuse("git could not diff against the merge base with %q (%v). Fix: run git diff %s to see why", sc.base, err, sc.base)
+				}
+				if s, ok := parsePatch(alone)[r.to]; ok {
+					parsed[r.to] = s
 				}
 			}
 			start = end

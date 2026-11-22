@@ -208,3 +208,19 @@ func TestChangeNewFileIsNotPairedWithFileThatBecameNotPython(t *testing.T) {
 	git(t, env.Dir, "commit", "-q", "-m", "split")
 	expect(t, against(t, env, "main"), 1, want)
 }
+
+// A new Python file that resembles the source of a rename from a non-Python path is still new, even when
+// both are re-diffed in the same batch: each file's pairing must not depend on the other files.
+func TestChangeNewFileIsNotPairedWithSourceOfAnotherRename(t *testing.T) {
+	shared := "import os\nimport sys\nx = 1\ny = 2\nz = 3\n"
+	env := repo(t, map[string]string{"a.txt": shared, "b.txt": "import json\nimport re\nq = 1\nr = 2\ns = 3\n"})
+	git(t, env.Dir, "mv", "a.txt", "moved.py")
+	write(t, filepath.Join(env.Dir, "moved.py"), shared+old)
+	write(t, filepath.Join(env.Dir, "fresh.py"), shared+"w = 4\n"+old)
+	want := "fresh.py:7:9: " + py012 + "moved.py:6:9: " + py012
+	expect(t, against(t, env, "main"), 1, want)
+	git(t, env.Dir, "add", "-A")
+	expect(t, against(t, env, "main"), 1, want)
+	git(t, env.Dir, "commit", "-q", "-m", "split")
+	expect(t, against(t, env, "main"), 1, want)
+}
