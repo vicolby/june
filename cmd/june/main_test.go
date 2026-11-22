@@ -49,7 +49,7 @@ func TestHelpPrintsUsageAndExitsZero(t *testing.T) {
 		if errOut.Len() != 0 {
 			t.Errorf("%v: stderr = %q, want empty", args, errOut.String())
 		}
-		for _, want := range []string{"usage:", "--base", "--changed-lines", "--legacy", "--ignore-whitespace", "--rules", "--version", "--help", "june verify", "exit codes:"} {
+		for _, want := range []string{"usage:", "--base", "--changed-lines", "--exclude", "--legacy", "--ignore-whitespace", "--rules", "--version", "--help", "june verify", "exit codes:"} {
 			if !strings.Contains(out.String(), want) {
 				t.Errorf("%v: stdout lacks %q: %q", args, want, out.String())
 			}
@@ -106,6 +106,22 @@ func TestChangedLinesFileFindingExitsOne(t *testing.T) {
 	code := run(context.Background(), []string{"--changed-lines", list}, strings.NewReader(""), &out, &errOut, env)
 	if code != 1 || out.String() != "app.py:2:9: "+py012+"june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 2 changed lines\n" || errOut.Len() != 0 {
 		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+}
+
+func TestExcludeFlagKeepsPathsOutOfTheCheck(t *testing.T) {
+	var out, errOut bytes.Buffer
+	args := []string{"--exclude", "gen/**", "--exclude", "app.py", "--changed-lines", "-"}
+	code := run(context.Background(), args, strings.NewReader("app.py:2\n"), &out, &errOut, project(t))
+	if code != 0 || out.String() != "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; 1 file excluded\n" || errOut.Len() != 0 {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+}
+
+func TestExcludeFlagNeedsAValue(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"--exclude"}, strings.NewReader(""), &out, &errOut, project(t)); code != 2 || !strings.Contains(errOut.String(), "Fix: usage is") {
+		t.Errorf("exit = %d, stderr = %q, want a usage error", code, errOut.String())
 	}
 }
 

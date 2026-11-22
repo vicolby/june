@@ -73,7 +73,7 @@ func change(t *testing.T, env check.Env, list string) check.Result {
 	return res
 }
 
-var summaryLine = regexp.MustCompile(`^june: \d+ errors?, \d+ warnings?, \d+ opt-outs?; checked \d+ files?, \d+ changed lines?(; \d+ files? skipped, not readable as text)?(; base \S+ \([a-z -]+\))?\n$`)
+var summaryLine = regexp.MustCompile(`^june: \d+ errors?, \d+ warnings?, \d+ opt-outs?; checked \d+ files?, \d+ changed lines?(; \d+ files? skipped, not readable as text)?(; \d+ files? excluded)?(; base \S+ \([a-z -]+\))?\n$`)
 
 // skippedText is the warning june prints when a Python file is left out of the scan.
 func skippedText(file, reason string) string {
