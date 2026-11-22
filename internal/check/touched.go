@@ -26,7 +26,7 @@ func (t touchedSet) has(file string, line int) bool {
 	return false
 }
 
-// pythonFiles lists the touched files that june reads, sorted.
+// pythonFiles includes excluded paths retained for summary counts, sorted.
 func (t touchedSet) pythonFiles() []string {
 	var files []string
 	for f := range t {
@@ -57,7 +57,7 @@ const listFix = "write one path:7 or path:7-12 per line, with paths relative to 
 
 // readTouched parses the supplied list.
 // The returned message is a complete "<cause>. Fix: <instruction>" refusal.
-func readTouched(env Env, r io.Reader) (touchedSet, *string) {
+func readTouched(env Env, r io.Reader, skip *excluder) (touchedSet, *string) {
 	fail := func(format string, a ...any) (touchedSet, *string) {
 		msg := fmt.Sprintf(format, a...)
 		return nil, &msg
@@ -79,6 +79,9 @@ func readTouched(env Env, r io.Reader) (touchedSet, *string) {
 		return fail("the changed-lines list cannot be read. Fix: %s", listFix)
 	}
 	for _, f := range set.pythonFiles() {
+		if skip.excluded(f) {
+			continue
+		}
 		if !fileExists(env.Dir, f) {
 			return fail("changed-lines names %s, which is not a file in the tree. Fix: regenerate the list from the current tree", f)
 		}

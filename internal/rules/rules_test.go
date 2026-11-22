@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func TestLoadRefusesUnverifiedRules(t *testing.T) {
 		{"empty_message", "LST01.yml", "empty message"},
 		{"no_examples", "LST01.yml", "no examples"},
 		{"one_sided", "rule-tests/LST01-test.yml", "both valid and invalid"},
-		{"unparseable", "LST01.yml", "cannot parse the rule"},
+		{"unparseable", "LST01.yml", `the key "bogus_key", which june does not use`},
 		{"empty", "", "holds no rules"},
 		{"missing", "", "does not exist"},
 	}
@@ -834,21 +835,20 @@ func TestScanRefusesPathsOutsideRoot(t *testing.T) {
 	}
 }
 
-// Path filters inside a rule have never applied, and a scan that stages real paths must not start applying them:
-// honouring `files` and `ignores` is a decision of its own, so a rule keeps matching every file it is given.
-func TestScanDoesNotApplyRulePathFilters(t *testing.T) {
+// A rule's files and ignores are matched against the real path of each scanned file, relative to the scanned root.
+func TestScanAppliesRulePathFilters(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "rule-tests"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	write(t, filepath.Join(dir, "PATH01.yml"), "id: PATH01\nlanguage: python\nseverity: error\nmessage: 'Fix: no lists'\nfiles: ['**/only/**']\nignores: ['**/legacy/**']\nrule:\n  kind: list\n")
+	write(t, filepath.Join(dir, "PATH01.yml"), "id: PATH01\nlanguage: python\nseverity: error\nmessage: 'Fix: no lists'\nfiles: ['src/**']\nignores: ['src/legacy/**']\nrule:\n  kind: list\n")
 	write(t, filepath.Join(dir, "rule-tests", "PATH01-test.yml"), "id: PATH01\nvalid: ['x = 1']\ninvalid: ['x = [1]']\n")
 	rs, faults := rules.Load(context.Background(), dir)
 	if rs == nil {
 		t.Fatalf("Load: %v", faults)
 	}
 	src := t.TempDir()
-	files := []string{"legacy/b.py", "elsewhere/c.py", "only/d.py"}
+	files := []string{"src/a.py", "src/legacy/b.py", "tests/c.py", "vendor/src/d.py", "e.py"}
 	for _, f := range files {
 		if err := os.MkdirAll(filepath.Join(src, filepath.Dir(f)), 0o755); err != nil {
 			t.Fatal(err)
@@ -856,7 +856,71 @@ func TestScanDoesNotApplyRulePathFilters(t *testing.T) {
 		write(t, filepath.Join(src, f), "x = [1]\n")
 	}
 	got, err := rs.Scan(context.Background(), src, files)
-	if err != nil || len(got.Matches) != len(files) {
-		t.Fatalf("Scan = %+v, %v, want a match in each of %v", got.Matches, err, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hit []string
+	for _, m := range got.Matches {
+		hit = append(hit, m.File)
+	}
+	if want := []string{"src/a.py"}; !slices.Equal(hit, want) {
+		t.Errorf("matched files = %v, want %v", hit, want)
+	}
+}
+
+// A rule key june does not honour must fail verification, so nothing is dropped silently.
+func TestLoadRefusesRuleKeysJuneIgnores(t *testing.T) {
+	tests := []struct{ name, extra, wantCause string }{
+		{"fix", "fix: x = ()\n", `the key "fix", which june does not use`},
+		{"note", "note: use a tuple\n", `the key "note", which june does not use`},
+		{"url", "url: https://example.com\n", `the key "url"`},
+		{"labels", "labels:\n  x: {style: primary}\n", `the key "labels"`},
+		{"metadata", "metadata:\n  a: 1\n", `the key "metadata"`},
+		{"bad glob", "files: ['[unclosed']\n", "not a valid glob"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.Mkdir(filepath.Join(dir, "rule-tests"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join(dir, "LST01.yml"), "id: LST01\nlanguage: python\nseverity: error\nmessage: 'Fix: no lists'\nrule:\n  kind: list\n"+tt.extra)
+			write(t, filepath.Join(dir, "rule-tests", "LST01-test.yml"), "id: LST01\nvalid: ['x = 1']\ninvalid: ['x = [1]']\n")
+			rs, faults := rules.Load(context.Background(), dir)
+			if rs != nil || len(faults) != 1 || !strings.Contains(faults[0].Cause, tt.wantCause) {
+				t.Fatalf("Load = %v, %+v, want one fault containing %q", rs, faults, tt.wantCause)
+			}
+		})
+	}
+}
+
+// A file that cannot be staged at its own path would be judged by the filters against a stand-in path,
+// so a scan with scoped rules refuses it, and an unscoped rule set still scans it.
+func TestScanRefusesStandInPathsForScopedRules(t *testing.T) {
+	load := func(extra string) *rules.RuleSet {
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, "rule-tests"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(dir, "SC01.yml"), "id: SC01\nlanguage: python\nseverity: error\nmessage: 'Fix: no lists'\nrule:\n  kind: list\n"+extra)
+		write(t, filepath.Join(dir, "rule-tests", "SC01-test.yml"), "id: SC01\nvalid: ['x = 1']\ninvalid: ['x = [1]']\n")
+		rs, faults := rules.Load(context.Background(), dir)
+		if rs == nil {
+			t.Fatalf("Load: %v", faults)
+		}
+		return rs
+	}
+	src := t.TempDir()
+	// A directory named like the scan configuration takes the path the file needs, so it falls back to a stand-in.
+	if err := os.MkdirAll(filepath.Join(src, "sgconfig.yml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(src, "sgconfig.yml", "x.py"), "x = [1]\n")
+	files := []string{"sgconfig.yml/x.py"}
+	if _, err := load("ignores: ['vendor/**']\n").Scan(context.Background(), src, files); err == nil {
+		t.Error("Scan with scoped rules: want a refusal")
+	}
+	if got, err := load("").Scan(context.Background(), src, files); err != nil || len(got.Matches) != 1 {
+		t.Errorf("Scan with unscoped rules = %+v, %v, want one match", got.Matches, err)
 	}
 }

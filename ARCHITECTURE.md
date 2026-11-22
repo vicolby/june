@@ -14,11 +14,12 @@ Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`, whic
 
 - `cmd/june` is a shell and owns no decision. It maps flags to a `check.Request`, snapshots the environment, writes the output and report files, and returns the exit code.
 - `check` is the deep module. It decides one change: which lines are touched, which findings land on them, which opt-outs apply, and the exit code. It hides repo discovery, CI detection and scope inference, merge-base and shallow-clone handling, diff parsing, the changed-lines list parser, opt-out matching and sorting.
-- `rules` owns ast-grep rules and their sidecar examples (`rule-tests/<id>-test.yml`). A rule set loads only if every example behaves, so an unverified rule never produces a verdict. It checks the ast-grep version before verifying examples, runs ast-grep and hides the invocation, source encodings, and the zero-based to one-based line shift. `RuleSet.Version` is the version a verdict used.
+- `rules` owns ast-grep rules and their sidecar examples (`rule-tests/<id>-test.yml`). A rule set loads only if every example behaves, so an unverified rule never produces a verdict. It checks the ast-grep version before verifying examples, stages files at their real paths so a rule's `files` and `ignores` apply, refuses rule keys june does not use, runs ast-grep and hides the invocation, source encodings, and the zero-based to one-based line shift. `RuleSet.Version` is the version a verdict used.
 - `diag` is the one ruff-shaped vocabulary for findings, opt-outs, legacy matches, rule faults and june's own failures, and renders it as text, GitHub, GitLab, JSON or SARIF.
 
 ## Invariants
 
+- Path exclusions follow the [exclusion contract](README.md#excluding-paths).
 - Exit 1 if and only if an error-severity match is anchored on a touched line with no valid opt-out. Warnings, legacy matches and opt-outs never change the exit code.
 - Exit 2 means june could not give a verdict (no base, shallow clone, bad rules, missing ast-grep, bad list, unwritable report). Output reads `june: error: <cause>. Fix: <instruction>`.
 - A touched line is one added or edited in the post-image. With `--ignore-whitespace`, a line whose only change is whitespace (`git diff -w`) is not touched; a line with any other edit still is. Pure deletions, mode changes and pure renames touch nothing. A new file touches every line, including an untracked file in a local run.

@@ -12,7 +12,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -72,6 +74,8 @@ type RuleSet struct {
 	ids      map[string]bool
 	rules    int
 	examples int
+	// scoped is true when some rule carries files or ignores, which only hold for a file staged at its real path.
+	scoped bool
 }
 
 // Rules is the number of rules that were verified.
@@ -193,12 +197,16 @@ func Load(ctx context.Context, dirs ...string) (*RuleSet, []Fault) {
 	docs := make([]ruleSource, len(entries))
 	ids := make(map[string]bool, len(entries))
 	total := 0
+	scoped := false
 	for i, e := range entries {
 		docs[i] = ruleSource{id: e.id, text: e.doc}
 		ids[e.id] = true
 		total += e.examples
+		for _, k := range ruleKeys([]byte(e.doc)) {
+			scoped = scoped || k == "files" || k == "ignores"
+		}
 	}
-	return &RuleSet{bin: bin, version: version, docs: docs, ids: ids, rules: len(entries), examples: total}, nil
+	return &RuleSet{bin: bin, version: version, docs: docs, ids: ids, rules: len(entries), examples: total, scoped: scoped}, nil
 }
 
 // knownID reports the file that already owns id. Comparison is case-insensitive because staging uses the id as a filename.
@@ -260,6 +268,10 @@ func (rs *RuleSet) Scan(ctx context.Context, root string, files []string) (Scann
 		if err != nil {
 			return Scanned{}, errScanSetup
 		}
+		if name != f && rs.scoped {
+			// A file at a stand-in path would be judged by the filters against the wrong path, silently.
+			return Scanned{}, errors.New("a Python file cannot be staged at its own path, so a rule's files and ignores cannot be applied to it")
+		}
 		staged[i], byStaged[name] = name, i
 		if bytes.Contains(source, []byte(optOutMarker)) || bytes.Contains(source, []byte(suppressionMarker)) {
 			if err := writeFile(filepath.Join(scratch, commentsDir, filepath.FromSlash(name)), source); err != nil {
@@ -292,7 +304,9 @@ func (rs *RuleSet) Scan(ctx context.Context, root string, files []string) (Scann
 		}
 	}
 
-	stdout, err := rs.run(ctx, scratch, "scan", "--json=stream", treeDir)
+	// ast-grep matches a rule's files and ignores against the path under its project root, the directory of
+	// the configuration, so the scan runs from inside the tree and sees every file at its real path.
+	stdout, err := rs.run(ctx, scratch, treeDir, filepath.Join(scratch, treeDir, "sgconfig.yml"), "scan", "--json=stream", ".")
 	if err != nil {
 		return Scanned{}, err
 	}
@@ -318,7 +332,7 @@ func (rs *RuleSet) Scan(ctx context.Context, root string, files []string) (Scann
 			}
 			return Scanned{}, errors.New("ast-grep scan returned unreadable output")
 		}
-		i, ok := byStaged[strings.TrimPrefix(filepath.ToSlash(m.File), treeDir+"/")]
+		i, ok := byStaged[strings.TrimPrefix(filepath.ToSlash(m.File), "./")]
 		if !ok {
 			return Scanned{}, errors.New("ast-grep scan returned unreadable output")
 		}
@@ -374,9 +388,17 @@ func writeConfig(dir string) error {
 	return os.WriteFile(filepath.Join(dir, "sgconfig.yml"), []byte(isolatedConfig), 0o644)
 }
 
+// writeTreeConfig puts the configuration of the scan at the root of the staged tree, with the rules beside the tree.
+func writeTreeConfig(dir string) error {
+	return writeFile(filepath.Join(dir, treeDir, "sgconfig.yml"), []byte("ruleDirs: [../rules]\n"))
+}
+
 // writeRules lays out the configuration in dir and every rule once, in the file named after its id.
 func (rs *RuleSet) writeRules(dir string) error {
 	if err := writeConfig(dir); err != nil {
+		return err
+	}
+	if err := writeTreeConfig(dir); err != nil {
 		return err
 	}
 	for _, r := range rs.docs {
@@ -427,14 +449,15 @@ func writeFile(path string, data []byte) error {
 // run runs ast-grep in scratch against its configuration, one process for every staged file.
 // Exit 1 only says that error-severity matches were found.
 // A failure carries the first line ast-grep wrote to standard error, without the scratch path.
-func (rs *RuleSet) run(ctx context.Context, scratch string, args ...string) ([]byte, error) {
-	args = append(args, "--config", filepath.Join(scratch, "sgconfig.yml"), "--color=never")
+// It runs in the scratch subdirectory cwd, against the configuration file config.
+func (rs *RuleSet) run(ctx context.Context, scratch, cwd, config string, args ...string) ([]byte, error) {
+	args = append(args, "--config", config, "--color=never")
 	// The staged tree is not a repository: no ignore file, dot directory or parent directory may hide a file in it.
 	for _, kind := range []string{"hidden", "dot", "vcs", "parent", "global", "exclude"} {
 		args = append(args, "--no-ignore", kind)
 	}
 	cmd := exec.CommandContext(ctx, rs.bin, args...)
-	cmd.Dir = scratch
+	cmd.Dir = filepath.Join(scratch, cwd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -477,7 +500,7 @@ type comment struct {
 // comments finds the comment nodes of every file in the comments tree, so a marker inside a string literal is never one.
 // It returns them by file index, each file's in source order.
 func (rs *RuleSet) comments(ctx context.Context, scratch string, byStaged map[string]int) (map[int][]comment, error) {
-	stdout, err := rs.run(ctx, scratch, "run", "--lang", "python", "--kind", "comment", "--json=stream", commentsDir)
+	stdout, err := rs.run(ctx, scratch, ".", filepath.Join(scratch, "sgconfig.yml"), "run", "--lang", "python", "--kind", "comment", "--json=stream", commentsDir)
 	if err != nil {
 		return nil, err
 	}
@@ -606,6 +629,9 @@ func readRule(dir, name string) (string, string, int, []Fault) {
 	if !strings.EqualFold(doc.Language, "python") {
 		return "", "", 0, []Fault{{Path: name, Cause: "the rule language is not Python", Fix: "set language to python"}}
 	}
+	if unused := unusedKeys(raw); len(unused) > 0 {
+		return "", "", 0, []Fault{{Path: name, Cause: fmt.Sprintf("rule %s has %s, which june does not use", doc.ID, quoteKeys(unused)), Fix: "remove it; june reads only " + strings.Join(usedKeys, ", ") + ", so put the correction in the message"}}
+	}
 	if strings.TrimSpace(doc.Message) == "" {
 		return "", "", 0, []Fault{{Path: name, Cause: fmt.Sprintf("rule %s has an empty message", doc.ID), Fix: "write the corrective instruction in the message"}}
 	}
@@ -625,36 +651,45 @@ func readRule(dir, name string) (string, string, int, []Fault) {
 	if len(ex.Valid) == 0 || len(ex.Invalid) == 0 {
 		return "", "", 0, []Fault{{Path: sidecar, Cause: fmt.Sprintf("rule %s needs both valid and invalid examples", doc.ID), Fix: "add at least one of each"}}
 	}
-	return strings.TrimRight(string(withoutPathFilters(raw)), "\n"), doc.ID, len(ex.Valid) + len(ex.Invalid), nil
+	return strings.TrimRight(string(raw), "\n"), doc.ID, len(ex.Valid) + len(ex.Invalid), nil
 }
 
-// pathFilters are the rule keys ast-grep matches against the path of the file it scans.
-var pathFilters = map[string]bool{"files": true, "ignores": true}
+// usedKeys are the rule keys june reads or lets ast-grep apply to the match, the message or the path.
+// Any other key would be dropped silently, so it is refused.
+var usedKeys = []string{"id", "language", "message", "severity", "rule", "constraints", "utils", "transform", "rewriters", "files", "ignores"}
 
-// withoutPathFilters drops the path filters from a rule, so it keeps matching every file it is given.
-// A scan that stages files at their real paths would otherwise start applying them, and honouring them is its own change.
-// A rule without such keys comes back byte for byte.
-func withoutPathFilters(raw []byte) []byte {
+// ruleKeys lists the top-level keys of a rule document.
+func ruleKeys(raw []byte) []string {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(raw, &doc); err != nil || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
-		return raw
+		return nil
 	}
 	top := doc.Content[0]
-	kept := make([]*yaml.Node, 0, len(top.Content))
+	var keys []string
 	for i := 0; i+1 < len(top.Content); i += 2 {
-		if !pathFilters[top.Content[i].Value] {
-			kept = append(kept, top.Content[i], top.Content[i+1])
+		keys = append(keys, top.Content[i].Value)
+	}
+	return keys
+}
+
+// unusedKeys lists the top-level keys of a rule that june does not use, sorted.
+func unusedKeys(raw []byte) []string {
+	var out []string
+	for _, k := range ruleKeys(raw) {
+		if !slices.Contains(usedKeys, k) {
+			out = append(out, k)
 		}
 	}
-	if len(kept) == len(top.Content) {
-		return raw
-	}
-	top.Content = kept
-	out, err := yaml.Marshal(&doc)
-	if err != nil {
-		return raw
-	}
+	sort.Strings(out)
 	return out
+}
+
+func quoteKeys(keys []string) string {
+	q := make([]string, len(keys))
+	for i, k := range keys {
+		q[i] = "the key " + strconv.Quote(k)
+	}
+	return strings.Join(q, " and ")
 }
 
 func decodeDocument(raw []byte, out any) error {
@@ -730,6 +765,23 @@ func verify(ctx context.Context, bin string, dirs []string, entries []entry) []F
 	}
 	if len(faults) > 0 {
 		return faults
+	}
+	if strings.Contains(text, "Cannot parse glob pattern") {
+		for _, e := range entries {
+			args := append(slices.Clone(cmd.Args[1:]), "--filter", "^"+regexp.QuoteMeta(e.id)+"$")
+			filtered := exec.CommandContext(ctx, bin, args...)
+			filtered.Dir = scratch
+			out, _ := filtered.CombinedOutput()
+			if ctx.Err() != nil {
+				return []Fault{{Cause: "the examples were cancelled", Fix: "run june again"}}
+			}
+			if text := string(out); strings.Contains(text, "Cannot parse glob pattern") {
+				faults = append(faults, Fault{Dir: e.place.Dir, Path: e.place.Path, Cause: "a rule has a files or ignores pattern that is not a valid glob (" + oneLine(failureReason(text)) + ")", Fix: "fix the glob in the rule's files or ignores"})
+			}
+		}
+		if len(faults) > 0 {
+			return faults
+		}
 	}
 	if m := parseLine.FindStringSubmatch(text); m != nil {
 		at := where[strings.TrimSuffix(strings.TrimPrefix(m[1], "rules"+string(filepath.Separator)), ".yml")]

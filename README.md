@@ -44,7 +44,7 @@ The script is plain POSIX [`install.sh`](install.sh); read it before piping to `
 ## Usage
 
 ```text
-june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--base REF | --changed-lines FILE]
+june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--exclude GLOB]... [--base REF | --changed-lines FILE]
 june verify [--rules DIR]...
 june --version
 june --help | -h
@@ -56,6 +56,7 @@ june --help | -h
 | `--base REF` | Judge lines changed since the merge base of `REF` and `HEAD`. |
 | `--changed-lines FILE` | Judge lines listed in `FILE`, one `path:7` or `path:7-12` per line; `-` reads stdin. |
 | `--format FORMAT` | `text`, `json`, `sarif`, `github` or `gitlab`. Default: `github` under GitHub Actions, `gitlab` under GitLab CI, else `text`. |
+| `--exclude GLOB` | Keep paths out of the check, repeatable. Adds to `exclude` in `.june/config.yml`. |
 | `--legacy` | Also list violations on untouched lines, as information only. |
 | `--ignore-whitespace` | Do not count a line as touched when only its whitespace changed, like `git diff -w`. Strict by default. Not valid with `--changed-lines`. |
 | `--help`, `-h` | Print usage and flags to stdout and exit 0. |
@@ -77,6 +78,23 @@ Unsupported declarations, invalid bytes for the selected encoding, a conflicting
 june ships no rules: write your own [ast-grep](https://ast-grep.github.io) rules and keep them in `.june/rules`, or pass `--rules DIR`. A run with neither stops with an error that says to supply rules. Only an error fails the check.
 
 Every rule has `valid` and `invalid` examples in `rule-tests/`. A normal run verifies the rules it loads first; run `june verify --rules DIR` in the CI of a repo that keeps its own rules.
+
+A rule can scope itself with ast-grep's `files:` and `ignores:`, matched against the path relative to the working directory. If a file cannot be staged at its original path, a run using path-scoped rules exits 2. `june verify` refuses unsupported rule keys (such as `fix`, `note` or `url`), naming the key, and reports bad globs against the offending rule file.
+
+### Excluding paths
+
+Exclude generated code, vendored trees and fixtures by path, in `.june/config.yml` or with `--exclude`:
+
+```yaml
+exclude:
+  - vendor
+  - "**/*_pb2.py"
+  - migrations/**
+```
+
+Globs are relative to the working directory: `*` stays within one path segment, `**` spans directories, a glob that matches a directory excludes everything under it, and whitespace in a glob is literal. The only config key is `exclude`, a list of globs; unknown or repeated keys, extra YAML documents and invalid globs are errors.
+
+Exclusion applies during discovery, before file-existence checks or reading excluded worktree contents. Excluded files are not scanned or counted as checked, and the summary reports how many were excluded. Unreadable excluded worktree files do not refuse the run. Excluded Python paths in `--changed-lines` need not exist, but list entries must still use valid `path:7` or `path:7-12` syntax.
 
 ### Opt-outs
 

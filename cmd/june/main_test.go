@@ -49,7 +49,7 @@ func TestHelpPrintsUsageAndExitsZero(t *testing.T) {
 		if errOut.Len() != 0 {
 			t.Errorf("%v: stderr = %q, want empty", args, errOut.String())
 		}
-		for _, want := range []string{"usage:", "--base", "--changed-lines", "--legacy", "--ignore-whitespace", "--rules", "--version", "--help", "june verify", "exit codes:"} {
+		for _, want := range []string{"usage:", "--base", "--changed-lines", "--exclude", "--legacy", "--ignore-whitespace", "--rules", "--version", "--help", "june verify", "exit codes:"} {
 			if !strings.Contains(out.String(), want) {
 				t.Errorf("%v: stdout lacks %q: %q", args, want, out.String())
 			}
@@ -106,6 +106,22 @@ func TestChangedLinesFileFindingExitsOne(t *testing.T) {
 	code := run(context.Background(), []string{"--changed-lines", list}, strings.NewReader(""), &out, &errOut, env)
 	if code != 1 || out.String() != "app.py:2:9: "+py012+"june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 2 changed lines\n" || errOut.Len() != 0 {
 		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+}
+
+func TestExcludeFlagKeepsPathsOutOfTheCheck(t *testing.T) {
+	var out, errOut bytes.Buffer
+	args := []string{"--exclude", "gen/**", "--exclude", "app.py", "--changed-lines", "-"}
+	code := run(context.Background(), args, strings.NewReader("app.py:2\n"), &out, &errOut, project(t))
+	if code != 0 || out.String() != "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; 1 file excluded\n" || errOut.Len() != 0 {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+}
+
+func TestExcludeFlagNeedsAValue(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"--exclude"}, strings.NewReader(""), &out, &errOut, project(t)); code != 2 || !strings.Contains(errOut.String(), "Fix: usage is") {
+		t.Errorf("exit = %d, stderr = %q, want a usage error", code, errOut.String())
 	}
 }
 
@@ -284,6 +300,43 @@ func TestVerifyArguments(t *testing.T) {
 		if code := run(context.Background(), args, strings.NewReader(""), &out, &errOut, project(t)); code != 2 || out.Len() != 0 || !strings.Contains(errOut.String(), ". Fix: usage is") {
 			t.Errorf("%v: exit = %d, stdout = %q, stderr = %q", args, code, out.String(), errOut.String())
 		}
+	}
+}
+
+func TestInvalidRuleGlobsNameTheirSource(t *testing.T) {
+	for _, key := range []string{"files", "ignores"} {
+		t.Run(key, func(t *testing.T) {
+			env := project(t)
+			shared := filepath.Join(env.Dir, "shared")
+			if err := os.MkdirAll(filepath.Join(shared, "rule-tests"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			rule := "id: BAD[01]\nlanguage: python\nseverity: off\nmessage: No lists.\nrule:\n  kind: list\n"
+			path := filepath.Join(shared, "odd name.yaml")
+			if err := os.WriteFile(path, []byte(rule+key+": ['src/**', '[unclosed']\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(shared, "rule-tests", "BAD[01]-test.yml"), []byte("id: BAD[01]\nvalid: ['x = 1']\ninvalid: ['x = [1]']\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for _, dirs := range [][]string{{".june/rules", "shared"}, {"shared", ".june/rules"}} {
+				for _, command := range [][]string{{"verify"}, {"--changed-lines", "-"}} {
+					args := append(append([]string{}, command...), "--rules", dirs[0], "--rules", dirs[1])
+					var out, errOut bytes.Buffer
+					code := run(context.Background(), args, strings.NewReader("app.py:1\n"), &out, &errOut, env)
+					if code != 2 || !strings.HasPrefix(out.String(), "june: error: shared/odd name.yaml: ") || !strings.Contains(out.String(), "not a valid glob") || strings.Count(out.String(), "june: error:") != 1 || errOut.Len() != 0 {
+						t.Errorf("%v: exit = %d, stdout = %q, stderr = %q", args, code, out.String(), errOut.String())
+					}
+				}
+			}
+			if err := os.WriteFile(path, []byte(rule+key+": ['src/**']\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var out, errOut bytes.Buffer
+			if code := run(context.Background(), []string{"verify", "--rules", ".june/rules", "--rules", "shared"}, nil, &out, &errOut, env); code != 0 || !strings.HasPrefix(out.String(), "june: verified 2 rules, 21 examples with ") || errOut.Len() != 0 {
+				t.Errorf("valid glob: exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+			}
+		})
 	}
 }
 

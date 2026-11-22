@@ -36,6 +36,9 @@ type Request struct {
 	Rules []string
 	// Format is the output format, one of diag's; empty is inferred: GitHub under GitHub Actions, GitLab under GitLab CI, else text.
 	Format diag.Format
+	// Exclude lists path globs, relative to the working directory, that keep files out of the check.
+	// They add to the exclude list of .june/config.yml.
+	Exclude []string
 	// Legacy also lists rule matches on untouched lines of the checked files, as information only.
 	// They never change Exit; off by default.
 	Legacy bool
@@ -72,7 +75,11 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	req.Format = formatFor(env, req)
 	req.root = repoPrefix(ctx, env, req.Format)
 	req.stepSummary = env.Vars["GITHUB_STEP_SUMMARY"]
-	touched, sc, bad, err := findTouched(ctx, env, req)
+	skip, bad := excludes(env, req)
+	if bad != nil {
+		return refuse(req, *bad), nil
+	}
+	touched, sc, bad, err := findTouched(ctx, env, req, skip)
 	if sc.scanDir != "" {
 		defer func() { _ = os.RemoveAll(sc.scanDir) }()
 	}
@@ -95,7 +102,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	if sc.scanDir != "" {
 		root = sc.scanDir
 	}
-	files := touched.pythonFiles()
+	files, excluded := skip.filter(touched.pythonFiles())
 	scanned, err := rs.Scan(ctx, root, files)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -187,6 +194,9 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	}
 	if sc.base != "" {
 		sum += "; base " + sc.base + " (" + sc.source + ")"
+	}
+	if excluded > 0 {
+		sum += "; " + count(excluded, "file") + " excluded"
 	}
 	if legacy > 0 {
 		sum += "; " + count(legacy, "legacy violation") + " listed"
@@ -320,15 +330,15 @@ func repoPrefix(ctx context.Context, env Env, f diag.Format) string {
 
 // findTouched picks the touched-line adapter: the supplied list, else git against Base or an inferred base.
 // The scope is zero for a supplied list. The touched set is never "every line": what cannot be known is refused.
-func findTouched(ctx context.Context, env Env, req Request) (touchedSet, scope, *string, error) {
+func findTouched(ctx context.Context, env Env, req Request, skip *excluder) (touchedSet, scope, *string, error) {
 	if req.Changed == nil {
 		if req.Base != "" {
-			return gitTouched(ctx, env, req.Base, sourceFlag, req.IgnoreSpace)
+			return gitTouched(ctx, env, req.Base, sourceFlag, req.IgnoreSpace, skip)
 		}
 		if base := mergeRequestBase(ctx, env); base != "" {
-			return gitTouched(ctx, env, base, sourceMR, req.IgnoreSpace)
+			return gitTouched(ctx, env, base, sourceMR, req.IgnoreSpace, skip)
 		}
-		return gitTouched(ctx, env, "", "", req.IgnoreSpace)
+		return gitTouched(ctx, env, "", "", req.IgnoreSpace, skip)
 	}
 	if req.IgnoreSpace {
 		msg := "--ignore-whitespace has no effect on --changed-lines, which already names the touched lines. Fix: drop --ignore-whitespace, or drop --changed-lines to let june read git"
@@ -338,7 +348,7 @@ func findTouched(ctx context.Context, env Env, req Request) (touchedSet, scope, 
 	var bad *string
 	read := make(chan struct{})
 	go func() {
-		touched, bad = readTouched(env, req.Changed)
+		touched, bad = readTouched(env, req.Changed, skip)
 		close(read)
 	}()
 	select {
