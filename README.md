@@ -59,12 +59,12 @@ less install.sh
 JUNE_VERSION=X.Y.Z sh install.sh
 ```
 
-The script runs only once it has downloaded completely, so a truncated download cannot leave a partial install.
+Install steps live in one function called on the last line, so a truncated download defines functions at most and cannot leave a partial install.
 Releases before the one that first attaches `install.sh` have no such asset. Until you pin one, `https://raw.githubusercontent.com/vicolby/june/main/install.sh` serves the latest script.
 
 `JUNE_VERSION` defaults to the latest release for interactive use; CI should always set it.
 The script detects `linux` or `darwin` and `amd64` or `arm64`, downloads the release archive and `checksums.txt`, verifies the sha256 and only then installs. It stops with a clear error on an unsupported platform, a missing release or a checksum mismatch, and prints the installed version when done.
-Read it before you pipe it to `sh`: it is [`install.sh`](install.sh), plain POSIX `sh`. To pin the script itself, replace `main` in the URL with a release tag.
+Read it before you pipe it to `sh`: it is [`install.sh`](install.sh), plain POSIX `sh`. To pin that raw URL, replace `main` with a release tag.
 
 Settings are environment variables:
 
@@ -75,18 +75,19 @@ Settings are environment variables:
 | `JUNE_RULES_DIR` | Where the bundled rules go; an existing directory is replaced. Default: `/usr/local/share/june/rules` as root, `$HOME/.local/share/june/rules` otherwise. |
 | `JUNE_OS`, `JUNE_ARCH` | Override the detected platform: `linux` or `darwin`, `amd64` or `arm64`. |
 | `JUNE_INSTALL_AST_GREP` | Set to `1` to also run `npm install --global @ast-grep/cli`. |
+| `JUNE_RELEASES_URL` | Release base URL. Default: `https://github.com/vicolby/june/releases`. |
 
 ```sh
 curl -fsSL https://github.com/vicolby/june/releases/download/vX.Y.Z/install.sh | JUNE_VERSION=X.Y.Z JUNE_INSTALL_DIR=/usr/local/bin sh
 ```
 
-The archive does not contain `ast-grep`, and the script installs it only when you ask with `JUNE_INSTALL_AST_GREP=1`. That keeps the default free of a Node.js requirement and of a global npm install that many images already cover, and it never changes a tool you already have. Without the flag the script prints a note when `ast-grep` is not on `PATH`.
+The archive does not contain `ast-grep`, and the script installs it only when you ask with `JUNE_INSTALL_AST_GREP=1`. That keeps the default free of a Node.js requirement and of a global npm install that many images already cover. Without the flag the script leaves an existing `ast-grep` untouched and prints a note when `ast-grep` is not on `PATH`.
 june never finds the bundled rules on its own, so pass them with `--rules`, for example `--rules "$HOME/.local/share/june/rules/python"`, or copy them to `.june/rules`.
 If the install directory is not on `PATH`, the script says so.
 
 ### Release binary
 
-To install by hand, each [release](https://github.com/vicolby/june/releases) attaches a `tar.gz` per platform (`darwin` and `linux`, `amd64` and `arm64`) and a `checksums.txt`.
+To install by hand, each [release](https://github.com/vicolby/june/releases) attaches a `tar.gz` per platform (`darwin` and `linux`, `amd64` and `arm64`), `checksums.txt`, and `install.sh`.
 An archive holds the `june` binary and a `rules/` directory. It does not install `ast-grep`: install that separately and put it on `PATH`, for example `npm install --global @ast-grep/cli`.
 
 Set `VERSION` to a release without the leading `v`, and `OS` and `ARCH` to the platform:
