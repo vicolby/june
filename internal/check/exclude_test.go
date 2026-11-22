@@ -116,6 +116,27 @@ func TestExcludedFileIsNeverScanned(t *testing.T) {
 	}
 }
 
+// Excluded paths need not exist; included paths still require a current file.
+func TestExcludedMissingChangedLinesPath(t *testing.T) {
+	for _, config := range []bool{false, true} {
+		env := tree(t, map[string]string{"app.py": badDefault})
+		req := check.Request{Exclude: []string{"vendor/**"}}
+		if config {
+			write(t, filepath.Join(env.Dir, ".june", "config.yml"), "exclude: [vendor/**]\n")
+			req.Exclude = nil
+		}
+		res := changeReq(t, env, req, "app.py:1\nvendor/missing.py:1\nvendor/missing.py:2\n")
+		expect(t, res, 1, "app.py:1:9: "+py012)
+		if !strings.Contains(summaryOf(res), "1 file excluded") {
+			t.Errorf("summary = %q, want one excluded file", summaryOf(res))
+		}
+		res = changeReq(t, env, req, "missing.py:1\n")
+		if res.Exit != 2 || !strings.Contains(string(res.Out), "which is not a file in the tree") {
+			t.Errorf("missing included path: Exit = %d, Out = %s", res.Exit, res.Out)
+		}
+	}
+}
+
 func TestExcludeEverythingChecksNothing(t *testing.T) {
 	env := tree(t, map[string]string{"app.py": badDefault})
 	res := changeReq(t, env, check.Request{Exclude: []string{"**"}}, "app.py:1\n")

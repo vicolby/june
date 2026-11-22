@@ -79,7 +79,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	if bad != nil {
 		return refuse(req, *bad), nil
 	}
-	touched, sc, bad, err := findTouched(ctx, env, req)
+	touched, sc, bad, err := findTouched(ctx, env, req, skip)
 	if sc.scanDir != "" {
 		defer func() { _ = os.RemoveAll(sc.scanDir) }()
 	}
@@ -330,15 +330,15 @@ func repoPrefix(ctx context.Context, env Env, f diag.Format) string {
 
 // findTouched picks the touched-line adapter: the supplied list, else git against Base or an inferred base.
 // The scope is zero for a supplied list. The touched set is never "every line": what cannot be known is refused.
-func findTouched(ctx context.Context, env Env, req Request) (touchedSet, scope, *string, error) {
+func findTouched(ctx context.Context, env Env, req Request, skip *excluder) (touchedSet, scope, *string, error) {
 	if req.Changed == nil {
 		if req.Base != "" {
-			return gitTouched(ctx, env, req.Base, sourceFlag, req.IgnoreSpace)
+			return gitTouched(ctx, env, req.Base, sourceFlag, req.IgnoreSpace, skip)
 		}
 		if base := mergeRequestBase(ctx, env); base != "" {
-			return gitTouched(ctx, env, base, sourceMR, req.IgnoreSpace)
+			return gitTouched(ctx, env, base, sourceMR, req.IgnoreSpace, skip)
 		}
-		return gitTouched(ctx, env, "", "", req.IgnoreSpace)
+		return gitTouched(ctx, env, "", "", req.IgnoreSpace, skip)
 	}
 	if req.IgnoreSpace {
 		msg := "--ignore-whitespace has no effect on --changed-lines, which already names the touched lines. Fix: drop --ignore-whitespace, or drop --changed-lines to let june read git"
@@ -348,7 +348,7 @@ func findTouched(ctx context.Context, env Env, req Request) (touchedSet, scope, 
 	var bad *string
 	read := make(chan struct{})
 	go func() {
-		touched, bad = readTouched(env, req.Changed)
+		touched, bad = readTouched(env, req.Changed, skip)
 		close(read)
 	}()
 	select {

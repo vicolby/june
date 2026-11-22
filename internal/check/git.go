@@ -63,7 +63,7 @@ func pullRequestBase(env Env) string {
 // ignoreSpace reads the patch with git diff -w, so a line that differs from its old self only in whitespace is not touched.
 // Paths are relative to env.Dir. The returned message is a complete "<cause>. Fix: <instruction>" refusal.
 // A cancelled context returns its error.
-func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace bool) (touchedSet, scope, *string, error) {
+func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace bool, skip *excluder) (touchedSet, scope, *string, error) {
 	sc := scope{base: base, source: source}
 	staged := false
 	toRef := ""
@@ -200,18 +200,18 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 	// and a tracked file that is absent because of a sparse checkout.
 	local := !staged && toRef == ""
 	absent := map[string]bool{}
+	excluded := touchedSet{}
 	if local {
-		fresh, bad, err := untrackedPython(ctx, env)
+		fresh, bad, err := untrackedPython(ctx, env, skip, excluded)
 		if bad != nil || err != nil {
 			return nil, scope{}, bad, err
 		}
 		var flagged []string
-		if absent, flagged, bad, err = indexFlags(ctx, env, prefix); bad != nil || err != nil {
+		if absent, flagged, bad, err = indexFlags(ctx, env, prefix, skip); bad != nil || err != nil {
 			return nil, scope{}, bad, err
 		}
-		// The caller's index is read as it is, stat cache and all, unless it cannot show the worktree
-		// as it is: untracked files are not in it, and a flag on an entry can hide an edit from a diff.
-		if len(fresh) > 0 || len(flagged) > 0 {
+		// Preserve the caller's index unless untracked files, flags or exclusions need a private overlay.
+		if len(fresh) > 0 || len(flagged) > 0 || len(skip.globs) > 0 {
 			dir, err := os.MkdirTemp("", "june-git-")
 			if err != nil {
 				return refuse("a temporary git index cannot be created. Fix: check temporary directory permissions and run june again")
@@ -220,6 +220,14 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 			var bad *string
 			if env, bad, err = overlayIndex(ctx, env, dir, prefix, fresh, flagged); bad != nil || err != nil {
 				return nil, scope{}, bad, err
+			}
+			if len(skip.globs) > 0 {
+				if err := maskExcluded(ctx, env, skip, excluded); err != nil {
+					if ctx.Err() != nil {
+						return nil, scope{}, nil, ctx.Err()
+					}
+					return refuse("excluded files cannot be masked in the temporary git index (%s). Fix: run git status and check temporary directory permissions", gitCause(err))
+				}
 			}
 		}
 	}
@@ -262,29 +270,37 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 			o = origin{from: source, pure: status == "R100"}
 		}
 		if path.Ext(destination) == ".py" && strings.HasPrefix(destination, prefix) {
+			if rel := strings.TrimPrefix(destination, prefix); skip.excluded(rel) {
+				excluded[rel] = nil
+				continue
+			}
 			want[destination] = o
 		}
 	}
 	parsed := touchedSet{}
 	if len(want) > 0 {
-		// One patch for every Python file: its size does not depend on how many files changed.
+		// Without exclusions, one Python patch suffices. Exclusions use the bounded pair batches
+		// below so discarded destinations and unrelated deletions never enter a content patch.
 		args := append(append([]string{"-c", "core.quotepath=off", "diff"}, cached...), patchFlags...)
 		if ignoreSpace {
 			args = append(args, "-w")
 		}
 		args = append(append(args, strings.TrimSpace(mb)), tip...)
-		patch, err := git(ctx, env, "", append(args, "--", pythonPathspec)...)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, scope{}, nil, ctx.Err()
+		got := map[string]string{}
+		if len(skip.globs) == 0 {
+			patch, err := git(ctx, env, "", append(args, "--", pythonPathspec)...)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil, scope{}, nil, ctx.Err()
+				}
+				return refuse("git could not diff against the merge base with %q (%v). Fix: run git diff %s to see why", sc.base, err, sc.base)
 			}
-			return refuse("git could not diff against the merge base with %q (%v). Fix: run git diff %s to see why", sc.base, err, sc.base)
+			parsed = parsePatch(patch)
+			got = renamedFrom(patch)
 		}
-		parsed = parsePatch(patch)
-		got := renamedFrom(patch)
 		var redo []rename
 		for destination, o := range want {
-			if got[destination] == o.from {
+			if len(skip.globs) == 0 && got[destination] == o.from {
 				continue
 			}
 			delete(parsed, destination)
@@ -359,6 +375,9 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 		// One process reads every post-image blob, however many files changed.
 		var shas []string
 		for _, name := range parsed.pythonFiles() {
+			if _, ok := want[name]; !ok {
+				continue
+			}
 			if blob, ok := post[name]; ok && strings.HasPrefix(name, prefix) && strings.HasPrefix(blob.mode, "100") {
 				shas = append(shas, blob.sha)
 			}
@@ -371,9 +390,9 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 			return refuse("git could not read the changed files (%v). Fix: run git status to see why", err)
 		}
 	}
-	set := touchedSet{}
+	set := excluded
 	for _, name := range parsed.pythonFiles() {
-		if !strings.HasPrefix(name, prefix) {
+		if _, ok := want[name]; !ok {
 			continue
 		}
 		rel := strings.TrimPrefix(name, prefix)
@@ -435,7 +454,7 @@ func (r rename) size() int { return 2*(len(r.from)+len(r.to)) + 2*len(":(top,glo
 
 // untrackedPython lists the regular untracked Python files below env.Dir, ignored files excluded.
 // The returned message is a complete "<cause>. Fix: <instruction>" refusal.
-func untrackedPython(ctx context.Context, env Env) ([]string, *string, error) {
+func untrackedPython(ctx context.Context, env Env, skip *excluder, excluded touchedSet) ([]string, *string, error) {
 	refuse := func(format string, a ...any) ([]string, *string, error) {
 		msg := fmt.Sprintf(format, a...)
 		return nil, &msg, nil
@@ -455,6 +474,10 @@ func untrackedPython(ctx context.Context, env Env) ([]string, *string, error) {
 		if path.Ext(name) != ".py" {
 			continue
 		}
+		if skip.excluded(name) {
+			excluded[name] = nil
+			continue
+		}
 		info, err := os.Lstat(filepath.Join(env.Dir, filepath.FromSlash(name)))
 		if err != nil {
 			return refuse("untracked file %q cannot be inspected. Fix: check its permissions and run june again", name)
@@ -466,11 +489,44 @@ func untrackedPython(ctx context.Context, env Env) ([]string, *string, error) {
 	return names, nil, nil
 }
 
+// maskExcluded keeps index blobs available for rename pairing while preventing git from opening
+// excluded worktree files. env must point at a private index. Plumbing diff-files without rename
+// detection reports stat changes without comparing content; stdin keeps the index update bounded.
+func maskExcluded(ctx context.Context, env Env, skip *excluder, excluded touchedSet) error {
+	changed, err := git(ctx, env, "", "diff-files", "--raw", "--relative", "--no-renames", "-z", "--")
+	if err != nil {
+		return err
+	}
+	post := parseRaw(changed)
+	for name := range post {
+		if path.Ext(name) == ".py" && skip.excluded(name) {
+			excluded[name] = nil
+		}
+	}
+	listing, err := git(ctx, env, "", "ls-files", "-z", "--")
+	if err != nil {
+		return err
+	}
+	var names strings.Builder
+	for _, name := range strings.Split(listing, "\x00") {
+		// A deletion has no worktree content to hide, and must remain a rename source.
+		if name != "" && skip.excluded(name) && post[name].mode != "000000" {
+			names.WriteString(name)
+			names.WriteByte(0)
+		}
+	}
+	if names.Len() == 0 {
+		return nil
+	}
+	_, err = git(ctx, env, names.String(), "update-index", "--skip-worktree", "-z", "--stdin")
+	return err
+}
+
 // indexFlags reads how the caller's index marks its tracked files, in one listing.
 // absent holds the repository paths that a sparse checkout left out of the worktree.
 // flagged lists the entries a diff against the worktree would misread: one marked assume-unchanged,
 // or skip-worktree while its file is present, hides edits. Each is an index line "mode sha stage<TAB>path".
-func indexFlags(ctx context.Context, env Env, prefix string) (absent map[string]bool, flagged []string, bad *string, err error) {
+func indexFlags(ctx context.Context, env Env, prefix string, skip *excluder) (absent map[string]bool, flagged []string, bad *string, err error) {
 	refuse := func(format string, a ...any) (map[string]bool, []string, *string, error) {
 		msg := fmt.Sprintf(format, a...)
 		return nil, nil, &msg, nil
@@ -493,6 +549,9 @@ func indexFlags(ctx context.Context, env Env, prefix string) (absent map[string]
 			continue
 		}
 		_, name, _ := strings.Cut(entry, "\t")
+		if skip.excluded(name) {
+			continue
+		}
 		if tag == 'S' || tag == 's' {
 			_, err := os.Lstat(filepath.Join(env.Dir, filepath.FromSlash(name)))
 			if os.IsNotExist(err) {
