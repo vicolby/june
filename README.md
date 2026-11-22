@@ -41,9 +41,52 @@ brew install vicolby/tap/june
 
 Installs the `june` binary, `ast-grep` as a dependency, and the bundled rules to `$(brew --prefix)/share/june/rules`.
 
+### Install script
+
+One line installs the release binary and the bundled rules. It suits CI, where it replaces a download, checksum and extract block.
+Pin both the script and the binary to a release: fetch `install.sh` from that release's assets and set `JUNE_VERSION` to the same version, so a CI run does not change when `main` or a new release does.
+Replace `X.Y.Z` with a [release](https://github.com/vicolby/june/releases) that lists `install.sh` among its assets:
+
+```sh
+curl -fsSL https://github.com/vicolby/june/releases/download/vX.Y.Z/install.sh | JUNE_VERSION=X.Y.Z sh
+```
+
+To read the script before it runs, download it, read it, then run it:
+
+```sh
+curl -fsSLo install.sh https://github.com/vicolby/june/releases/download/vX.Y.Z/install.sh
+less install.sh
+JUNE_VERSION=X.Y.Z sh install.sh
+```
+
+The script runs only once it has downloaded completely, so a truncated download cannot leave a partial install.
+Releases before the one that first attaches `install.sh` have no such asset. Until you pin one, `https://raw.githubusercontent.com/vicolby/june/main/install.sh` serves the latest script.
+
+`JUNE_VERSION` defaults to the latest release for interactive use; CI should always set it.
+The script detects `linux` or `darwin` and `amd64` or `arm64`, downloads the release archive and `checksums.txt`, verifies the sha256 and only then installs. It stops with a clear error on an unsupported platform, a missing release or a checksum mismatch, and prints the installed version when done.
+Read it before you pipe it to `sh`: it is [`install.sh`](install.sh), plain POSIX `sh`. To pin the script itself, replace `main` in the URL with a release tag.
+
+Settings are environment variables:
+
+| Variable | Meaning |
+| --- | --- |
+| `JUNE_VERSION` | Release to install, with or without the leading `v`. Default: the latest release. |
+| `JUNE_INSTALL_DIR` | Where the `june` binary goes. Default: `/usr/local/bin` as root (the usual CI user), `$HOME/.local/bin` otherwise. |
+| `JUNE_RULES_DIR` | Where the bundled rules go; an existing directory is replaced. Default: `/usr/local/share/june/rules` as root, `$HOME/.local/share/june/rules` otherwise. |
+| `JUNE_OS`, `JUNE_ARCH` | Override the detected platform: `linux` or `darwin`, `amd64` or `arm64`. |
+| `JUNE_INSTALL_AST_GREP` | Set to `1` to also run `npm install --global @ast-grep/cli`. |
+
+```sh
+curl -fsSL https://github.com/vicolby/june/releases/download/vX.Y.Z/install.sh | JUNE_VERSION=X.Y.Z JUNE_INSTALL_DIR=/usr/local/bin sh
+```
+
+The archive does not contain `ast-grep`, and the script installs it only when you ask with `JUNE_INSTALL_AST_GREP=1`. That keeps the default free of a Node.js requirement and of a global npm install that many images already cover, and it never changes a tool you already have. Without the flag the script prints a note when `ast-grep` is not on `PATH`.
+june never finds the bundled rules on its own, so pass them with `--rules`, for example `--rules "$HOME/.local/share/june/rules/python"`, or copy them to `.june/rules`.
+If the install directory is not on `PATH`, the script says so.
+
 ### Release binary
 
-Each [release](https://github.com/vicolby/june/releases) attaches a `tar.gz` per platform (`darwin` and `linux`, `amd64` and `arm64`) and a `checksums.txt`.
+To install by hand, each [release](https://github.com/vicolby/june/releases) attaches a `tar.gz` per platform (`darwin` and `linux`, `amd64` and `arm64`) and a `checksums.txt`.
 An archive holds the `june` binary and a `rules/` directory. It does not install `ast-grep`: install that separately and put it on `PATH`, for example `npm install --global @ast-grep/cli`.
 
 Set `VERSION` to a release without the leading `v`, and `OS` and `ARCH` to the platform:
@@ -62,7 +105,6 @@ june --version
 ```
 
 The archive has no top-level directory, so extract it where you want: the binary on `PATH`, `rules/` anywhere readable.
-june never finds the bundled rules on its own, so pass them with `--rules "$HOME/.local/share/june/rules/python"`, or copy them to `.june/rules`.
 
 ## Usage
 
@@ -169,14 +211,17 @@ On a `push` event there is no pull request base, so june exits 2 and names the f
 
 In a merge request pipeline june judges the lines the merge request changed and writes a GitLab Code Quality report, `gl-code-quality-report.json`, beside the plain text.
 The job needs full clone depth so the base is in the clone; with a shallow clone june exits 2 and names the fix.
+The `before_script` line installs june with the [install script](#install-script) and, with `JUNE_INSTALL_AST_GREP=1`, `ast-grep`. Skip that variable if your image already has `ast-grep`; the script and `JUNE_VERSION` are pinned to the same release, `X.Y.Z` here.
 
 ```yaml
 june:
-  image: <an image with june and ast-grep installed>
+  image: node:22  # any image with git, curl and npm
   variables:
     GIT_DEPTH: 0
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  before_script:
+    - curl -fsSL https://github.com/vicolby/june/releases/download/vX.Y.Z/install.sh | JUNE_VERSION=X.Y.Z JUNE_INSTALL_AST_GREP=1 sh
   script:
     - june --rules .june/rules
   artifacts:
@@ -196,12 +241,14 @@ A branch pipeline has no merge request base, so june exits 2 unless you pass `--
 
 ```yaml
 june:
-  image: <an image with june and ast-grep installed>
+  image: node:22  # any image with git, curl and npm
   variables:
     GIT_DEPTH: 0
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  before_script:
+    - curl -fsSL https://github.com/vicolby/june/releases/download/vX.Y.Z/install.sh | JUNE_VERSION=X.Y.Z JUNE_INSTALL_AST_GREP=1 sh
   script:
     - |
       if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
