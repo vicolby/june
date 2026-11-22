@@ -146,9 +146,10 @@ func hugeRepo(t *testing.T, n int) check.Env {
 		}
 		add(fmt.Sprintf("d%d/s%d/f%d.%s", i/1000, i/100, i, ext), fmt.Sprintf("x = %d\n", i))
 	}
+	rulesDir := filepath.Join("..", "..", "testdata", "rules", "python")
 	for _, name := range []string{"PY012", "PY013", "PY014", "PY015", "PY016"} {
-		add(".june/rules/"+name+".yml", readFile(t, filepath.Join("..", "..", "rules", "python", name+".yml")))
-		add(".june/rules/rule-tests/"+name+"-test.yml", readFile(t, filepath.Join("..", "..", "rules", "python", "rule-tests", name+"-test.yml")))
+		add(".june/rules/"+name+".yml", readFile(t, filepath.Join(rulesDir, name+".yml")))
+		add(".june/rules/rule-tests/"+name+"-test.yml", readFile(t, filepath.Join(rulesDir, "rule-tests", name+"-test.yml")))
 	}
 	cmd := exec.CommandContext(context.Background(), "git", "fast-import", "--quiet")
 	cmd.Dir = dir

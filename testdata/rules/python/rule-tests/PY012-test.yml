@@ -1,0 +1,22 @@
+id: PY012
+valid:
+  - "def f(a=None): pass"
+  - "def f(a=(), b=1, c='x'): pass"
+  - "def f(a: int = 0): pass"
+  - "x = []"
+  - "def f(a=(None), b=([],), c=tuple([])): pass"
+  - "def f(a=(lambda: [])): pass"
+  - "def f(a=([] or None)): pass"
+invalid:
+  - "def f(a=[]): pass"
+  - "def f(a={}): pass"
+  - "def f(a={1, 2}): pass"
+  - "def f(a=[i for i in range(3)]): pass"
+  - "def f(a: list = []): pass"
+  - "lambda a=[]: a"
+  - "def f(a=(([])), b=(({})), c=(({1}))): pass"
+  - "def f(a=([x for x in ()])): pass"
+  - "def f(a=({x: x for x in ()})): pass"
+  - "def f(a=({x for x in ()})): pass"
+  - "def f(a: list = ((([])))): pass"
+  - "lambda a=(([])): a"
