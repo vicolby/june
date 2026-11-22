@@ -15,7 +15,7 @@ Version 1 checks Python only.
 
 ## Install
 
-june needs `ast-grep` 0.51.1 or newer on `PATH`; a check or `june verify` with an older one exits 2 with the fix. 0.51.3 is the tested version, and `june --version` and a successful `june verify` print the one in use. june ships no rules: you supply your own with `--rules DIR` or in `.june/rules`.
+june needs `ast-grep` 0.51.1 or newer on `PATH`, reporting a numeric `X.Y.Z` release; prerelease and other suffixes are refused. A check or `june verify` with an older or unreadable version exits 2 with the fix. 0.51.3 is the tested version, and `june --version` and a successful `june verify` print the one in use. june ships no rules: you supply your own with `--rules DIR` or in `.june/rules`.
 
 **Homebrew.** Installs `june` and Homebrew's current `ast-grep`.
 
@@ -34,7 +34,7 @@ curl -fsSL https://github.com/vicolby/june/releases/download/vX.Y.Z/install.sh |
 | `JUNE_VERSION` | Release, with or without `v`. Default: latest. Always set it in CI. |
 | `JUNE_INSTALL_DIR` | Binary dir. Default: `/usr/local/bin` as root, else `$HOME/.local/bin`. |
 | `JUNE_OS`, `JUNE_ARCH` | Override platform: `linux`/`darwin`, `amd64`/`arm64`. |
-| `JUNE_INSTALL_AST_GREP` | `1` also runs `npm install --global @ast-grep/cli@0.51.3`, the tested version. |
+| `JUNE_INSTALL_AST_GREP` | `1` also installs the tested ast-grep version above with `npm install --global @ast-grep/cli@<version>`. |
 | `JUNE_RELEASES_URL` | Default: `https://github.com/vicolby/june/releases`. |
 
 The script is plain POSIX [`install.sh`](install.sh); read it before piping to `sh`.
