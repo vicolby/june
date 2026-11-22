@@ -24,6 +24,9 @@ archives:
   - id: june
     formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # An empty files list makes GoReleaser add README and LICENSE. none* matches nothing, so the archive holds only the binary.
+    files:
+      - none*
 
 checksum:
   name_template: checksums.txt

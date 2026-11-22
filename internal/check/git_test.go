@@ -13,7 +13,7 @@ import (
 	"github.com/vicolby/june/internal/check"
 )
 
-// repo builds a git repository on branch main whose first commit holds the shipped rules and the given files.
+// repo builds a git repository on branch main whose first commit holds the fixture rules and the given files.
 func repo(t *testing.T, files map[string]string) check.Env {
 	t.Helper()
 	env := tree(t, files)

@@ -321,7 +321,7 @@ func TestBareJuneOutsideGitWithoutAListExitsTwo(t *testing.T) {
 	}
 }
 
-func TestShippedFundamentals(t *testing.T) {
+func TestFixtureFundamentals(t *testing.T) {
 	rulesDir, err := filepath.Abs(filepath.Join("..", "..", "testdata", "rules", "python"))
 	if err != nil {
 		t.Fatal(err)
