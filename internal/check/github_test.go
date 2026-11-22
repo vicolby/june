@@ -170,7 +170,7 @@ func TestAnnotationsUseRepositoryRootPathsFromASubdirectory(t *testing.T) {
 	git(t, env.Dir, "remote", "add", "origin", env.Dir)
 	git(t, env.Dir, "fetch", "-q", "origin")
 	write(t, filepath.Join(env.Dir, "sub", "app.py"), old)
-	copyDir(t, filepath.Join("..", "..", "rules", "python"), filepath.Join(env.Dir, "sub", ".june", "rules"))
+	copyDir(t, filepath.Join("..", "..", "testdata", "rules", "python"), filepath.Join(env.Dir, "sub", ".june", "rules"))
 	commit(t, env)
 	sub := onGitHub(check.Env{Dir: filepath.Join(env.Dir, "sub")}, "pull_request", "main")
 	for name, res := range map[string]check.Result{

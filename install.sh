@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install the june release binary and its bundled rules.
+# Install the june release binary.
 #
 #   curl -fsSL https://raw.githubusercontent.com/vicolby/june/main/install.sh | sh
 #
@@ -7,8 +7,6 @@
 #   JUNE_VERSION           Release to install, with or without the leading "v". Default: latest.
 #   JUNE_INSTALL_DIR       Where the june binary goes. Default: /usr/local/bin as root,
 #                          $HOME/.local/bin otherwise.
-#   JUNE_RULES_DIR         Where the bundled rules go. Default: <prefix>/share/june/rules, with the
-#                          prefix /usr/local as root and $HOME/.local otherwise.
 #   JUNE_OS, JUNE_ARCH     Override the detected platform (linux or darwin, amd64 or arm64).
 #   JUNE_INSTALL_AST_GREP  Set to 1 to also run `npm install --global @ast-grep/cli`.
 #   JUNE_RELEASES_URL      Release base URL. Default: https://github.com/vicolby/june/releases.
@@ -83,16 +81,14 @@ main() {
 
 	# Install locations.
 	# HOME only matters when a default path derived from it is needed.
-	if [ -n "${JUNE_INSTALL_DIR:-}" ] && [ -n "${JUNE_RULES_DIR:-}" ]; then
-		prefix=
+	if [ -n "${JUNE_INSTALL_DIR:-}" ]; then
+		install_dir=$JUNE_INSTALL_DIR
 	elif [ "$(id -u)" = 0 ]; then
-		prefix=/usr/local
+		install_dir=/usr/local/bin
 	else
-		[ -n "${HOME:-}" ] || fail "HOME is not set (set JUNE_INSTALL_DIR and JUNE_RULES_DIR)"
-		prefix=$HOME/.local
+		[ -n "${HOME:-}" ] || fail "HOME is not set (set JUNE_INSTALL_DIR)"
+		install_dir=$HOME/.local/bin
 	fi
-	install_dir=${JUNE_INSTALL_DIR:-$prefix/bin}
-	rules_dir=${JUNE_RULES_DIR:-$prefix/share/june/rules}
 
 	if command -v sha256sum >/dev/null 2>&1; then
 		sha256() { sha256sum "$1" | cut -d ' ' -f 1; }
@@ -123,12 +119,8 @@ main() {
 	mkdir "$tmp/extract"
 	tar -xzf "$tmp/$archive" -C "$tmp/extract" || fail "could not extract $archive"
 	[ -f "$tmp/extract/june" ] || fail "$archive does not contain a june binary"
-	[ -d "$tmp/extract/rules" ] || fail "$archive does not contain a rules directory"
 
 	mkdir -p "$install_dir" || fail "could not create $install_dir (set JUNE_INSTALL_DIR)"
-	mkdir -p "$(dirname "$rules_dir")" || fail "could not create $(dirname "$rules_dir") (set JUNE_RULES_DIR)"
-	rm -rf "$rules_dir"
-	cp -R "$tmp/extract/rules" "$rules_dir" || fail "could not write $rules_dir (set JUNE_RULES_DIR)"
 	cp "$tmp/extract/june" "$install_dir/june" || fail "could not write $install_dir/june (set JUNE_INSTALL_DIR)"
 	chmod 755 "$install_dir/june"
 
@@ -141,7 +133,6 @@ main() {
 	installed=$("$install_dir/june" --version) || fail "$install_dir/june --version failed"
 	say "$installed"
 	say "june installed to $install_dir/june"
-	say "rules installed to $rules_dir (use --rules $rules_dir/python)"
 
 	case ":${PATH:-}:" in
 	*":$install_dir:"*) ;;

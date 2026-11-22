@@ -19,7 +19,7 @@ import (
 
 const fakeJune = "#!/bin/sh\necho 'june 0.2.0'\n"
 
-// fixtureArchive builds a release archive like goreleaser's: june and rules/python/LST01.yml.
+// fixtureArchive builds a release archive like goreleaser's: just the june binary.
 func fixtureArchive(t *testing.T) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -30,7 +30,6 @@ func fixtureArchive(t *testing.T) []byte {
 		mode       int64
 	}{
 		{"june", fakeJune, 0o755},
-		{"rules/python/LST01.yml", "id: LST01\n", 0o644},
 	}
 	for _, f := range files {
 		if err := tw.WriteHeader(&tar.Header{Name: f.name, Mode: f.mode, Size: int64(len(f.body))}); err != nil {
@@ -128,7 +127,7 @@ func TestInstall(t *testing.T) {
 	for _, version := range []string{"0.2.0", "v0.2.0", "latest", ""} {
 		t.Run("version="+version, func(t *testing.T) {
 			dir := t.TempDir()
-			env := []string{"JUNE_RELEASES_URL=" + srv.URL, "JUNE_INSTALL_DIR=" + dir + "/bin", "JUNE_RULES_DIR=" + dir + "/rules"}
+			env := []string{"JUNE_RELEASES_URL=" + srv.URL, "JUNE_INSTALL_DIR=" + dir + "/bin"}
 			if version != "" {
 				env = append(env, "JUNE_VERSION="+version)
 			}
@@ -146,28 +145,8 @@ func TestInstall(t *testing.T) {
 			if fi, err := os.Stat(dir + "/bin/june"); err == nil && fi.Mode().Perm()&0o111 == 0 {
 				t.Errorf("binary mode = %v, want executable", fi.Mode())
 			}
-			mustExist(t, dir+"/rules/python/LST01.yml")
 		})
 	}
-}
-
-func TestInstallReplacesStaleRules(t *testing.T) {
-	archive := fixtureArchive(t)
-	srv := releaseServer(t, archive, sum(archive))
-	dir := t.TempDir()
-	stale := dir + "/rules/python/OLD.yml"
-	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(stale, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	r := runInstall(t, "JUNE_RELEASES_URL="+srv.URL, "JUNE_VERSION=0.2.0", "JUNE_INSTALL_DIR="+dir+"/bin", "JUNE_RULES_DIR="+dir+"/rules")
-	if r.err != nil {
-		t.Fatalf("install failed: %v\n%s", r.err, r.stderr)
-	}
-	mustNotExist(t, stale)
-	mustExist(t, dir+"/rules/python/LST01.yml")
 }
 
 func TestInstallDefaultDirs(t *testing.T) {
@@ -181,7 +160,6 @@ func TestInstallDefaultDirs(t *testing.T) {
 		t.Fatalf("install failed: %v\n%s", r.err, r.stderr)
 	}
 	mustExist(t, r.home+"/.local/bin/june")
-	mustExist(t, r.home+"/.local/share/june/rules/python/LST01.yml")
 	if !strings.Contains(r.stdout, "is not on PATH") {
 		t.Errorf("stdout = %q, want a PATH note", r.stdout)
 	}
@@ -194,14 +172,13 @@ func TestInstallWithoutHome(t *testing.T) {
 	archive := fixtureArchive(t)
 	srv := releaseServer(t, archive, sum(archive))
 
-	t.Run("both dirs set", func(t *testing.T) {
+	t.Run("install dir set", func(t *testing.T) {
 		dir := t.TempDir()
-		r := runInstall(t, "HOME=", "JUNE_RELEASES_URL="+srv.URL, "JUNE_VERSION=0.2.0", "JUNE_INSTALL_DIR="+dir+"/bin", "JUNE_RULES_DIR="+dir+"/rules")
+		r := runInstall(t, "HOME=", "JUNE_RELEASES_URL="+srv.URL, "JUNE_VERSION=0.2.0", "JUNE_INSTALL_DIR="+dir+"/bin")
 		if r.err != nil {
 			t.Fatalf("install failed: %v\n%s", r.err, r.stderr)
 		}
 		mustExist(t, dir+"/bin/june")
-		mustExist(t, dir+"/rules/python/LST01.yml")
 	})
 
 	for _, tt := range []struct {
@@ -209,8 +186,6 @@ func TestInstallWithoutHome(t *testing.T) {
 		set  func(dir string) []string
 	}{
 		{"neither dir set", func(string) []string { return nil }},
-		{"only install dir set", func(dir string) []string { return []string{"JUNE_INSTALL_DIR=" + dir + "/bin"} }},
-		{"only rules dir set", func(dir string) []string { return []string{"JUNE_RULES_DIR=" + dir + "/rules"} }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -219,11 +194,10 @@ func TestInstallWithoutHome(t *testing.T) {
 			if r.err == nil {
 				t.Fatalf("install succeeded, want failure\nstdout: %s", r.stdout)
 			}
-			if want := "HOME is not set (set JUNE_INSTALL_DIR and JUNE_RULES_DIR)"; !strings.Contains(r.stderr, want) {
+			if want := "HOME is not set (set JUNE_INSTALL_DIR)"; !strings.Contains(r.stderr, want) {
 				t.Errorf("stderr = %q, want it to contain %q", r.stderr, want)
 			}
 			mustNotExist(t, dir+"/bin/june")
-			mustNotExist(t, dir+"/rules")
 		})
 	}
 }
@@ -250,7 +224,7 @@ func TestInstallFailures(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
-			env := append([]string{"JUNE_INSTALL_DIR=" + dir + "/bin", "JUNE_RULES_DIR=" + dir + "/rules"}, tt.env...)
+			env := append([]string{"JUNE_INSTALL_DIR=" + dir + "/bin"}, tt.env...)
 			r := runInstall(t, env...)
 			if r.err == nil {
 				t.Fatalf("install succeeded, want failure\nstdout: %s", r.stdout)
@@ -259,7 +233,6 @@ func TestInstallFailures(t *testing.T) {
 				t.Errorf("stderr = %q, want it to contain %q", r.stderr, tt.want)
 			}
 			mustNotExist(t, dir+"/bin/june")
-			mustNotExist(t, dir+"/rules")
 		})
 	}
 }
@@ -275,7 +248,7 @@ func TestInstallAstGrepOptIn(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	base := []string{"PATH=" + bin + ":/usr/bin:/bin", "JUNE_RELEASES_URL=" + srv.URL, "JUNE_VERSION=0.2.0", "JUNE_INSTALL_DIR=" + dir + "/bin", "JUNE_RULES_DIR=" + dir + "/rules"}
+	base := []string{"PATH=" + bin + ":/usr/bin:/bin", "JUNE_RELEASES_URL=" + srv.URL, "JUNE_VERSION=0.2.0", "JUNE_INSTALL_DIR=" + dir + "/bin"}
 
 	r := runInstall(t, base...)
 	if r.err != nil {
@@ -305,11 +278,10 @@ func TestTruncatedScriptInstallsNothing(t *testing.T) {
 	for _, cut := range []int{len(full) / 4, len(full) / 2, len(full) - 12} {
 		cmd := exec.CommandContext(context.Background(), "sh")
 		cmd.Stdin = bytes.NewReader(full[:cut])
-		cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + dir, "JUNE_RELEASES_URL=" + srv.URL, "JUNE_VERSION=0.2.0", "JUNE_OS=linux", "JUNE_ARCH=amd64", "JUNE_INSTALL_DIR=" + dir + "/bin", "JUNE_RULES_DIR=" + dir + "/rules"}
+		cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + dir, "JUNE_RELEASES_URL=" + srv.URL, "JUNE_VERSION=0.2.0", "JUNE_OS=linux", "JUNE_ARCH=amd64", "JUNE_INSTALL_DIR=" + dir + "/bin"}
 		// A cut inside main is a syntax error; a cut just before the call defines functions and exits 0.
 		// Either way nothing is installed.
 		_ = cmd.Run()
 		mustNotExist(t, dir+"/bin/june")
-		mustNotExist(t, dir+"/rules")
 	}
 }

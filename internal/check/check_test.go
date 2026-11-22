@@ -20,11 +20,11 @@ import (
 
 const py012 = "PY012 Mutable default argument. Fix: default the parameter to None and create the value inside the function.\n"
 
-// tree builds a temp tree with the shipped Python rules at .june/rules and the given files.
+// tree builds a temp tree with the fixture Python rules at .june/rules and the given files.
 func tree(t *testing.T, files map[string]string) check.Env {
 	t.Helper()
 	dir := t.TempDir()
-	copyDir(t, filepath.Join("..", "..", "rules", "python"), filepath.Join(dir, ".june", "rules"))
+	copyDir(t, filepath.Join("..", "..", "testdata", "rules", "python"), filepath.Join(dir, ".june", "rules"))
 	for name, body := range files {
 		write(t, filepath.Join(dir, name), body)
 	}
@@ -153,7 +153,7 @@ func TestPathSpellingsAgree(t *testing.T) {
 
 func TestRulesFlagOverridesDefault(t *testing.T) {
 	env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\n"})
-	copyDir(t, filepath.Join("..", "..", "rules", "python"), filepath.Join(env.Dir, "elsewhere"))
+	copyDir(t, filepath.Join("..", "..", "testdata", "rules", "python"), filepath.Join(env.Dir, "elsewhere"))
 	res, err := check.Change(context.Background(), env, check.Request{Changed: strings.NewReader("app.py:1\n"), Rules: []string{"elsewhere"}})
 	if err != nil {
 		t.Fatal(err)
@@ -602,7 +602,7 @@ func TestRulesFaultsRefuseVerifyAndRunAlike(t *testing.T) {
 		{
 			name:  "zero rules",
 			files: map[string]string{"README.md": "no rules here\n"},
-			out:   "june: error: rules: the rules directory holds no rules. Fix: add a rule file such as PY012.yml with its rule-tests/PY012-test.yml, or point --rules elsewhere\n",
+			out:   "june: error: rules: the rules directory holds no rules. Fix: add a rule file such as NAME.yml with its rule-tests/NAME-test.yml, or point --rules elsewhere\n",
 		},
 	}
 	for _, tt := range tests {
@@ -798,7 +798,7 @@ func TestRulesAcrossDirectoriesReportEveryBadDirectory(t *testing.T) {
 	write(t, filepath.Join(env.Dir, "hollow", "README.md"), "no rules\n")
 	res := changeWith(t, env, []string{".june/rules", "absent", "hollow"}, "app.py:1\n")
 	want := "june: error: absent: the rules directory does not exist. Fix: create it or point --rules at an existing rules directory\n" +
-		"june: error: hollow: the rules directory holds no rules. Fix: add a rule file such as PY012.yml with its rule-tests/PY012-test.yml, or point --rules elsewhere\n"
+		"june: error: hollow: the rules directory holds no rules. Fix: add a rule file such as NAME.yml with its rule-tests/NAME-test.yml, or point --rules elsewhere\n"
 	if res.Exit != 2 || string(res.Out) != want {
 		t.Errorf("Exit = %d, Out = %q, want 2 and %q", res.Exit, res.Out, want)
 	}

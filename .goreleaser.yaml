@@ -1,6 +1,5 @@
 # Release config. A version tag (v*) triggers .github/workflows/release.yml, which runs goreleaser.
-# Archives carry the june binary and the bundled rules and are a supported install channel beside
-# Homebrew; the Homebrew formula installs them to <prefix>/share/june/rules.
+# Archives carry the june binary and are a supported install channel beside Homebrew.
 version: 2
 
 project_name: june
@@ -25,9 +24,6 @@ archives:
   - id: june
     formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    files:
-      - src: rules/**/*
-        strip_parent: false
 
 checksum:
   name_template: checksums.txt
@@ -66,7 +62,5 @@ brews:
       - name: ast-grep
     install: |
       bin.install "june"
-      (share/"june").install "rules"
     test: |
       assert_match version.to_s, shell_output("#{bin}/june --version")
-      assert_path_exists share/"june/rules"

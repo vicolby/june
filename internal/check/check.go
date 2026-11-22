@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -209,6 +210,10 @@ func Rules(ctx context.Context, env Env, dirs []string) (Result, error) {
 func load(ctx context.Context, env Env, dirs []string, req Request) (*rules.RuleSet, *Result, error) {
 	if len(dirs) == 0 {
 		dirs = []string{defaultRules}
+		if _, err := os.Stat(resolve(env.Dir, defaultRules)); errors.Is(err, fs.ErrNotExist) {
+			res := refuse(req, "no rules to run: june ships no rules. Fix: supply rules with --rules DIR or put them in "+defaultRules)
+			return nil, &res, nil
+		}
 	}
 	dirs = distinct(env.Dir, dirs)
 	abs := make([]string, len(dirs))

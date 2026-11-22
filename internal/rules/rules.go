@@ -29,8 +29,8 @@ const (
 	optOutMarker      = "june:"
 	suppressionMarker = "ast-grep-ignore"
 
-	// isolatedConfig is the only ast-grep configuration june ever uses, so a run depends on the
-	// shipped rules and the touched files and never on an sgconfig.yml found in the working directory.
+	// isolatedConfig is the only ast-grep configuration june ever uses, so a run depends on
+	// the given rules and the touched files and never on an sgconfig.yml found in the working directory.
 	isolatedConfig = "ruleDirs: [rules]\ntestConfigs:\n  - testDir: " + testsDir + "\n"
 )
 
@@ -141,7 +141,7 @@ func Load(ctx context.Context, dirs ...string) (*RuleSet, []Fault) {
 			continue
 		}
 		if len(files) == 0 {
-			faults = append(faults, Fault{Dir: i, Cause: "the rules directory holds no rules", Fix: "add a rule file such as PY012.yml with its rule-tests/PY012-test.yml, or point --rules elsewhere"})
+			faults = append(faults, Fault{Dir: i, Cause: "the rules directory holds no rules", Fix: "add a rule file such as NAME.yml with its rule-tests/NAME-test.yml, or point --rules elsewhere"})
 			continue
 		}
 		for _, name := range files {
@@ -397,7 +397,7 @@ func readRule(dir, name string) (string, string, int, []Fault) {
 		return "", "", 0, []Fault{{Path: name, Cause: "the rule must be one valid YAML document", Fix: "keep exactly one valid YAML document in the rule file"}}
 	}
 	if doc.ID == "" {
-		return "", "", 0, []Fault{{Path: name, Cause: "the rule has no id", Fix: "add an id such as PY012"}}
+		return "", "", 0, []Fault{{Path: name, Cause: "the rule has no id", Fix: "add an id such as MY001"}}
 	}
 	if doc.ID == "." || doc.ID == ".." || strings.ContainsAny(doc.ID, "/\\") {
 		return "", "", 0, []Fault{{Path: name, Cause: "the rule id is not a filename", Fix: "use a rule id without path separators"}}

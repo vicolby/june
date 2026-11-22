@@ -553,7 +553,7 @@ func TestRunFromSubdirectoryUsesRelativePaths(t *testing.T) {
 	env := repo(t, map[string]string{"keep.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "sub", "app.py"), old)
 	write(t, filepath.Join(env.Dir, "top.py"), old)
-	copyDir(t, filepath.Join("..", "..", "rules", "python"), filepath.Join(env.Dir, "sub", ".june", "rules"))
+	copyDir(t, filepath.Join("..", "..", "testdata", "rules", "python"), filepath.Join(env.Dir, "sub", ".june", "rules"))
 	sub := check.Env{Dir: filepath.Join(env.Dir, "sub")}
 	expect(t, against(t, sub, "main"), 1, "app.py:1:9: "+py012)
 	git(t, env.Dir, "add", "-A")
