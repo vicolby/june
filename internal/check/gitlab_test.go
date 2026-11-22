@@ -143,7 +143,7 @@ func TestDetachedMergeRequestKeepsTheDiffBase(t *testing.T) {
 	env.Vars["CI_MERGE_REQUEST_TARGET_BRANCH_SHA"] = head(t, env.Dir, "main")
 	res := bare(t, env)
 	expect(t, res, 0, "")
-	want := "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; base " + tip + " (merge request diff base)"
+	want := "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines" + noPython + "; base " + tip + " (merge request diff base)"
 	if got := summaryOf(res); got != want {
 		t.Errorf("summary = %q, want %q", got, want)
 	}

@@ -405,8 +405,47 @@ func TestSARIFReportsLevelsLocationsAndFailures(t *testing.T) {
 		t.Errorf("region = %+v", r.Locations[0].PhysicalLocation.Region)
 	}
 	inv := run.Invocations[0]
-	if inv.ExecutionSuccessful || len(inv.ToolExecutionNotifications) != 1 || inv.ToolExecutionNotifications[0].Level != "error" {
-		t.Errorf("invocation = %+v", inv)
+	if inv.ExecutionSuccessful || len(inv.ToolExecutionNotifications) != 2 || inv.ToolExecutionNotifications[0].Level != "error" {
+		t.Fatalf("invocation = %+v", inv)
+	}
+	if last := inv.ToolExecutionNotifications[len(inv.ToolExecutionNotifications)-1]; last.Level != "note" || last.Message.Text != "june: sum" {
+		t.Errorf("summary notification = %+v", last)
+	}
+}
+
+func TestSARIFSummaryPreservesExecutionStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		ds         []diag.Diagnostic
+		successful bool
+	}{
+		{"clean", nil, true},
+		{"finding", []diag.Diagnostic{{File: "a.py", Line: 1, Col: 1, Code: "X", Sev: diag.Error, Kind: diag.Finding, Msg: "bad"}}, true},
+		{"warning", []diag.Diagnostic{{Kind: diag.Failure, Sev: diag.Warning, Msg: "nothing judged"}}, true},
+		{"failure", []diag.Diagnostic{{Kind: diag.Failure, Msg: "cannot scan"}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, summary := range []string{"", "june: coverage note"} {
+				out, _ := diag.Render(tc.ds, summary, diag.SARIF)
+				var log sarifLog
+				if err := json.Unmarshal(out, &log); err != nil {
+					t.Fatal(err)
+				}
+				inv := log.Runs[0].Invocations[0]
+				if inv.ExecutionSuccessful != tc.successful {
+					t.Errorf("summary %q: invocation = %+v", summary, inv)
+				}
+				var notes []string
+				for _, n := range inv.ToolExecutionNotifications {
+					if n.Level == "note" {
+						notes = append(notes, n.Message.Text)
+					}
+				}
+				if summary == "" && len(notes) != 0 || summary != "" && (len(notes) != 1 || notes[0] != summary) {
+					t.Errorf("summary %q: note notifications = %v", summary, notes)
+				}
+			}
+		})
 	}
 }
 

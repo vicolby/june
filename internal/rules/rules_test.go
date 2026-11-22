@@ -931,3 +931,31 @@ func TestScanRefusesStandInPathsForScopedRules(t *testing.T) {
 		t.Errorf("Scan with unscoped rules = %+v, %v, want one match", got.Matches, err)
 	}
 }
+
+func TestLoadRefusesTheReservedParseErrorID(t *testing.T) {
+	dir := t.TempDir()
+	writeRule(t, dir, "june-parse-error.yml", "june-parse-error", "x = (1,)")
+	rs, faults := rules.Load(context.Background(), dir)
+	if rs != nil || len(faults) != 1 || !strings.Contains(faults[0].Cause, "reserved") {
+		t.Fatalf("Load = %v, %v, want one reserved-id fault and no rule set", rs, faults)
+	}
+}
+
+func TestScanReportsSyntaxErrorSpans(t *testing.T) {
+	rs := loadGood(t)
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "bad.py"), "x = 1\ndef broken(:\n    return (1,\n")
+	write(t, filepath.Join(dir, "ok.py"), "x = []\n")
+	got, err := rs.Scan(context.Background(), dir, []string{"bad.py", "ok.py"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.ParseErrors) != 1 || got.ParseErrors[0].File != "bad.py" || got.ParseErrors[0].From > 2 || got.ParseErrors[0].To < 3 {
+		t.Errorf("ParseErrors = %+v, want one span in bad.py covering lines 2-3", got.ParseErrors)
+	}
+	for _, m := range got.Matches {
+		if m.Rule == "june-parse-error" {
+			t.Errorf("the built-in rule leaked into Matches: %+v", m)
+		}
+	}
+}

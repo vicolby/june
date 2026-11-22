@@ -182,6 +182,18 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		}
 		ds = append(ds, diag.Diagnostic{File: path, Line: m.Line, Col: m.Col, Code: m.Rule, Sev: sev, Kind: diag.Finding, Msg: m.Msg})
 	}
+	// A touched line inside a syntax error was judged on whatever the parser recovered, so say so once per file.
+	warned := map[string]bool{}
+	for _, pe := range scanned.ParseErrors {
+		line, ok := touched.firstIn(pe.File, pe.From, pe.To)
+		if !ok || warned[pe.File] {
+			continue
+		}
+		warned[pe.File] = true
+		warns++
+		ds = append(ds, diag.Diagnostic{File: pe.File, Line: line, Col: 1, Code: "PARSE", Sev: diag.Warning, Kind: diag.Finding,
+			Msg: "a touched line is inside a syntax error, so rules may have checked less than they appear to. Fix: fix the syntax error and run june again"})
+	}
 	lines := 0
 	checked := 0
 	for _, f := range files {
@@ -213,6 +225,15 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	sum := summary(errs, warns, optOutCount, checked, lines)
 	if n := len(scanned.Skipped); n > 0 {
 		sum += "; " + count(n, "file") + " skipped, not readable as text"
+	}
+	if sc.notRegular > 0 {
+		sum += "; " + count(sc.notRegular, "changed .py path") + " skipped, not regular files (symlink or submodule)"
+	}
+	if sc.notPresent > 0 {
+		sum += "; " + count(sc.notPresent, "changed .py path") + " skipped, absent from sparse checkout"
+	}
+	if len(files) == 0 {
+		sum += "; note: no changed Python files found - june reads .py files only, not .pyi or scripts without an extension - so if some were expected, check --base and the checkout"
 	}
 	if sc.base != "" {
 		sum += "; base " + sc.base + " (" + sc.source + ")"

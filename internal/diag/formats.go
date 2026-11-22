@@ -64,7 +64,7 @@ func jsonReport(sorted []Diagnostic, summary string) []byte {
 // sarifReport renders a SARIF 2.1.0 log for GitHub code scanning. Paths are repository-relative when known.
 // Findings are results at their level, opt-outs and legacy matches are notes, and a failure is a tool
 // execution notification, since it has no location.
-func sarifReport(sorted []Diagnostic) []byte {
+func sarifReport(sorted []Diagnostic, summary string) []byte {
 	type text struct {
 		Text string `json:"text"`
 	}
@@ -148,6 +148,9 @@ func sarifReport(sorted []Diagnostic) []byte {
 	}
 	var r run
 	r.Tool.Driver = driver{"june", "https://github.com/vicolby/june", rules}
+	if summary != "" {
+		notes = append(notes, notification{"note", text{summary}})
+	}
 	r.Invocations = []invocation{{successful, notes}}
 	r.Results = results
 	return marshal(struct {

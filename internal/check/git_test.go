@@ -112,7 +112,11 @@ func TestGitScopeAbsentSparseEditDoesNotHideCheckedOutFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expect(t, against(t, env, "main"), 1, "keep/lib.py:1:9: "+py012)
+	res := against(t, env, "main")
+	expect(t, res, 1, "keep/lib.py:1:9: "+py012)
+	if got, want := summaryOf(res), "1 changed .py path skipped, absent from sparse checkout"; !strings.Contains(got, want) {
+		t.Errorf("summary = %q, want it to contain %q", got, want)
+	}
 	if _, err := os.Lstat(filepath.Join(env.Dir, "app.py")); !os.IsNotExist(err) {
 		t.Fatalf("sparse file is no longer absent: %v", err)
 	}
@@ -458,6 +462,39 @@ func TestGitScopeSymlinksTouchNothing(t *testing.T) {
 	}
 }
 
+func TestSkippedSymlinkIsNamedInTheSummary(t *testing.T) {
+	for _, target := range []string{"legacy.py", "missing.py"} {
+		t.Run(target, func(t *testing.T) {
+			env := repo(t, map[string]string{"legacy.py": old})
+			write(t, filepath.Join(env.Dir, "new.py"), "x = 1\n")
+			if err := os.Symlink(target, filepath.Join(env.Dir, "alias.py")); err != nil {
+				t.Fatal(err)
+			}
+			assertSkipped := func(t *testing.T, res check.Result) {
+				t.Helper()
+				expect(t, res, 0, "")
+				want := "checked 1 file, 1 changed line; 1 changed .py path skipped, not regular files (symlink or submodule)"
+				if got := summaryOf(res); !strings.Contains(got, want) {
+					t.Errorf("summary = %q, want it to contain %q", got, want)
+				}
+			}
+			for _, state := range []string{"untracked", "staged", "committed"} {
+				t.Run(state, func(t *testing.T) {
+					if state == "staged" {
+						git(t, env.Dir, "add", "alias.py", "new.py")
+						assertSkipped(t, infer(t, hook(env, nil)))
+					}
+					if state == "committed" {
+						commit(t, env)
+						assertSkipped(t, infer(t, hook(env, map[string]string{"PRE_COMMIT_FROM_REF": "main", "PRE_COMMIT_TO_REF": "HEAD"})))
+					}
+					assertSkipped(t, against(t, env, "main"))
+				})
+			}
+		})
+	}
+}
+
 func TestBaseJudgesCommittedEdits(t *testing.T) {
 	env := repo(t, map[string]string{"app.py": old + "x = 1\n"})
 	expect(t, against(t, env, "main"), 0, "")
@@ -712,7 +749,7 @@ func TestBareJuneFallsBackToTheRemoteDefaultBranch(t *testing.T) {
 
 func TestExplicitBaseNamesItsSource(t *testing.T) {
 	env := repo(t, map[string]string{"app.py": old})
-	if got, want := summaryOf(against(t, env, "main")), "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; base main (--base)"; got != want {
+	if got, want := summaryOf(against(t, env, "main")), "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines"+noPython+"; base main (--base)"; got != want {
 		t.Errorf("summary = %q, want %q", got, want)
 	}
 }

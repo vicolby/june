@@ -20,7 +20,12 @@ import (
 // scope names the base a git run judged against and where june got it.
 // scanDir is a temporary tree of the diff post-image for a staged or ref run; empty means the worktree.
 // The caller removes scanDir when it is set.
-type scope struct{ base, source, scanDir string }
+type scope struct {
+	base, source, scanDir string
+	// notRegular counts changed .py paths june left out because they are not regular files.
+	notRegular int
+	notPresent int
+}
 
 // fullDepth is the fix for a GitLab clone too shallow to hold the merge request diff base.
 const fullDepth = "clone the full history, with GIT_DEPTH: 0 in the GitLab CI job variables"
@@ -247,10 +252,11 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 	absent := map[string]bool{}
 	excluded := touchedSet{}
 	if local {
-		fresh, bad, err := untrackedPython(ctx, env, skip, excluded)
+		fresh, notRegular, bad, err := untrackedPython(ctx, env, skip, excluded)
 		if bad != nil || err != nil {
 			return nil, scope{}, bad, err
 		}
+		sc.notRegular += notRegular
 		var flagged []string
 		if absent, flagged, bad, err = indexFlags(ctx, env, prefix, skip); bad != nil || err != nil {
 			return nil, scope{}, bad, err
@@ -447,6 +453,7 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 				return refuse("changed file %q cannot be read. Fix: check its permissions and run june again", rel)
 			}
 			if !strings.HasPrefix(blob.mode, "100") {
+				sc.notRegular++
 				continue
 			}
 			content, ok := blobs[blob.sha]
@@ -460,12 +467,14 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 			abs := filepath.Join(env.Dir, filepath.FromSlash(rel))
 			info, err := os.Lstat(abs)
 			if os.IsNotExist(err) && absent[name] {
+				sc.notPresent++
 				continue
 			}
 			if err != nil {
 				return refuse("changed file %q cannot be inspected. Fix: check its permissions and run june again", rel)
 			}
 			if !info.Mode().IsRegular() {
+				sc.notRegular++
 				continue
 			}
 			if _, err = os.ReadFile(abs); err != nil {
@@ -499,21 +508,22 @@ func (r rename) size() int { return 2*(len(r.from)+len(r.to)) + 2*len(":(top,glo
 
 // untrackedPython lists the regular untracked Python files below env.Dir, ignored files excluded.
 // The returned message is a complete "<cause>. Fix: <instruction>" refusal.
-func untrackedPython(ctx context.Context, env Env, skip *excluder, excluded touchedSet) ([]string, *string, error) {
-	refuse := func(format string, a ...any) ([]string, *string, error) {
+func untrackedPython(ctx context.Context, env Env, skip *excluder, excluded touchedSet) ([]string, int, *string, error) {
+	refuse := func(format string, a ...any) ([]string, int, *string, error) {
 		msg := fmt.Sprintf(format, a...)
-		return nil, &msg, nil
+		return nil, 0, &msg, nil
 	}
 	untracked, err := git(ctx, env, "", "ls-files", "--others", "--exclude-standard", "-z", "--")
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, nil, ctx.Err()
+			return nil, 0, nil, ctx.Err()
 		}
 		return refuse("git could not list untracked files (%v). Fix: run git status to see why", err)
 	}
 	var names []string
+	var notRegular int
 	if untracked == "" {
-		return nil, nil, nil
+		return nil, 0, nil, nil
 	}
 	for _, name := range strings.Split(strings.TrimSuffix(untracked, "\x00"), "\x00") {
 		if path.Ext(name) != ".py" {
@@ -529,9 +539,11 @@ func untrackedPython(ctx context.Context, env Env, skip *excluder, excluded touc
 		}
 		if info.Mode().IsRegular() {
 			names = append(names, name)
+		} else {
+			notRegular++
 		}
 	}
-	return names, nil, nil
+	return names, notRegular, nil, nil
 }
 
 // maskExcluded keeps index blobs available for rename pairing while preventing git from opening

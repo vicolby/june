@@ -100,9 +100,23 @@ type Match struct {
 type Scanned struct {
 	Matches []Match
 	OptOuts []OptOut
+	// ParseErrors lists the line spans where the parser recovered from a syntax error, sorted by file path and starting line.
+	ParseErrors []ParseError
 	// Skipped lists the files that could not be read as text and so were not scanned, in the order given.
 	Skipped []Skipped
 }
+
+// ParseError is a span of lines, one-based and inclusive, that the parser could not read as valid Python.
+// Rules match on whatever the parser recovered there, so little may have been checked.
+type ParseError struct {
+	File     string
+	From, To int
+}
+
+// parseErrorID names the built-in rule that finds syntax errors. A user rule cannot take it.
+const parseErrorID = "june-parse-error"
+
+const parseErrorRule = "id: " + parseErrorID + "\nlanguage: python\nseverity: hint\nmessage: syntax error\nrule:\n  kind: ERROR\n"
 
 // Skipped is a Python file Scan left out. File is the path as given to Scan and Reason says why, without the path.
 type Skipped struct {
@@ -184,6 +198,10 @@ func Load(ctx context.Context, dirs ...string) (*RuleSet, []Fault) {
 				continue
 			}
 			here := Place{Dir: i, Path: name}
+			if strings.EqualFold(id, parseErrorID) {
+				faults = append(faults, Fault{Dir: i, Path: name, Cause: fmt.Sprintf("the rule id %s is reserved", id), Fix: "rename the rule"})
+				continue
+			}
 			places[id] = here
 			entries = append(entries, entry{place: here, id: id, doc: doc, examples: n})
 		}
@@ -221,7 +239,7 @@ func knownID(places map[string]Place, id string) (Place, bool) {
 
 // Scan runs the rules over the given files and keeps only Python files.
 // Files are slash-separated paths relative to root. Matches are anchored at their first line.
-// File is reported as given, and results come back in the order the files were given.
+// File is reported as given. Matches, opt-outs and skipped files follow the order the files were given.
 //
 // One scratch tree holds the rules and every file at its given relative path, so ast-grep makes one
 // comment pass and one scan however many files and rules there are. Nothing travels through argv.
@@ -324,6 +342,7 @@ func (rs *RuleSet) Scan(ctx context.Context, root string, files []string) (Scann
 			Message  string `json:"message"`
 			Range    struct {
 				Start struct{ Line, Column int } `json:"start"`
+				End   struct{ Line, Column int } `json:"end"`
 			} `json:"range"`
 		}
 		if err := dec.Decode(&m); err != nil {
@@ -335,6 +354,14 @@ func (rs *RuleSet) Scan(ctx context.Context, root string, files []string) (Scann
 		i, ok := byStaged[strings.TrimPrefix(filepath.ToSlash(m.File), "./")]
 		if !ok {
 			return Scanned{}, errors.New("ast-grep scan returned unreadable output")
+		}
+		if m.RuleID == parseErrorID {
+			to := m.Range.End.Line + 1
+			if m.Range.End.Column == 0 && m.Range.End.Line > m.Range.Start.Line {
+				to = m.Range.End.Line // the node ends at the start of the next line
+			}
+			out.ParseErrors = append(out.ParseErrors, ParseError{File: py[i], From: m.Range.Start.Line + 1, To: to})
+			continue
 		}
 		all = append(all, found{i, Match{
 			File: py[i], Line: m.Range.Start.Line + 1, Col: m.Range.Start.Column + 1,
@@ -357,6 +384,13 @@ func (rs *RuleSet) Scan(ctx context.Context, root string, files []string) (Scann
 	for _, f := range all {
 		out.Matches = append(out.Matches, f.Match)
 	}
+	sort.SliceStable(out.ParseErrors, func(a, b int) bool {
+		x, y := out.ParseErrors[a], out.ParseErrors[b]
+		if x.File != y.File {
+			return x.File < y.File
+		}
+		return x.From < y.From
+	})
 	return out, nil
 }
 
@@ -406,7 +440,7 @@ func (rs *RuleSet) writeRules(dir string) error {
 			return err
 		}
 	}
-	return nil
+	return os.WriteFile(filepath.Join(dir, "rules", parseErrorID+".yml"), []byte(parseErrorRule), 0o644)
 }
 
 // stageSource writes source under tree at its own relative path and returns that path.

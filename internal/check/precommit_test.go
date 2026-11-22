@@ -81,7 +81,7 @@ func TestStagedNonPythonAndDeletionsTouchNothing(t *testing.T) {
 	git(t, env.Dir, "add", "notes.txt")
 	res := infer(t, hook(env, nil))
 	expect(t, res, 0, "")
-	if got, want := summaryOf(res), "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; base HEAD (staged diff)"; got != want {
+	if got, want := summaryOf(res), "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines"+noPython+"; base HEAD (staged diff)"; got != want {
 		t.Errorf("summary = %q, want %q", got, want)
 	}
 }
@@ -306,7 +306,7 @@ func TestExplicitInputsWinOverPreCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := summaryOf(res), "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines"; got != want {
+	if got, want := summaryOf(res), "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines"+noPython; got != want {
 		t.Errorf("summary = %q, want %q", got, want)
 	}
 }
