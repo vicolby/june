@@ -309,31 +309,56 @@ func TestPullRequestAtItsBaseIsRefused(t *testing.T) {
 	}
 }
 
-func TestPullRequestSafeguardsExcludeSuppliedLinesAndPreCommitRefs(t *testing.T) {
+// The PR zero-line contract applies to every scope: empty runs refuse at the
+// event base and warn on a feature checkout; supplied nonempty lines still run.
+func TestPullRequestSafeguardsApplyAcrossScopes(t *testing.T) {
 	for _, event := range []string{"pull_request", "pull_request_target"} {
 		t.Run(event, func(t *testing.T) {
-			env := onGitHub(pullRequest(t), event, "main")
-			git(t, env.Dir, "checkout", "-q", "--detach", "origin/main")
-			for _, tc := range []struct {
-				list string
-				exit int
-			}{{"", 0}, {"app.py:1\n", 1}} {
-				res := change(t, env, tc.list)
-				if strings.Contains(string(res.Out), "judged 0 changed lines") || res.Exit != tc.exit {
-					t.Errorf("supplied lines: Exit = %d, Out =\n%s", res.Exit, res.Out)
+			for _, atBase := range []bool{true, false} {
+				state := "feature"
+				if atBase {
+					state = "base"
 				}
-			}
-			env.Vars["PRE_COMMIT_FROM_REF"] = "origin/main"
-			for _, to := range []string{"HEAD", "feature"} {
-				env.Vars["PRE_COMMIT_TO_REF"] = to
-				res := infer(t, env)
-				want := 0
-				if to == "feature" {
-					want = 1
-				}
-				if res.Exit != want || strings.Contains(string(res.Out), "judged 0 changed lines") {
-					t.Errorf("pre-commit to %s: Exit = %d, Out =\n%s", to, res.Exit, res.Out)
-				}
+				t.Run(state, func(t *testing.T) {
+					env := onGitHub(pullRequest(t), event, "main")
+					if atBase {
+						git(t, env.Dir, "checkout", "-q", "--detach", "origin/main")
+					}
+					for _, list := range []string{"", "README.md:1\n"} {
+						res := change(t, env, list)
+						if atBase {
+							if res.Exit != 2 || !strings.Contains(string(res.Out), "HEAD is the base \"origin/main\"") {
+								t.Errorf("supplied %q: Exit = %d, Out =\n%s", list, res.Exit, res.Out)
+							}
+						} else if res.Exit != 0 || !strings.Contains(string(res.Out), "::warning title=june::this pull request judged 0 changed lines.") {
+							t.Errorf("supplied %q: Exit = %d, Out =\n%s", list, res.Exit, res.Out)
+						}
+					}
+					if res := change(t, env, "app.py:1\n"); res.Exit != 1 || strings.Contains(string(res.Out), "judged 0 changed lines") {
+						t.Errorf("nonempty supplied lines: Exit = %d, Out =\n%s", res.Exit, res.Out)
+					}
+					// An empty ref range on a feature checkout must warn, not treat
+					// its from-ref HEAD as the event's base and refuse.
+					env.Vars["PRE_COMMIT_FROM_REF"] = "HEAD"
+					env.Vars["PRE_COMMIT_TO_REF"] = "HEAD"
+					res := infer(t, env)
+					if atBase {
+						if res.Exit != 2 || !strings.Contains(string(res.Out), "HEAD is the base \"origin/main\"") {
+							t.Errorf("empty refs: Exit = %d, Out =\n%s", res.Exit, res.Out)
+						}
+					} else if res.Exit != 0 || !strings.Contains(string(res.Out), "::warning title=june::this pull request judged 0 changed lines.") {
+						t.Errorf("empty refs: Exit = %d, Out =\n%s", res.Exit, res.Out)
+					}
+					env.Vars["PRE_COMMIT_FROM_REF"] = "origin/main"
+					res = infer(t, env)
+					want := 1
+					if atBase {
+						want = 2
+					}
+					if res.Exit != want {
+						t.Errorf("event-base refs: Exit = %d, want %d, Out =\n%s", res.Exit, want, res.Out)
+					}
+				})
 			}
 		})
 	}

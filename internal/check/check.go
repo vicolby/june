@@ -190,7 +190,22 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 			lines += touched.lineCount(f)
 		}
 	}
-	if lines == 0 && pullRequestDiff(env, sc) {
+	if lines == 0 && pullRequestEvent(env) {
+		base := sc.base
+		if base == "" || sc.source == sourceRefs || sc.source == sourceStaged {
+			// Supplied lines and pre-commit scopes do not identify the PR base.
+			base, _, _ = eventBase(env)
+		}
+		if base != "" {
+			head, herr := git(ctx, env, "", "rev-parse", "HEAD^{commit}")
+			target, terr := git(ctx, env, "", "rev-parse", base+"^{commit}")
+			if err := ctx.Err(); err != nil {
+				return Result{}, err
+			}
+			if herr == nil && terr == nil && strings.TrimSpace(head) == strings.TrimSpace(target) {
+				return refuse(req, fmt.Sprintf("HEAD is the base %q of this pull request, so nothing was judged. Fix: check out the change under review (with pull_request_target, set ref on actions/checkout to the pull request head), or run june on pull_request", base)), nil
+			}
+		}
 		warns++
 		ds = append(ds, diag.Diagnostic{Kind: diag.Failure, Sev: diag.Warning,
 			Msg: "this pull request judged 0 changed lines. Fix: if it changes Python files, check that the checkout is the change under review (pull_request_target checks out the base branch by default)"})

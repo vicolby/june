@@ -83,8 +83,8 @@ func isObjectID(s string) bool {
 	return true
 }
 
-func pullRequestDiff(env Env, sc scope) bool {
-	if !onGitHub(env) || sc.base == "" || sc.source == sourceRefs || sc.source == sourceStaged {
+func pullRequestEvent(env Env) bool {
+	if !onGitHub(env) {
 		return false
 	}
 	event := env.Vars["GITHUB_EVENT_NAME"]
@@ -223,14 +223,6 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 				return refuse("pre-commit's to-ref %q is not a commit in this repository. Fix: fetch it, or pass --base REF or --changed-lines FILE", toRef)
 			}
 			end = toRef
-		}
-		if pullRequestDiff(env, sc) {
-			head, herr := git(ctx, env, "", "rev-parse", "HEAD^{commit}")
-			target, terr := git(ctx, env, "", "rev-parse", base+"^{commit}")
-			if herr == nil && terr == nil && strings.TrimSpace(head) == strings.TrimSpace(target) {
-				return refuse("HEAD is the base %q of this pull request, so nothing was judged. Fix: check out the change under review (with pull_request_target, set ref on actions/checkout to the pull request head), or run june on pull_request",
-					base)
-			}
 		}
 		var err error
 		if mb, err = git(ctx, env, "", "merge-base", base, end); err != nil {
