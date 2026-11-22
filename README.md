@@ -48,6 +48,7 @@ The script is plain POSIX [`install.sh`](install.sh); read it before piping to `
 june [--legacy] [--rules DIR]... [--base REF | --changed-lines FILE]
 june verify [--rules DIR]...
 june --version
+june --help | -h
 ```
 
 | Flag | Meaning |
@@ -56,6 +57,7 @@ june --version
 | `--base REF` | Judge lines changed since the merge base of `REF` and `HEAD`. |
 | `--changed-lines FILE` | Judge lines listed in `FILE`, one `path:7` or `path:7-12` per line; `-` reads stdin. |
 | `--legacy` | Also list violations on untouched lines, as information only. |
+| `--help`, `-h` | Print usage and flags to stdout and exit 0. |
 
 ```sh
 june --rules "$(brew --prefix)/share/june/rules/python" --base main
