@@ -552,15 +552,24 @@ func TestRenamedAndEditedFileIsJudgedByItsNewPath(t *testing.T) {
 	expect(t, against(t, env, "main"), 1, want)
 }
 
-func TestBinaryAndNonPythonFilesAreSkipped(t *testing.T) {
+func TestBinaryPythonFilesWarnAndNonPythonFilesAreSkipped(t *testing.T) {
 	env := repo(t, map[string]string{"data.py": "\x00\x01", "notes.md": "a\n"})
 	write(t, filepath.Join(env.Dir, "data.py"), "\x00"+old)
 	write(t, filepath.Join(env.Dir, "notes.md"), old)
 	write(t, filepath.Join(env.Dir, "new.md"), old)
 	write(t, filepath.Join(env.Dir, "blob.py"), "\x00\x01"+old)
-	expect(t, against(t, env, "main"), 0, "")
+	want := skippedText("blob.py", "it contains NUL bytes") + skippedText("data.py", "it contains NUL bytes")
+	check := func() {
+		t.Helper()
+		res := against(t, env, "main")
+		expect(t, res, 0, want)
+		wantSkippedSummary(t, res, 2)
+	}
+	check()
+	git(t, env.Dir, "add", "-A")
+	check()
 	commit(t, env)
-	expect(t, against(t, env, "main"), 0, "")
+	check()
 }
 
 func TestPathsWithSpacesAndUnicode(t *testing.T) {
