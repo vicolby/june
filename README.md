@@ -6,12 +6,11 @@
 **Deterministic enforcement of code-guideline rules on the lines a change touches.**
 
 june turns the guideline rules a tool can decide into CI failures that an AI agent fixes the way it fixes a ruff or mypy error.
-It is built for teams whose agents write code against shared guideline skills: the skill keeps only judgment, taste and design guidance, and june checks the rest.
 
-- **Only touched lines fail.** june judges the lines a change adds or edits, never the enclosing function or file. Old violations never fail a build, so a repo adopts june with no cleanup and no baseline file.
-- **Findings read like ruff.** Each one names the file, line, rule id and the corrective instruction.
-- **Same verdict everywhere.** No network and no model on the check path: the same input gives the same result locally, in GitHub Actions and in GitLab CI.
-- **Rules are verified.** Every rule ships with passing and failing examples, and june refuses a rule whose examples do not behave.
+- **Only touched lines fail.** Old violations never fail a build, so a repo adopts june with no cleanup and no baseline file.
+- **Findings read like ruff.** File, line, rule id and the corrective instruction.
+- **Same verdict everywhere.** No network and no model on the check path: locally, in GitHub Actions and in GitLab CI the same input gives the same result.
+- **Rules are verified.** A rule whose passing and failing examples do not behave is refused.
 
 Version 1 checks Python only.
 
@@ -23,8 +22,8 @@ cd your-repo
 june --rules "$(brew --prefix)/share/june/rules/python" --base main
 ```
 
-june finds the lines changed since the merge base of `main` and `HEAD`, checks the changed Python files, and exits 1 if any error lands on a touched line.
-To adopt the bundled rules for good, copy them to `.june/rules`, the default rules directory, and drop `--rules`:
+june checks the Python files changed since the merge base of `main` and `HEAD`, and exits 1 if any error lands on a touched line.
+To adopt the bundled rules, copy them to `.june/rules`, the default rules directory, and drop `--rules`:
 
 ```sh
 mkdir -p .june && cp -R "$(brew --prefix)/share/june/rules/python" .june/rules
@@ -33,67 +32,45 @@ june --base main
 
 ## Install
 
+june needs `ast-grep` on `PATH`. june never finds the bundled rules on its own: pass them with `--rules` or copy them to `.june/rules`.
+
 ### Homebrew
 
 ```sh
 brew install vicolby/tap/june
 ```
 
-Installs the `june` binary, `ast-grep` as a dependency, and the bundled rules to `$(brew --prefix)/share/june/rules`.
+Installs `june`, `ast-grep`, and the rules to `$(brew --prefix)/share/june/rules`.
 
 ### Install script
 
-One line installs the release binary and the bundled rules. It suits CI, where it replaces a download, checksum and extract block.
-Pin both the script and the binary to a release: fetch `install.sh` from that release's assets and set `JUNE_VERSION` to the same version, so a CI run does not change when `main` or a new release does.
-Replace `X.Y.Z` with a [release](https://github.com/vicolby/june/releases) that lists `install.sh` among its assets:
+Installs the release binary and rules. In CI, pin the script and the binary to the same release. Replace `X.Y.Z` with a [release](https://github.com/vicolby/june/releases) that lists `install.sh` among its assets:
 
 ```sh
 curl -fsSL https://github.com/vicolby/june/releases/download/vX.Y.Z/install.sh | JUNE_VERSION=X.Y.Z sh
 ```
 
-To read the script before it runs, download it, read it, then run it:
-
-```sh
-curl -fsSLo install.sh https://github.com/vicolby/june/releases/download/vX.Y.Z/install.sh
-less install.sh
-JUNE_VERSION=X.Y.Z sh install.sh
-```
-
-Install steps live in one function called on the last line, so a truncated download defines functions at most and cannot leave a partial install.
-Releases before the one that first attaches `install.sh` have no such asset. Until you pin one, `https://raw.githubusercontent.com/vicolby/june/main/install.sh` serves the latest script.
-
-`JUNE_VERSION` defaults to the latest release for interactive use; CI should always set it.
-The script detects `linux` or `darwin` and `amd64` or `arm64`, downloads the release archive and `checksums.txt`, verifies the sha256 and only then installs. It stops with a clear error on an unsupported platform, a missing release or a checksum mismatch, and prints the installed version when done.
-Read it before you pipe it to `sh`: it is [`install.sh`](install.sh), plain POSIX `sh`. To pin that raw URL, replace `main` with a release tag.
-
-Settings are environment variables:
+The script is plain POSIX [`install.sh`](install.sh). It detects the platform, downloads the archive and `checksums.txt`, verifies the sha256, and only then installs. It runs as one function on its last line, so a truncated download installs nothing.
+Releases before the first one that attaches `install.sh` have no such asset; `https://raw.githubusercontent.com/vicolby/june/main/install.sh` serves the latest script (replace `main` with a tag to pin it).
 
 | Variable | Meaning |
 | --- | --- |
-| `JUNE_VERSION` | Release to install, with or without the leading `v`. Default: the latest release. |
-| `JUNE_INSTALL_DIR` | Where the `june` binary goes. Default: `/usr/local/bin` as root (the usual CI user), `$HOME/.local/bin` otherwise. |
-| `JUNE_RULES_DIR` | Where the bundled rules go; an existing directory is replaced. Default: `/usr/local/share/june/rules` as root, `$HOME/.local/share/june/rules` otherwise. |
-| `JUNE_OS`, `JUNE_ARCH` | Override the detected platform: `linux` or `darwin`, `amd64` or `arm64`. |
-| `JUNE_INSTALL_AST_GREP` | Set to `1` to also run `npm install --global @ast-grep/cli`. |
+| `JUNE_VERSION` | Release to install, with or without the leading `v`. Default: the latest release. Always set it in CI. |
+| `JUNE_INSTALL_DIR` | Where the binary goes. Default: `/usr/local/bin` as root, `$HOME/.local/bin` otherwise. |
+| `JUNE_RULES_DIR` | Where the rules go; an existing directory is replaced. Default: `/usr/local/share/june/rules` as root, `$HOME/.local/share/june/rules` otherwise. |
+| `JUNE_OS`, `JUNE_ARCH` | Override the platform: `linux` or `darwin`, `amd64` or `arm64`. |
+| `JUNE_INSTALL_AST_GREP` | `1` also runs `npm install --global @ast-grep/cli`. Otherwise `ast-grep` is left alone and the script notes when it is missing. |
 | `JUNE_RELEASES_URL` | Release base URL. Default: `https://github.com/vicolby/june/releases`. |
 
-```sh
-curl -fsSL https://github.com/vicolby/june/releases/download/vX.Y.Z/install.sh | JUNE_VERSION=X.Y.Z JUNE_INSTALL_DIR=/usr/local/bin sh
-```
-
-The archive does not contain `ast-grep`, and the script installs it only when you ask with `JUNE_INSTALL_AST_GREP=1`. That keeps the default free of a Node.js requirement and of a global npm install that many images already cover. Without the flag the script leaves an existing `ast-grep` untouched and prints a note when `ast-grep` is not on `PATH`.
-june never finds the bundled rules on its own, so pass them with `--rules`, for example `--rules "$HOME/.local/share/june/rules/python"`, or copy them to `.june/rules`.
-If the install directory is not on `PATH`, the script says so.
+The script says so when the install directory is not on `PATH`.
 
 ### Release binary
 
-To install by hand, each [release](https://github.com/vicolby/june/releases) attaches a `tar.gz` per platform (`darwin` and `linux`, `amd64` and `arm64`), `checksums.txt`, and `install.sh`.
-An archive holds the `june` binary and a `rules/` directory. It does not install `ast-grep`: install that separately and put it on `PATH`, for example `npm install --global @ast-grep/cli`.
-
-Set `VERSION` to a release without the leading `v`, and `OS` and `ARCH` to the platform:
+Each [release](https://github.com/vicolby/june/releases) attaches a `tar.gz` per platform (`darwin` and `linux`, `amd64` and `arm64`), `checksums.txt` and `install.sh`.
+An archive has no top-level directory: it holds the `june` binary and `rules/`. It does not include `ast-grep`.
 
 ```sh
-VERSION=0.2.0 OS=linux ARCH=amd64
+VERSION=0.2.0 OS=linux ARCH=amd64   # VERSION without the leading v
 ARCHIVE="june_${VERSION}_${OS}_${ARCH}.tar.gz"
 BASE="https://github.com/vicolby/june/releases/download/v${VERSION}"
 curl -fsSLO "${BASE}/${ARCHIVE}"
@@ -102,35 +79,7 @@ grep " ${ARCHIVE}$" checksums.txt | sha256sum -c -   # on macOS: shasum -a 256 -
 mkdir -p "$HOME/.local/bin" "$HOME/.local/share/june"
 tar -xzf "${ARCHIVE}" -C "$HOME/.local/share/june" rules
 tar -xzf "${ARCHIVE}" -C "$HOME/.local/bin" june
-june --version
 ```
-
-The archive has no top-level directory, so extract it where you want: the binary on `PATH`, `rules/` anywhere readable.
-
-## Pre-commit
-
-Install june with Homebrew, then add the hook to `.pre-commit-config.yaml`:
-
-```yaml
-repos:
-  - repo: https://github.com/vicolby/june
-    rev: v0.1.0  # use the latest release tag
-    hooks:
-      - id: june
-```
-
-The hook runs without filenames, only when Python files are involved, and judges the staged change against HEAD.
-It reads `.june/rules`; to use the bundled rules, copy them there as above, or point the hook at them. Paste the path `brew --prefix` prints:
-
-```yaml
-      - id: june
-        args: [--rules, PREFIX/share/june/rules/python]
-```
-
-`PREFIX` is the output of `brew --prefix` (`/opt/homebrew` on Apple Silicon, `/usr/local` for Intel Homebrew, `/home/linuxbrew/.linuxbrew` for Linuxbrew). pre-commit does not expand a command such as `$(brew --prefix)`.
-
-Under `pre-commit run --from-ref A --to-ref B`, and on a pre-push that sets those ref variables, it judges the lines the commits in that range add.
-A first push of a history that includes a root commit gives pre-commit no ref variables, so the pre-push stage judges nothing for it. CI is where that range is judged.
 
 ## Usage
 
@@ -142,37 +91,32 @@ june --version
 
 | Flag | Meaning |
 | --- | --- |
-| `--rules DIR` | Rules directory. Repeatable. Defaults to `./.june/rules`. Bundled rules are opt-in: june never loads them on its own. |
+| `--rules DIR` | Rules directory. Repeatable. Default: `./.june/rules`. |
 | `--base REF` | Judge the lines changed since the merge base of `REF` and `HEAD`. |
 | `--changed-lines FILE` | Judge the lines listed in `FILE`, one `path:7` or `path:7-12` per line. `-` reads stdin. |
-| `--legacy` | Also list violations on untouched lines, as information only. They never change the exit code. |
+| `--legacy` | Also list violations on untouched lines, as information only. |
 | `--version` | Print the version. |
 
-With no `--base` and no `--changed-lines`, june infers the base: pre-commit refs, then the pull request or merge request base in CI, then the pre-commit staged diff, otherwise the upstream branch or the remote default branch.
-It never guesses: when the touched lines cannot be determined, for example in a shallow clone, june exits 2 and names the fix.
-june fixes nothing itself, so the agent always sees what was wrong.
+With neither `--base` nor `--changed-lines`, june infers the base, first hit wins: pre-commit refs, the pull request or merge request base in CI, the pre-commit staged diff, the upstream branch, the remote default branch.
+It never guesses: when the touched lines cannot be determined, for example in a shallow clone, it exits 2 and names the fix.
+june fixes nothing itself.
 
-## How findings look
-
-A feature branch that adds a mutable default, a bare `except`, a `pass`-only handler and an `== None` comparison, plus one deliberate opt-out:
+## Output
 
 ```text
 $ june --rules "$(brew --prefix)/share/june/rules/python" --base main
 app/orders.py:11:28: PY012 opt-out: cache is shared on purpose
 app/orders.py:1:23: PY012 Mutable default argument. Fix: default the parameter to None and create the value inside the function.
 app/orders.py:4:5: PY013 Bare except catches every exception, including KeyboardInterrupt and SystemExit. Fix: name the exception type to catch, or use except Exception.
-app/orders.py:5:9: PY015 Except block only passes, which silently swallows the exception. Fix: handle the exception, log it, or re-raise it.
-app/orders.py:6:17: PY014 Comparison to None with == or !=. Fix: use is None or is not None.
-june: 4 errors, 0 warnings, 1 opt-out; checked 1 file, 12 changed lines; base main (--base)
+june: 2 errors, 0 warnings, 1 opt-out; checked 1 file, 12 changed lines; base main (--base)
 ```
 
-The summary line ends with the base and where it came from (`--base`, `pre-commit refs`, `staged diff`, `pull request base`, `merge request diff base`, `upstream branch` or `remote default branch`).
-The base label is the one intentional non-report difference between environments, because each vendor resolves its base differently.
-Those lines are the whole output everywhere apart from that base label; CI runs add native annotations beside them.
+The summary ends with the base and its source: `--base`, `pre-commit refs`, `staged diff`, `pull request base`, `merge request diff base`, `upstream branch` or `remote default branch`.
+That label is the only output that differs between environments. CI runs add native annotations beside the text.
 
 ## Rules
 
-The bundled Python rules are [ast-grep](https://ast-grep.github.io) rules that june owns directly.
+The bundled Python rules are [ast-grep](https://ast-grep.github.io) rules.
 
 | Rule | Catches | Severity |
 | --- | --- | --- |
@@ -182,39 +126,36 @@ The bundled Python rules are [ast-grep](https://ast-grep.github.io) rules that j
 | `PY015` | `except` block that only passes | error |
 | `PY016` | `assert` on a tuple, which is always true | error |
 
-Only an error fails the check, so a rule that is right most of the time can ship as a warning.
+Only an error fails the check.
 
-### How rules are verified
-
-Each rule has a sidecar in `rule-tests/` listing code it must accept (`valid`) and code it must flag (`invalid`).
-`june verify` runs every example of every rule and refuses the run if any behaves differently:
+Each rule has a sidecar in `rule-tests/` listing code it must accept (`valid`) and flag (`invalid`). `june verify` runs every example and fails if any behaves differently:
 
 ```sh
 $ june verify --rules "$(brew --prefix)/share/june/rules/python"
 june: verified 5 rules, 135 examples
 ```
 
-A normal run verifies the rules it loads first, so an unverified rule can never produce a verdict.
-Run `june verify` in the CI of a repo that keeps its own rules.
+A normal run verifies the rules it loads first, so an unverified rule never produces a verdict. Run `june verify` in the CI of a repo that keeps its own rules.
 
 ## Opt-outs
 
-A line can opt out of one named rule with a same-line comment that carries a written reason:
+Opt out of one rule on a line with a same-line comment that gives a reason:
 
 ```python
 def tag(items, cache={}):  # june: ignore[PY012] cache is shared on purpose
     return cache
 ```
 
-- Name exactly one rule, and give a nonblank reason after the `]`.
+- Name exactly one rule and give a nonblank reason after the `]`.
 - A malformed attempt suppresses nothing and says why.
-- june prints every opt-out a change adds, honoured or not, so a reviewer sees them in the log and in the summary count.
+- june prints every opt-out a change adds, honoured or not, and counts them in the summary.
 
-## GitHub Actions
+## CI
 
-On a pull request june judges the lines changed since the pull request base and annotates each finding on the diff, beside the plain text.
-It needs the base branch in the checkout, so fetch the full history.
-Ubuntu images install Homebrew at `/home/linuxbrew/.linuxbrew` and leave it off `PATH`, so add its `bin` directory before `brew install`:
+### GitHub Actions
+
+On a pull request june judges the lines changed since the pull request base and annotates each finding on the diff. It needs the base branch, so fetch full history.
+Ubuntu images install Homebrew at `/home/linuxbrew/.linuxbrew` but leave it off `PATH`:
 
 ```yaml
 name: june
@@ -232,13 +173,12 @@ jobs:
       - run: june --rules "$(brew --prefix)/share/june/rules/python"
 ```
 
-On a `push` event there is no pull request base, so june exits 2 and names the fix: pass `--base REF` (for example `--base origin/main`) with `fetch-depth: 0`, or run on `pull_request`.
+On a `push` event there is no pull request base, so june exits 2. Pass `--base REF` (for example `--base origin/main`) with `fetch-depth: 0`, or run on `pull_request`.
 
-## GitLab CI
+### GitLab CI
 
-In a merge request pipeline june judges the lines the merge request changed and writes a GitLab Code Quality report, `gl-code-quality-report.json`, beside the plain text.
-The job needs full clone depth so the base is in the clone; with a shallow clone june exits 2 and names the fix.
-The `before_script` line installs june with the [install script](#install-script) and, with `JUNE_INSTALL_AST_GREP=1`, `ast-grep`. Skip that variable if your image already has `ast-grep`; the script and `JUNE_VERSION` are pinned to the same release, `X.Y.Z` here.
+In a merge request pipeline june judges the lines the merge request changed and writes a GitLab Code Quality report, `gl-code-quality-report.json`, beside the text. The job needs full clone depth; a shallow clone exits 2.
+`before_script` installs june with the [install script](#install-script), pinned to one release (`X.Y.Z`), and `ast-grep` via `JUNE_INSTALL_AST_GREP=1`. Drop that variable if your image has `ast-grep`.
 
 ```yaml
 june:
@@ -257,14 +197,13 @@ june:
       codequality: gl-code-quality-report.json
 ```
 
-The report lists findings and opt-outs on touched lines; an error is `major`, a warning `minor` and an opt-out `info`.
+The report lists findings and opt-outs on touched lines: error is `major`, warning `minor`, opt-out `info`.
 A detached pipeline uses the merge request diff base; a merged results or merge train pipeline uses the first parent of the merge commit.
 
-### Run on the default branch too
+#### Run on the default branch too
 
-The merge request Code Quality widget compares the merge request's report with the report from the latest pipeline on the target branch. If no pipeline on that branch has produced `gl-code-quality-report.json`, for example when the job only runs in merge request pipelines, the widget has nothing to compare against and shows no useful result.
-So also run june on the default branch with the same `artifacts.reports.codequality`.
-A branch pipeline has no merge request base, so june exits 2 unless you pass `--base`; `HEAD~1` judges the lines the latest commit changed:
+The merge request Code Quality widget compares against the latest report from the target branch. With no report there, it shows nothing useful, so also run june on the default branch.
+A branch pipeline has no merge request base, so june exits 2 unless you pass `--base`; `HEAD~1` judges the latest commit:
 
 ```yaml
 june:
@@ -289,22 +228,41 @@ june:
       codequality: gl-code-quality-report.json
 ```
 
+### Pre-commit
+
+Install june with Homebrew, then add the hook to `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: https://github.com/vicolby/june
+    rev: v0.1.0  # use the latest release tag
+    hooks:
+      - id: june
+```
+
+The hook runs without filenames, only when Python files are involved, and judges the staged change against HEAD. It reads `.june/rules`; to use the bundled rules, copy them there or pass the path:
+
+```yaml
+      - id: june
+        args: [--rules, PREFIX/share/june/rules/python]
+```
+
+`PREFIX` is the output of `brew --prefix` (`/opt/homebrew` on Apple Silicon, `/usr/local` on Intel, `/home/linuxbrew/.linuxbrew` on Linuxbrew). pre-commit does not expand `$(brew --prefix)`.
+
+Under `pre-commit run --from-ref A --to-ref B`, and on a pre-push that sets those variables, it judges the lines the commits in that range add.
+A first push of a history with a root commit gives pre-commit no ref variables, so pre-push judges nothing; CI judges that range.
+
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | `0` | No error-severity finding on a touched line. |
 | `1` | At least one error-severity finding on a touched line with no valid opt-out. |
-| `2` | june could not reach a verdict: bad usage, a missing or faulty rules directory, a shallow clone, no base, a missing `ast-grep`. Output is `june: error: <cause>. Fix: <instruction>`. |
+| `2` | No verdict: bad usage, a missing or faulty rules directory, a shallow clone, no base, a missing `ast-grep`. Output is `june: error: <cause>. Fix: <instruction>`. |
 
 Warnings, `--legacy` lines and opt-outs never change the exit code.
 
-## Roadmap
+## More
 
-Version 2 plans an advisory LLM review of the taste and design guidelines no tool can decide, as a separate command that never fails a build.
-That review does not exist yet; see [VISION.md](VISION.md).
-
-## Learn more
-
-- [VISION.md](VISION.md): what june is for, what it owns and what it refuses to become.
-- [ARCHITECTURE.md](ARCHITECTURE.md): the modules, the guarantees and the design behind them.
+- [VISION.md](VISION.md): what june is for and what it refuses to become, including the planned advisory LLM review (not built).
+- [ARCHITECTURE.md](ARCHITECTURE.md): modules, guarantees and design.
