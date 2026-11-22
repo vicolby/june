@@ -101,9 +101,13 @@ func sarifReport(sorted []Diagnostic) []byte {
 	notes := []notification{}
 	rules := []rule{}
 	seen := map[string]bool{}
+	successful := true
 	for i, d := range sorted {
 		if d.Kind == Failure {
-			notes = append(notes, notification{"error", text{d.Msg}})
+			notes = append(notes, notification{d.Sev.String(), text{d.Msg}})
+			if d.Sev == Error {
+				successful = false
+			}
 			continue
 		}
 		var p physical
@@ -144,7 +148,7 @@ func sarifReport(sorted []Diagnostic) []byte {
 	}
 	var r run
 	r.Tool.Driver = driver{"june", "https://github.com/vicolby/june", rules}
-	r.Invocations = []invocation{{len(notes) == 0, notes}}
+	r.Invocations = []invocation{{successful, notes}}
 	r.Results = results
 	return marshal(struct {
 		Schema  string `json:"$schema"`

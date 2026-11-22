@@ -65,7 +65,7 @@ june --help | -h
 june --rules path/to/rules --base main
 ```
 
-Without `--base` or `--changed-lines`, june infers the base, first hit wins: pre-commit refs, pull request or merge request base in CI, pre-commit staged diff, upstream branch, remote default branch. The summary names the one used. When the touched lines cannot be determined (a shallow clone, say) june exits 2 and names the fix.
+Without `--base` or `--changed-lines`, june infers the base, first hit wins: pre-commit refs, CI event base (see [GitHub Actions](#github-actions) and [GitLab CI](#gitlab-ci)), pre-commit staged diff, upstream branch, remote default branch. The summary names the one used. When the touched lines cannot be determined (a shallow clone, say) june exits 2 and names the fix.
 
 ### Source encoding
 
@@ -112,10 +112,12 @@ An opt-out covers exactly one finding: if a line has several findings of that ru
 
 ### GitHub Actions
 
-On a pull request june judges lines changed since the PR base and annotates the diff. Fetch full history. Homebrew on Ubuntu images is off `PATH`:
+The action installs a verified june release and the tested ast-grep, then runs june. Pin it to a release tag (replace `X.Y.Z`); that tag also picks the june version. For any other ref set `version: X.Y.Z`. Fetch full history:
 
 ```yaml
-on: pull_request
+on:
+  pull_request:
+  merge_group:
 jobs:
   june:
     runs-on: ubuntu-latest
@@ -123,12 +125,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - run: echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
-      - run: brew install vicolby/tap/june
-      - run: june --rules .june/rules
+      - uses: vicolby/june@vX.Y.Z
 ```
 
-When `GITHUB_STEP_SUMMARY` is set, june appends a Markdown table of findings, opt-outs and refusals to the job summary (at most 100 rows).
+Inputs: `rules` (default `.june/rules`), `base` (a git ref to judge against), `version`.
+
+On a pull request june judges lines changed since the PR base and annotates the diff. In a merge queue (`merge_group`) it judges the group against `merge_group.base_sha`. When inferring that base, an unreadable or invalid event payload exits 2 instead of falling back to another branch; provide a readable `GITHUB_EVENT_PATH` with a valid `merge_group.base_sha`, or set `base` explicitly.
+
+If a pull request event judges 0 changed Python lines, june warns; if HEAD is the base, it exits 2. These safeguards also apply with an explicit base, supplied changed lines or pre-commit scopes. `pull_request_target` checks out the base branch by default, which is that case: use `pull_request`, or check out the pull request head.
+
+Without the action, install june with `brew install vicolby/tap/june` or the install script above, and run `june --rules .june/rules`.
+
+When `GITHUB_STEP_SUMMARY` is set, june appends a Markdown table of findings, opt-outs and run diagnostics to the job summary (at most 100 rows).
 
 For code scanning, write SARIF and upload it; `--format sarif` prints only the log, and the job still fails on an error:
 

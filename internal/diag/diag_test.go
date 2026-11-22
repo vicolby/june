@@ -425,6 +425,42 @@ func TestSARIFCleanRunIsSuccessfulWithEmptyResults(t *testing.T) {
 	}
 }
 
+func TestSARIFExecutionStatusDistinguishesWarningsAndErrors(t *testing.T) {
+	warning := diag.Diagnostic{Kind: diag.Failure, Sev: diag.Warning, Msg: "nothing judged"}
+	failure := diag.Diagnostic{Kind: diag.Failure, Sev: diag.Error, Msg: "cannot scan"}
+	finding := diag.Diagnostic{Kind: diag.Finding, Sev: diag.Error, File: "app.py", Line: 1, Code: "X", Msg: "violation"}
+	for _, tc := range []struct {
+		name    string
+		ds      []diag.Diagnostic
+		success bool
+		levels  []string
+	}{
+		{"warning", []diag.Diagnostic{warning}, true, []string{"warning"}},
+		{"error", []diag.Diagnostic{failure}, false, []string{"error"}},
+		{"warning-and-error", []diag.Diagnostic{warning, failure}, false, []string{"error", "warning"}},
+		{"finding-with-warning", []diag.Diagnostic{finding, warning}, true, []string{"warning"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, _ := diag.Render(tc.ds, "", diag.SARIF)
+			var log sarifLog
+			if err := json.Unmarshal(out, &log); err != nil {
+				t.Fatal(err)
+			}
+			if len(log.Runs) != 1 || len(log.Runs[0].Invocations) != 1 {
+				t.Fatalf("log = %+v", log)
+			}
+			inv := log.Runs[0].Invocations[0]
+			var levels []string
+			for _, n := range inv.ToolExecutionNotifications {
+				levels = append(levels, n.Level)
+			}
+			if inv.ExecutionSuccessful != tc.success || !reflect.DeepEqual(levels, tc.levels) {
+				t.Errorf("invocation = %+v, want success %v and levels %v", inv, tc.success, tc.levels)
+			}
+		})
+	}
+}
+
 func TestSARIFLineIsNeverZero(t *testing.T) {
 	out, _ := diag.Render([]diag.Diagnostic{{File: "a.py", Code: "X", Kind: diag.Finding, Msg: "m"}}, "", diag.SARIF)
 	if !strings.Contains(string(out), `"startLine": 1`) {

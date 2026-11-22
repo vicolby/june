@@ -40,6 +40,56 @@ func TestVersion(t *testing.T) {
 	}
 }
 
+func TestActionSmokeChecksEventOutcome(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				ID              string            `yaml:"id"`
+				Uses            string            `yaml:"uses"`
+				ContinueOnError bool              `yaml:"continue-on-error"`
+				With            map[string]string `yaml:"with"`
+				Env             map[string]string `yaml:"env"`
+				Run             string            `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	var assertion string
+	var action bool
+	for _, step := range workflow.Jobs["release-smoke"].Steps {
+		if step.ID == "action-refusal" {
+			action = step.Uses == "./" && step.ContinueOnError && step.With["base"] == "HEAD"
+		}
+		if step.Env["ACTION_OUTCOME"] == "${{ steps.action-refusal.outcome }}" {
+			assertion = step.Run
+		}
+	}
+	if !action || assertion == "" {
+		t.Fatal("release smoke must run the action at HEAD and check its outcome")
+	}
+	for _, tc := range []struct {
+		event, outcome string
+		pass           bool
+	}{
+		{"pull_request", "failure", true},
+		{"pull_request", "success", false},
+		{"push", "success", true},
+		{"push", "failure", false},
+	} {
+		cmd := exec.CommandContext(context.Background(), "bash", "-e", "-c", assertion)
+		cmd.Env = []string{"GITHUB_EVENT_NAME=" + tc.event, "ACTION_OUTCOME=" + tc.outcome}
+		if err := cmd.Run(); (err == nil) != tc.pass {
+			t.Errorf("%s outcome %s: error = %v, want pass %v", tc.event, tc.outcome, err, tc.pass)
+		}
+	}
+}
+
 func TestHelpPrintsUsageAndExitsZero(t *testing.T) {
 	for _, args := range [][]string{{"--help"}, {"-h"}, {"verify", "--help"}, {"verify", "-h"}, {"--legacy", "--help"}} {
 		var out, errOut bytes.Buffer
