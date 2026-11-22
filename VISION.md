@@ -17,7 +17,8 @@ june fails exactly the lines a change adds or edits, never the enclosing functio
 An old violation on an untouched line never fails a build.
 A touched line that violates a rule always fails, however many neighbors do the same.
 That strictness is the default, and a whitespace-only edit counts as a touch.
-An opt-in flag, with `git diff -w` semantics, stops counting a line whose only change is whitespace, so indenting a body into a `with` or re-wrapping a signature does not re-blame legacy code.
+An opt-in flag, with `git diff -w` semantics, stops counting a line whose only change is whitespace, so indenting a body into a `with` does not re-blame legacy code.
+Wrapping or unwrapping a signature moves code onto another line, so that line stays touched and a legacy violation there still fails.
 A line with any other edit is still touched, and the flag never changes what a rule matches.
 june can list old violations on untouched lines as information, and that list never fails or blocks anything.
 A repo adopts june with no cleanup and no baseline file to maintain.

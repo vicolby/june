@@ -57,7 +57,7 @@ june --help | -h
 | `--changed-lines FILE` | Judge lines listed in `FILE`, one `path:7` or `path:7-12` per line; `-` reads stdin. |
 | `--format FORMAT` | `text`, `json`, `sarif`, `github` or `gitlab`. Default: `github` under GitHub Actions, `gitlab` under GitLab CI, else `text`. |
 | `--legacy` | Also list violations on untouched lines, as information only. |
-| `--ignore-whitespace`, `-w` | Do not count a line as touched when only its whitespace changed, like `git diff -w`. Strict by default. Not valid with `--changed-lines`. |
+| `--ignore-whitespace` | Do not count a line as touched when only its whitespace changed, like `git diff -w`. Strict by default. Not valid with `--changed-lines`. |
 | `--help`, `-h` | Print usage and flags to stdout and exit 0. |
 
 ```sh

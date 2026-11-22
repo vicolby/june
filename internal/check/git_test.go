@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -865,7 +866,7 @@ func TestIgnoreWhitespaceIndentOnlyEdit(t *testing.T) {
 	}
 }
 
-func TestIgnoreWhitespaceRewrapOnlyEdit(t *testing.T) {
+func TestIgnoreWhitespaceIndentOfContinuedLine(t *testing.T) {
 	env := repo(t, map[string]string{"app.py": "def f(x,\n      a=[]):\n    return a\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), "def f(x,\n        a=[]):\n    return a\n")
 	commit(t, env)
@@ -877,6 +878,105 @@ func TestIgnoreWhitespaceRewrapOnlyEdit(t *testing.T) {
 	if loose.Exit != 0 || !strings.Contains(string(loose.Out), "checked 0 files, 0 changed lines") {
 		t.Errorf("ignore whitespace: Exit = %d, Out = %s, want 0 and nothing touched", loose.Exit, loose.Out)
 	}
+}
+
+func TestIgnoreWhitespaceWrapAndUnwrapStillBlameTheDefault(t *testing.T) {
+	cases := []struct {
+		name   string
+		before string
+		after  string
+	}{
+		{
+			name:   "wrap",
+			before: "def f(x, a=[]):\n    return a\n",
+			after:  "def f(x,\n      a=[]):\n    return a\n",
+		},
+		{
+			name:   "unwrap",
+			before: "def f(x,\n      a=[]):\n    return a\n",
+			after:  "def f(x, a=[]):\n    return a\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := repo(t, map[string]string{"app.py": tc.before})
+			write(t, filepath.Join(env.Dir, "app.py"), tc.after)
+			commit(t, env)
+			line := lineContaining(t, tc.after, "a=[]")
+			plain := gitPostImageLines(t, env.Dir, false)
+			ignored := gitPostImageLines(t, env.Dir, true)
+			if !plain[line] || !ignored[line] {
+				t.Fatalf("git diff: line %d touched plain=%v -w=%v, want both; a re-wrap is not whitespace-only", line, plain[line], ignored[line])
+			}
+			want := fmt.Sprintf("app.py:%d:", line)
+			strict := against(t, env, "main")
+			if strict.Exit != 1 || !strings.Contains(string(strict.Out), want) || !strings.Contains(string(strict.Out), "PY012") {
+				t.Errorf("strict: Exit = %d, Out = %s, want 1 with PY012 on %s", strict.Exit, strict.Out, want)
+			}
+			loose := ignoringSpace(t, env)
+			if loose.Exit != 1 || !strings.Contains(string(loose.Out), want) || !strings.Contains(string(loose.Out), "PY012") {
+				t.Errorf("ignore whitespace: Exit = %d, Out = %s, want 1 with PY012 on %s", loose.Exit, loose.Out, want)
+			}
+		})
+	}
+}
+
+// gitPostImageLines is the post-image lines `git diff -U0` (and `-w`) reports against main.
+// Unified-diff hunk headers are the oracle, so a whitespace-only fixture cannot pose as a re-wrap.
+func gitPostImageLines(t *testing.T, dir string, ignoreSpace bool) map[int]bool {
+	t.Helper()
+	args := []string{"diff", "-U0"}
+	if ignoreSpace {
+		args = append(args, "-w")
+	}
+	args = append(args, "main", "--", "app.py")
+	cmd := exec.CommandContext(context.Background(), "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	lines := map[int]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.HasPrefix(line, "@@ ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 || !strings.HasPrefix(fields[2], "+") {
+			t.Fatalf("hunk %q", line)
+		}
+		spec := strings.TrimPrefix(fields[2], "+")
+		left, right, hasCount := strings.Cut(spec, ",")
+		start, err := strconv.Atoi(left)
+		if err != nil {
+			t.Fatalf("hunk %q: %v", line, err)
+		}
+		count := 1
+		if hasCount {
+			count, err = strconv.Atoi(right)
+			if err != nil {
+				t.Fatalf("hunk %q: %v", line, err)
+			}
+		}
+		for n := start; n < start+count; n++ {
+			lines[n] = true
+		}
+	}
+	return lines
+}
+
+func lineContaining(t *testing.T, body, fragment string) int {
+	t.Helper()
+	for i, line := range strings.Split(body, "\n") {
+		if strings.Contains(line, fragment) {
+			return i + 1
+		}
+	}
+	t.Fatalf("fixture has no %q", fragment)
+	return 0
 }
 
 func TestIgnoreWhitespaceStillFailsARealEditOnTheLine(t *testing.T) {
