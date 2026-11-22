@@ -12,7 +12,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -72,6 +74,8 @@ type RuleSet struct {
 	ids      map[string]bool
 	rules    int
 	examples int
+	// scoped is true when some rule carries files or ignores, which only hold for a file staged at its real path.
+	scoped bool
 }
 
 // Rules is the number of rules that were verified.
@@ -121,8 +125,6 @@ type ruleDoc struct {
 	ID       string `yaml:"id"`
 	Message  string `yaml:"message"`
 	Language string `yaml:"language"`
-	// Fix is a rule key june never applies, so a rule that has one is refused rather than silently stripped.
-	Fix yaml.Node `yaml:"fix"`
 }
 
 type exampleDoc struct {
@@ -195,12 +197,16 @@ func Load(ctx context.Context, dirs ...string) (*RuleSet, []Fault) {
 	docs := make([]ruleSource, len(entries))
 	ids := make(map[string]bool, len(entries))
 	total := 0
+	scoped := false
 	for i, e := range entries {
 		docs[i] = ruleSource{id: e.id, text: e.doc}
 		ids[e.id] = true
 		total += e.examples
+		for _, k := range ruleKeys([]byte(e.doc)) {
+			scoped = scoped || k == "files" || k == "ignores"
+		}
 	}
-	return &RuleSet{bin: bin, version: version, docs: docs, ids: ids, rules: len(entries), examples: total}, nil
+	return &RuleSet{bin: bin, version: version, docs: docs, ids: ids, rules: len(entries), examples: total, scoped: scoped}, nil
 }
 
 // knownID reports the file that already owns id. Comparison is case-insensitive because staging uses the id as a filename.
@@ -261,6 +267,10 @@ func (rs *RuleSet) Scan(ctx context.Context, root string, files []string) (Scann
 		name, err := stageSource(filepath.Join(scratch, treeDir), f, i, source)
 		if err != nil {
 			return Scanned{}, errScanSetup
+		}
+		if name != f && rs.scoped {
+			// A file at a stand-in path would be judged by the filters against the wrong path, silently.
+			return Scanned{}, errors.New("a Python file cannot be staged at its own path, so a rule's files and ignores cannot be applied to it")
 		}
 		staged[i], byStaged[name] = name, i
 		if bytes.Contains(source, []byte(optOutMarker)) || bytes.Contains(source, []byte(suppressionMarker)) {
@@ -619,8 +629,8 @@ func readRule(dir, name string) (string, string, int, []Fault) {
 	if !strings.EqualFold(doc.Language, "python") {
 		return "", "", 0, []Fault{{Path: name, Cause: "the rule language is not Python", Fix: "set language to python"}}
 	}
-	if doc.Fix.Kind != 0 {
-		return "", "", 0, []Fault{{Path: name, Cause: fmt.Sprintf("rule %s has a fix, which june never applies", doc.ID), Fix: "remove the fix key and say the correction in the message"}}
+	if unused := unusedKeys(raw); len(unused) > 0 {
+		return "", "", 0, []Fault{{Path: name, Cause: fmt.Sprintf("rule %s has %s, which june does not use", doc.ID, quoteKeys(unused)), Fix: "remove it; june reads only " + strings.Join(usedKeys, ", ") + ", so put the correction in the message"}}
 	}
 	if strings.TrimSpace(doc.Message) == "" {
 		return "", "", 0, []Fault{{Path: name, Cause: fmt.Sprintf("rule %s has an empty message", doc.ID), Fix: "write the corrective instruction in the message"}}
@@ -642,6 +652,44 @@ func readRule(dir, name string) (string, string, int, []Fault) {
 		return "", "", 0, []Fault{{Path: sidecar, Cause: fmt.Sprintf("rule %s needs both valid and invalid examples", doc.ID), Fix: "add at least one of each"}}
 	}
 	return strings.TrimRight(string(raw), "\n"), doc.ID, len(ex.Valid) + len(ex.Invalid), nil
+}
+
+// usedKeys are the rule keys june reads or lets ast-grep apply to the match, the message or the path.
+// Any other key (fix, note, url, labels, metadata, rewriters of a fix) would be dropped silently, so it is refused.
+var usedKeys = []string{"id", "language", "message", "severity", "rule", "constraints", "utils", "transform", "rewriters", "files", "ignores"}
+
+// ruleKeys lists the top-level keys of a rule document.
+func ruleKeys(raw []byte) []string {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil
+	}
+	top := doc.Content[0]
+	var keys []string
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		keys = append(keys, top.Content[i].Value)
+	}
+	return keys
+}
+
+// unusedKeys lists the top-level keys of a rule that june does not use, sorted.
+func unusedKeys(raw []byte) []string {
+	var out []string
+	for _, k := range ruleKeys(raw) {
+		if !slices.Contains(usedKeys, k) {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func quoteKeys(keys []string) string {
+	q := make([]string, len(keys))
+	for i, k := range keys {
+		q[i] = "the key " + strconv.Quote(k)
+	}
+	return strings.Join(q, " and ")
 }
 
 func decodeDocument(raw []byte, out any) error {

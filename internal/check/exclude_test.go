@@ -102,15 +102,18 @@ func TestConfigAndFlagExcludesAdd(t *testing.T) {
 	expect(t, res, 1, "app.py:1:9: "+py012)
 }
 
-// An excluded file is never read, so one that is not UTF-8 cannot refuse the run and a huge one costs nothing.
-func TestExcludedFileIsNeverRead(t *testing.T) {
-	env := tree(t, map[string]string{"app.py": "x = 1\n", "gen/latin.py": "# caf\xe9\nx = []\n"})
-	res := changeReq(t, env, check.Request{}, "app.py:1\ngen/latin.py:1\n")
-	if res.Exit != 2 {
-		t.Fatalf("without an exclude Exit = %d, want 2 (not UTF-8)", res.Exit)
+// An excluded file is never scanned, so a file that cannot be read as text is not even reported as skipped.
+func TestExcludedFileIsNeverScanned(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": "x = 1\n", "gen/bin.py": "\x00\x01x = []\n"})
+	res := changeReq(t, env, check.Request{}, "app.py:1\ngen/bin.py:1\n")
+	if !strings.Contains(summaryOf(res), "1 file skipped") {
+		t.Fatalf("without an exclude summary = %q, want the binary file skipped", summaryOf(res))
 	}
-	res = changeReq(t, env, check.Request{Exclude: []string{"gen/**"}}, "app.py:1\ngen/latin.py:1\n")
+	res = changeReq(t, env, check.Request{Exclude: []string{"gen/**"}}, "app.py:1\ngen/bin.py:1\n")
 	expect(t, res, 0, "")
+	if strings.Contains(summaryOf(res), "skipped") || !strings.Contains(summaryOf(res), "1 file excluded") {
+		t.Errorf("summary = %q, want one file excluded and none skipped", summaryOf(res))
+	}
 }
 
 func TestExcludeEverythingChecksNothing(t *testing.T) {
@@ -135,6 +138,8 @@ func TestBadExcludeRefuses(t *testing.T) {
 		{"bad config glob", map[string]string{".june/config.yml": "exclude: ['[a']\n"}, nil, `the exclude pattern "[a" is not a valid glob. Fix:`},
 		{"unknown config key", map[string]string{".june/config.yml": "exclude: [a]\nseverity: off\n"}, nil, ".june/config.yml is not a valid june config ("},
 		{"config not yaml", map[string]string{".june/config.yml": "exclude: [\n"}, nil, ".june/config.yml is not a valid june config ("},
+		{"second document", map[string]string{".june/config.yml": "exclude: [a]\n---\nexclude: [b]\n"}, nil, ".june/config.yml is not a valid june config ("},
+		{"repeated key", map[string]string{".june/config.yml": "exclude: [a]\nexclude: [b]\n"}, nil, ".june/config.yml is not a valid june config ("},
 		{"exclude not a list", map[string]string{".june/config.yml": "exclude: a\n"}, nil, ".june/config.yml is not a valid june config ("},
 	}
 	for _, tt := range tests {
@@ -166,4 +171,12 @@ func TestRuleFilesAndIgnoresApply(t *testing.T) {
 	write(t, filepath.Join(env.Dir, "scoped", "rule-tests", "SCOPE01-test.yml"), "id: SCOPE01\nvalid: ['x = (1,)']\ninvalid: ['x = [1]']\n")
 	res := changeWith(t, env, []string{"scoped"}, "src/a.py:1\nsrc/legacy/b.py:1\ntests/c.py:1\nvendor/src/d.py:1\n")
 	expect(t, res, 1, "src/a.py:1:5: SCOPE01 No lists. Fix: use a tuple.\n")
+}
+
+// Whitespace in a glob is literal, so " app.py" names a different file than "app.py".
+func TestExcludeWhitespaceIsLiteral(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": badDefault})
+	expect(t, changeReq(t, env, check.Request{Exclude: []string{" app.py"}}, "app.py:1\n"), 1, "app.py:1:9: "+py012)
+	expect(t, changeReq(t, env, check.Request{Exclude: []string{"app.py "}}, "app.py:1\n"), 1, "app.py:1:9: "+py012)
+	expect(t, changeReq(t, env, check.Request{Exclude: []string{"app.py"}}, "app.py:1\n"), 0, "")
 }

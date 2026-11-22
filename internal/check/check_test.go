@@ -73,7 +73,7 @@ func change(t *testing.T, env check.Env, list string) check.Result {
 	return res
 }
 
-var summaryLine = regexp.MustCompile(`^june: \d+ errors?, \d+ warnings?, \d+ opt-outs?; checked \d+ files?, \d+ changed lines?(; \d+ files? skipped, not readable as text)?(; \d+ files? excluded)?(; base \S+ \([a-z -]+\))?\n$`)
+var summaryLine = regexp.MustCompile(`^june: \d+ errors?, \d+ warnings?, \d+ opt-outs?; checked \d+ files?, \d+ changed lines?(; \d+ files? skipped, not readable as text)?(; base \S+ \([a-z -]+\))?(; \d+ files? excluded)?\n$`)
 
 // skippedText is the warning june prints when a Python file is left out of the scan.
 func skippedText(file, reason string) string {
@@ -666,7 +666,7 @@ func TestRulesFaultsRefuseVerifyAndRunAlike(t *testing.T) {
 		},
 		{
 			name:  "rule ast-grep rejects",
-			files: map[string]string{"LST01.yml": "id: LST01\nlanguage: python\nmessage: m\nrule:\n  kind: list\nbogus: 1\n", sidecar: goodExamples},
+			files: map[string]string{"LST01.yml": "id: LST01\nlanguage: python\nmessage: m\nrule:\n  kind: list\n  bogus: 1\n", sidecar: goodExamples},
 			out:   "june: error: rules/LST01.yml: ast-grep cannot parse the rule (",
 		},
 		{
@@ -898,7 +898,7 @@ func TestFailingExampleNamesItsOwnDirectory(t *testing.T) {
 
 func TestUnparseableRuleNamesItsOwnDirectory(t *testing.T) {
 	env := tree(t, map[string]string{"app.py": "x = [1]\n"})
-	write(t, filepath.Join(env.Dir, "shared", "rule.yml"), "id: BAD01\nlanguage: python\nmessage: m\nrule:\n  kind: list\nbogus: 1\n")
+	write(t, filepath.Join(env.Dir, "shared", "rule.yml"), "id: BAD01\nlanguage: python\nmessage: m\nrule:\n  kind: list\n  bogus: 1\n")
 	write(t, filepath.Join(env.Dir, "shared", "rule-tests", "BAD01-test.yml"), "id: BAD01\nvalid:\n  - \"x = (1,)\"\ninvalid:\n  - \"x = [1]\"\n")
 	res := changeWith(t, env, []string{".june/rules", "shared"}, "app.py:1\n")
 	if res.Exit != 2 || !strings.HasPrefix(string(res.Out), "june: error: shared/rule.yml: ast-grep cannot parse the rule (") {

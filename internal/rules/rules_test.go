@@ -66,7 +66,7 @@ func TestLoadRefusesUnverifiedRules(t *testing.T) {
 		{"empty_message", "LST01.yml", "empty message"},
 		{"no_examples", "LST01.yml", "no examples"},
 		{"one_sided", "rule-tests/LST01-test.yml", "both valid and invalid"},
-		{"unparseable", "LST01.yml", "cannot parse the rule"},
+		{"unparseable", "LST01.yml", `the key "bogus_key", which june does not use`},
 		{"empty", "", "holds no rules"},
 		{"missing", "", "does not exist"},
 	}
@@ -871,7 +871,11 @@ func TestScanAppliesRulePathFilters(t *testing.T) {
 // A rule key june does not honour must fail verification, so nothing is dropped silently.
 func TestLoadRefusesRuleKeysJuneIgnores(t *testing.T) {
 	tests := []struct{ name, extra, wantCause string }{
-		{"fix", "fix: x = ()\n", "has a fix, which june never applies"},
+		{"fix", "fix: x = ()\n", `the key "fix", which june does not use`},
+		{"note", "note: use a tuple\n", `the key "note", which june does not use`},
+		{"url", "url: https://example.com\n", `the key "url"`},
+		{"labels", "labels:\n  x: {style: primary}\n", `the key "labels"`},
+		{"metadata", "metadata:\n  a: 1\n", `the key "metadata"`},
 		{"bad glob", "files: ['[unclosed']\n", "not a valid glob"},
 	}
 	for _, tt := range tests {
@@ -887,5 +891,36 @@ func TestLoadRefusesRuleKeysJuneIgnores(t *testing.T) {
 				t.Fatalf("Load = %v, %+v, want one fault containing %q", rs, faults, tt.wantCause)
 			}
 		})
+	}
+}
+
+// A file that cannot be staged at its own path would be judged by the filters against a stand-in path,
+// so a scan with scoped rules refuses it, and an unscoped rule set still scans it.
+func TestScanRefusesStandInPathsForScopedRules(t *testing.T) {
+	load := func(extra string) *rules.RuleSet {
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, "rule-tests"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(dir, "SC01.yml"), "id: SC01\nlanguage: python\nseverity: error\nmessage: 'Fix: no lists'\nrule:\n  kind: list\n"+extra)
+		write(t, filepath.Join(dir, "rule-tests", "SC01-test.yml"), "id: SC01\nvalid: ['x = 1']\ninvalid: ['x = [1]']\n")
+		rs, faults := rules.Load(context.Background(), dir)
+		if rs == nil {
+			t.Fatalf("Load: %v", faults)
+		}
+		return rs
+	}
+	src := t.TempDir()
+	// A directory named like the scan configuration takes the path the file needs, so it falls back to a stand-in.
+	if err := os.MkdirAll(filepath.Join(src, "sgconfig.yml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(src, "sgconfig.yml", "x.py"), "x = [1]\n")
+	files := []string{"sgconfig.yml/x.py"}
+	if _, err := load("ignores: ['vendor/**']\n").Scan(context.Background(), src, files); err == nil {
+		t.Error("Scan with scoped rules: want a refusal")
+	}
+	if got, err := load("").Scan(context.Background(), src, files); err != nil || len(got.Matches) != 1 {
+		t.Errorf("Scan with unscoped rules = %+v, %v, want one match", got.Matches, err)
 	}
 }

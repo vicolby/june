@@ -32,7 +32,14 @@ func excludes(env Env, req Request) (*excluder, *string) {
 		var cfg config
 		dec := yaml.NewDecoder(bytes.NewReader(raw))
 		dec.KnownFields(true)
-		if err := dec.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
+		err := dec.Decode(&cfg)
+		if err == nil {
+			var extra any
+			if next := dec.Decode(&extra); !errors.Is(next, io.EOF) {
+				err = errors.New("expected exactly one YAML document")
+			}
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
 			msg := defaultConfig + " is not a valid june config (" + oneLine(err.Error()) + "). Fix: keep one YAML document whose only key is exclude, a list of globs"
 			return nil, &msg
 		}
@@ -62,7 +69,7 @@ type excluder struct{ globs [][]string }
 
 // parseGlob splits a glob into slash-separated segments. A leading "./" and a trailing "/" mean nothing.
 func parseGlob(g string) ([]string, bool) {
-	g = strings.TrimSuffix(strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(g)), "./"), "/")
+	g = strings.TrimSuffix(strings.TrimPrefix(filepath.ToSlash(g), "./"), "/")
 	if g == "" || strings.HasPrefix(g, "/") {
 		return nil, false
 	}
