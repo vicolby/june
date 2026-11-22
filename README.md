@@ -101,7 +101,7 @@ jobs:
       - run: june --rules .june/rules
 ```
 
-When `GITHUB_STEP_SUMMARY` is set, june appends a findings table to the job summary, which lists findings past the annotation cap (first 100).
+When `GITHUB_STEP_SUMMARY` is set, june appends a Markdown table of findings, opt-outs and refusals to the job summary (at most 100 rows).
 
 For code scanning, write SARIF and upload it; `--format sarif` prints only the log, and the job still fails on an error:
 
