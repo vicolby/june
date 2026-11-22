@@ -51,6 +51,27 @@ func snapshotEnv(getwd func() (string, error)) (check.Env, error) {
 	return check.Env{Dir: dir, Vars: vars}, nil
 }
 
+// usage is the help text: `june --help` and `june -h` print it to stdout and exit 0.
+const usage = `usage:
+  june [--legacy] [--rules DIR]... [--base REF | --changed-lines FILE]
+  june verify [--rules DIR]...
+  june --version
+  june --help | -h
+
+flags:
+  --base REF            judge lines changed since the merge base of REF and HEAD
+  --changed-lines FILE  file of touched lines, path:7 or path:7-12 per line; - reads stdin
+  --legacy              also list violations on untouched lines, information only
+  --rules DIR           rules directory, repeatable (default ./.june/rules)
+  --version             print the version
+  --help, -h            print this help
+
+exit codes:
+  0  no error-severity finding on a touched line
+  1  an error-severity finding on a touched line with no valid opt-out
+  2  no verdict: bad usage, bad rules directory, shallow clone, no base, missing ast-grep
+`
+
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, env check.Env) int {
 	if len(args) > 0 && args[0] == "verify" {
 		return verify(ctx, args[1:], stdout, stderr, env)
@@ -64,6 +85,10 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	var rulesDirs dirList
 	fs.Var(&rulesDirs, "rules", "rules directory, repeatable (default ./.june/rules)")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprint(stdout, usage)
+			return 0
+		}
 		return usageError(stderr, err.Error())
 	}
 	if fs.NArg() > 0 {
@@ -99,6 +124,10 @@ func verify(ctx context.Context, args []string, stdout, stderr io.Writer, env ch
 	var rulesDirs dirList
 	fs.Var(&rulesDirs, "rules", "rules directory, repeatable (default ./.june/rules)")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprint(stdout, usage)
+			return 0
+		}
 		return usageError(stderr, err.Error())
 	}
 	if fs.NArg() > 0 {
@@ -137,7 +166,7 @@ func finish(dir string, stdout, stderr io.Writer, res check.Result, err error) i
 }
 
 func usageError(stderr io.Writer, cause string) int {
-	return fail(stderr, cause+". Fix: usage is june [--legacy] [--rules DIR]... [--base REF | --changed-lines FILE], june verify [--rules DIR]..., or june --version")
+	return fail(stderr, cause+". Fix: usage is june [--legacy] [--rules DIR]... [--base REF | --changed-lines FILE], june verify [--rules DIR]..., june --version, or june --help")
 }
 
 func fail(stderr io.Writer, msg string) int {

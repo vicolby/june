@@ -29,6 +29,23 @@ func TestVersion(t *testing.T) {
 	}
 }
 
+func TestHelpPrintsUsageAndExitsZero(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"-h"}, {"verify", "--help"}, {"verify", "-h"}, {"--legacy", "--help"}} {
+		var out, errOut bytes.Buffer
+		if code := run(context.Background(), args, strings.NewReader(""), &out, &errOut, check.Env{Dir: t.TempDir()}); code != 0 {
+			t.Errorf("%v: exit = %d, want 0", args, code)
+		}
+		if errOut.Len() != 0 {
+			t.Errorf("%v: stderr = %q, want empty", args, errOut.String())
+		}
+		for _, want := range []string{"usage:", "--base", "--changed-lines", "--legacy", "--rules", "--version", "--help", "june verify", "exit codes:"} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("%v: stdout lacks %q: %q", args, want, out.String())
+			}
+		}
+	}
+}
+
 func TestUnknownArgs(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run(context.Background(), []string{"--bogus"}, strings.NewReader(""), &out, &errOut, check.Env{Dir: t.TempDir()}); code != 2 {

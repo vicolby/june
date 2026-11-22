@@ -28,7 +28,6 @@ func Rules(ctx context.Context, env Env, dirs []string) (Result, error)
 
 type Env struct{ Dir string; Vars map[string]string } // os.Environ snapshot; nothing reads ambient state
 type Request struct {
-	Paths   []string  // narrows only
 	Base    string    // git ref; "" = inferred
 	Changed io.Reader // supplied list, one "path:7" or "path:7-12" per line; replaces git
 	Rules   []string  // merged directories; none = ./.june/rules
@@ -96,7 +95,7 @@ Output is text by default and carries no ANSI. Rendering escapes control charact
 
 ## cmd/june
 
-The current build supports `june --version`, `june verify [--rules DIR]...`, `june [--legacy] [--rules DIR]... [--base REF]` and `june [--legacy] [--rules DIR]... --changed-lines FILE`; `-` reads the list from stdin.
+The current build supports `june --help` and `june -h` (usage and flags on stdout, exit 0), `june --version`, `june verify [--rules DIR]...`, `june [--legacy] [--rules DIR]... [--base REF]` and `june [--legacy] [--rules DIR]... --changed-lines FILE`; `-` reads the list from stdin.
 An unstamped `june --version` prints `june dev`.
 With ast-grep on PATH, run the shipped Python fundamentals and their sidecar examples from the repository root:
 
@@ -170,7 +169,6 @@ func Change(ctx context.Context, env Env, req Request) (Result, error)
 
 type Request struct {
 	Rules   string      // path to the rule file, any format the reviewer reads; required
-	Paths   []string    // narrows only
 	Base    string      // as in check.Request
 	Changed io.Reader   // as in check.Request
 	Model   string      // closed set: anthropic | openai | claude | codex
