@@ -527,16 +527,21 @@ func disableSuppressions(source []byte, cs []comment) {
 	}
 }
 
-// optOuts reads the opt-outs out of the comments of source. A comment is an opt-out when it starts with `june:`.
+// optOutAt finds a `june:` marker that begins a `#` segment of a comment, so it may follow `# noqa: E501` or `# type: ignore`.
+var optOutAt = regexp.MustCompile(`#\s*` + optOutMarker)
+
+// optOuts reads the opt-outs out of the comments of source. A comment is an opt-out when a `# june:` marker
+// starts it or follows another `#` in it. The opt-out is read from the first marker to the end of the comment.
 func (rs *RuleSet) optOuts(file string, source []byte, cs []comment) []OptOut {
 	var out []OptOut
 	for _, c := range cs {
 		text := string(source[c.start:c.end])
-		if !strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(text, "#")), optOutMarker) {
+		at := optOutAt.FindStringIndex(text)
+		if at == nil {
 			continue
 		}
 		o := OptOut{File: file, Line: c.line, Col: c.col}
-		o.Rule, o.Reason, o.Problem = rs.parseOptOut(text)
+		o.Rule, o.Reason, o.Problem = rs.parseOptOut(text[at[0]:])
 		out = append(out, o)
 	}
 	return out

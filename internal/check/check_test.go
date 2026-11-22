@@ -1055,3 +1055,23 @@ func TestASTGrepDescription(t *testing.T) {
 		t.Errorf("missing: ASTGrep = %q, want %q", got, want)
 	}
 }
+
+func TestOptOutFollowsOtherComments(t *testing.T) {
+	env := tree(t, map[string]string{"a.py": "def a(x=[]):  # noqa: B006  # june: ignore[PY012] shared on purpose\n    pass\n" +
+		"def b(x=[]):  # type: ignore # june: ignore[PY012]\n    pass\n" +
+		"def c(x=[]):  # note june: ignore[PY012] prose, not an opt-out\n    pass\n"})
+	expect(t, change(t, env, "a.py:1-6\n"), 1, "a.py:1:15: PY012 opt-out: shared on purpose\n"+
+		"a.py:3:15: OPTOUT malformed opt-out suppresses nothing: the reason is required. Fix: write # june: ignore[RULE] reason\n"+
+		"a.py:3:9: "+py012+
+		"a.py:5:9: "+py012)
+}
+
+func TestOptOutCoversExactlyOneMatch(t *testing.T) {
+	env := tree(t, map[string]string{"a.py": "def a(x=[], y=[]):  # june: ignore[PY012] two on one line\n    pass\n"})
+	res := change(t, env, "a.py:1\n")
+	out := string(res.Out)
+	if res.Exit != 1 || !strings.Contains(out, "(suppresses nothing: 2 PY012 findings on this line, an opt-out covers exactly one.") ||
+		strings.Count(out, "PY012 ") < 3 {
+		t.Errorf("Exit = %d, Out = %q, want both findings kept and the opt-out refused", res.Exit, out)
+	}
+}

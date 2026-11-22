@@ -25,7 +25,7 @@ Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`, whic
 - A match is judged on its first line only, so rules match the smallest wrong node.
 - Source files follow the [source-encoding contract](README.md#source-encoding).
 - If the touched set is unknowable, the exit is 2, never 0 and never every line. A GitHub push with no base and no changed-lines list is unknowable even when the branch tracks its remote.
-- An opt-out is a same-line Python comment `# june: ignore[RULE_ID] <reason>` naming one loaded rule, with a nonblank reason. A comment starting with `june:` that does not parse suppresses nothing and says why. The same text in a string literal is not an opt-out.
+- An opt-out is a same-line Python comment `# june: ignore[RULE_ID] <reason>` naming one loaded rule, with a nonblank reason. The marker may follow another `#` segment of the comment (`# noqa: E501  # june: ignore[...] reason`). It covers exactly one finding: a line with several findings of that rule is not suppressed. A comment with a `# june:` marker that does not parse suppresses nothing and says why. The same text in a string literal is not an opt-out.
 - Every opt-out on a touched line is printed, honoured or not.
 - The same touched lines yield the same exit code and the same findings. Each format renders them differently: text, JSON and GitLab paths stay relative to the working directory, GitHub annotations and SARIF use repository-root paths when that root is known, and SARIF omits the summary. The summary's base label names the base and where it came from.
 - Output is sorted, with no clock and no ANSI. The safe.directory fix may name the repository path.

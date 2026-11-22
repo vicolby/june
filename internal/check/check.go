@@ -122,16 +122,16 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		rule string
 	}
 	optedOut := map[site]bool{}
-	found := map[site]bool{}
+	found := map[site]int{}         // matches per line and rule: an opt-out covers a line with exactly one
 	legacyOptOut := map[site]bool{} // valid opt-outs on untouched lines hide their legacy match, silently
 	var legacy int
 	for _, m := range scanned.Matches {
-		found[site{m.File, m.Line, m.Rule}] = true
+		found[site{m.File, m.Line, m.Rule}]++
 	}
 	for _, o := range scanned.OptOuts {
 		path := o.File
 		if !touched.has(path, o.Line) {
-			if o.Problem == "" {
+			if o.Problem == "" && found[site{path, o.Line, o.Rule}] == 1 {
 				legacyOptOut[site{path, o.Line, o.Rule}] = true
 			}
 			continue
@@ -142,9 +142,11 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		case o.Problem != "":
 			d.Code = "OPTOUT"
 			d.Msg = "malformed opt-out suppresses nothing: " + o.Problem
-		case found[s]:
+		case found[s] == 1:
 			optedOut[s] = true
 			d.Msg = "opt-out: " + o.Reason
+		case found[s] > 1:
+			d.Msg = fmt.Sprintf("opt-out: %s (suppresses nothing: %d %s findings on this line, an opt-out covers exactly one. Fix: fix a violation or split the line)", o.Reason, found[s], o.Rule)
 		default:
 			d.Msg = "opt-out: " + o.Reason + " (suppresses nothing: no " + o.Rule + " finding on this line)"
 		}
