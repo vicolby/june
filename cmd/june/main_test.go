@@ -163,7 +163,7 @@ func TestExcludeFlagKeepsPathsOutOfTheCheck(t *testing.T) {
 	var out, errOut bytes.Buffer
 	args := []string{"--exclude", "gen/**", "--exclude", "app.py", "--changed-lines", "-"}
 	code := run(context.Background(), args, strings.NewReader("app.py:2\n"), &out, &errOut, project(t))
-	if code != 0 || out.String() != "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; 1 file excluded\n" || errOut.Len() != 0 {
+	if code != 0 || out.String() != "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; note: no changed Python files found - june reads .py files only, not .pyi or scripts without an extension - so if some were expected, check --base and the checkout; 1 file excluded\n" || errOut.Len() != 0 {
 		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
 	}
 }
