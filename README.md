@@ -167,6 +167,7 @@ june: 4 errors, 0 warnings, 1 opt-out; checked 1 file, 12 changed lines; base ma
 ```
 
 The summary line ends with the base and where it came from (`--base`, `pre-commit refs`, `staged diff`, `pull request base`, `merge request diff base`, `upstream branch` or `remote default branch`).
+The base label is the one intentional non-report difference between environments, because each vendor resolves its base differently.
 The same lines are the whole output everywhere; CI runs add native annotations beside them.
 
 ## Rules
