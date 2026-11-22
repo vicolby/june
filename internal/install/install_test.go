@@ -187,6 +187,47 @@ func TestInstallDefaultDirs(t *testing.T) {
 	}
 }
 
+func TestInstallWithoutHome(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root does not derive its install paths from HOME")
+	}
+	archive := fixtureArchive(t)
+	srv := releaseServer(t, archive, sum(archive))
+
+	t.Run("both dirs set", func(t *testing.T) {
+		dir := t.TempDir()
+		r := runInstall(t, "HOME=", "JUNE_RELEASES_URL="+srv.URL, "JUNE_VERSION=0.2.0", "JUNE_INSTALL_DIR="+dir+"/bin", "JUNE_RULES_DIR="+dir+"/rules")
+		if r.err != nil {
+			t.Fatalf("install failed: %v\n%s", r.err, r.stderr)
+		}
+		mustExist(t, dir+"/bin/june")
+		mustExist(t, dir+"/rules/python/LST01.yml")
+	})
+
+	for _, tt := range []struct {
+		name string
+		set  func(dir string) []string
+	}{
+		{"neither dir set", func(string) []string { return nil }},
+		{"only install dir set", func(dir string) []string { return []string{"JUNE_INSTALL_DIR=" + dir + "/bin"} }},
+		{"only rules dir set", func(dir string) []string { return []string{"JUNE_RULES_DIR=" + dir + "/rules"} }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			env := append([]string{"HOME=", "JUNE_RELEASES_URL=" + srv.URL, "JUNE_VERSION=0.2.0"}, tt.set(dir)...)
+			r := runInstall(t, env...)
+			if r.err == nil {
+				t.Fatalf("install succeeded, want failure\nstdout: %s", r.stdout)
+			}
+			if want := "HOME is not set (set JUNE_INSTALL_DIR and JUNE_RULES_DIR)"; !strings.Contains(r.stderr, want) {
+				t.Errorf("stderr = %q, want it to contain %q", r.stderr, want)
+			}
+			mustNotExist(t, dir+"/bin/june")
+			mustNotExist(t, dir+"/rules")
+		})
+	}
+}
+
 func TestInstallFailures(t *testing.T) {
 	archive := fixtureArchive(t)
 	good := releaseServer(t, archive, sum(archive))
