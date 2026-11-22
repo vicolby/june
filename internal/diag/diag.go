@@ -4,6 +4,9 @@ package diag
 import (
 	"bytes"
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -40,7 +43,12 @@ const (
 	Text Format = "text"
 	// GitHub is one GitHub Actions workflow command per diagnostic, followed by the plain text.
 	GitHub Format = "github"
+	// GitLab renders the plain text and a GitLab Code Quality report beside it.
+	GitLab Format = "gitlab"
 )
+
+// GitLabReport is the path of the Code Quality report, which GitLab reads as a codequality artifact.
+const GitLabReport = "gl-code-quality-report.json"
 
 type Diagnostic struct {
 	File string
@@ -61,8 +69,8 @@ type File struct {
 }
 
 // Render returns sorted plain-text diagnostics, followed by summary when it is not empty.
-// The text is the same for every format; a format adds its native report before it, and the
-// closed switch below is the only place a format is chosen. The output carries no ANSI.
+// The text is the same for every format; a format adds its native report: GitHub as workflow commands before it,
+// GitLab as a Code Quality File beside it. The closed switch below is the only place a format is chosen. The output carries no ANSI.
 func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File) {
 	sorted := append([]Diagnostic(nil), ds...)
 	sort.SliceStable(sorted, func(i, j int) bool { return less(sorted[i], sorted[j]) })
@@ -89,6 +97,8 @@ func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File
 			a.WriteString(annotation(d))
 		}
 		return append(a.Bytes(), b.Bytes()...), nil
+	case GitLab:
+		return b.Bytes(), []File{{Path: GitLabReport, Data: codeQuality(sorted)}}
 	default: // Text, and "" before a caller has chosen one.
 		return b.Bytes(), nil
 	}
@@ -122,6 +132,61 @@ func commandData(s string) string {
 // commandProperty also escapes the characters that separate properties.
 func commandProperty(s string) string {
 	return strings.NewReplacer(":", "%3A", ",", "%2C").Replace(commandData(s))
+}
+
+// codeQuality renders findings and opt-outs as a GitLab Code Quality report.
+// Legacy matches and failures are information or have no location, so they stay out.
+// A fingerprint hashes the file, rule, message and the ordinal among identical ones in sorted order,
+// so it survives edits that only move a finding to another line.
+func codeQuality(sorted []Diagnostic) []byte {
+	type lines struct {
+		Begin int `json:"begin"`
+	}
+	type location struct {
+		Path  string `json:"path"`
+		Lines lines  `json:"lines"`
+	}
+	type entry struct {
+		Description string   `json:"description"`
+		CheckName   string   `json:"check_name"`
+		Fingerprint string   `json:"fingerprint"`
+		Severity    string   `json:"severity"`
+		Location    location `json:"location"`
+	}
+	type key struct{ file, code, msg string }
+	seen := map[key]int{}
+	report := []entry{}
+	for _, d := range sorted {
+		if d.Kind != Finding && d.Kind != OptOut {
+			continue
+		}
+		k := key{d.File, d.Code, d.Msg}
+		sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d", d.File, d.Code, d.Msg, seen[k])))
+		seen[k]++
+		report = append(report, entry{
+			Description: d.Msg,
+			CheckName:   d.Code,
+			Fingerprint: hex.EncodeToString(sum[:]),
+			Severity:    codeQualitySeverity(d),
+			Location:    location{Path: d.File, Lines: lines{Begin: d.Line}},
+		})
+	}
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		panic("diag: code quality report is not marshalable: " + err.Error()) // strings and ints always marshal
+	}
+	return append(data, '\n')
+}
+
+// codeQualitySeverity maps a diagnostic to a Code Quality severity: an error is major, a warning minor, an opt-out info.
+func codeQualitySeverity(d Diagnostic) string {
+	switch {
+	case d.Kind == OptOut:
+		return "info"
+	case d.Sev == Error:
+		return "major"
+	}
+	return "minor"
 }
 
 func escapeControls(text string) string {

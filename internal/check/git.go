@@ -16,8 +16,12 @@ import (
 // scope names the base a git run judged against and where june got it.
 type scope struct{ base, source string }
 
+// fullDepth is the fix for a GitLab clone too shallow to hold the merge request diff base.
+const fullDepth = "clone the full history, with GIT_DEPTH: 0 in the GitLab CI job variables"
+
 const (
 	sourceFlag     = "--base"
+	sourceMR       = "merge request diff base"
 	sourceUpstream = "upstream branch"
 	sourceDefault  = "remote default branch"
 	sourcePull     = "pull request base"
@@ -44,10 +48,11 @@ func pullRequestBase(env Env) string {
 // gitTouched finds the lines added or edited since the merge base of base and HEAD:
 // committed changes, staged and unstaged changes, and untracked files.
 // An empty base is inferred: a GitHub pull request base, else the upstream branch of HEAD, else the remote default branch.
+// source says where a non-empty base came from, so a refusal can name the right fix.
 // Paths are relative to env.Dir. The returned message is a complete "<cause>. Fix: <instruction>" refusal.
 // A cancelled context returns its error.
-func gitTouched(ctx context.Context, env Env, base string) (touchedSet, scope, *string, error) {
-	sc := scope{base, sourceFlag}
+func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, scope, *string, error) {
+	sc := scope{base, source}
 	refuse := func(format string, a ...any) (touchedSet, scope, *string, error) {
 		msg := fmt.Sprintf(format, a...)
 		return nil, scope{}, &msg, nil
@@ -92,12 +97,18 @@ func gitTouched(ctx context.Context, env Env, base string) (touchedSet, scope, *
 		if sc.source == sourcePull {
 			return refuse("the base %q is not a commit in this repository. Fix: set fetch-depth: 0 on actions/checkout so the pull request base is fetched, or pass an existing branch, tag or commit to --base", base)
 		}
+		if sc.source == sourceMR {
+			return refuse("the merge request diff base %s is not a commit in this repository. Fix: %s", base, fullDepth)
+		}
 		return refuse("the base %q is not a commit in this repository. Fix: fetch it, or pass an existing branch, tag or commit to --base", base)
 	}
 	mb, err := git(ctx, env, "", "merge-base", base, "HEAD")
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, scope{}, nil, ctx.Err()
+		}
+		if sc.source == sourceMR {
+			return refuse("HEAD and the merge request diff base %s have no merge base, so the touched lines are unknowable. Fix: %s", base, fullDepth)
 		}
 		return refuse("HEAD and %q have no merge base, so the touched lines are unknowable. Fix: fetch full history (git fetch --unshallow) or pass a base that shares history with HEAD", base)
 	}
