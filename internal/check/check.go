@@ -94,7 +94,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		}
 		var notText *rules.NotTextError
 		if errors.As(err, &notText) {
-			// Scan reports the slash-separated path it was given, which is already relative to the repository.
+			// Scan reports the slash-separated path it was given, already relative to the working directory.
 			return refuse(req, fmt.Sprintf("%q is not UTF-8 text, so it cannot be scanned. Fix: save it as UTF-8 without NUL bytes and run june again", notText.File)), nil
 		}
 		return refuse(req, "ast-grep failed while scanning ("+err.Error()+"). Fix: run ast-grep scan on the changed files to see why"), nil
