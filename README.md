@@ -131,7 +131,7 @@ The MR widget compares against the latest report on the target branch, so also r
 ```yaml
 repos:
   - repo: https://github.com/vicolby/june
-    rev: v0.1.0  # latest release tag
+    rev: v0.3.0  # latest release tag; v0.3.0 is the first with the hook
     hooks:
       - id: june
         args: [--rules, PREFIX/share/june/rules/python]  # omit to use .june/rules
