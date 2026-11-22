@@ -32,6 +32,11 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# install.sh is attached to each release so CI can fetch a script pinned to the release it installs.
+release:
+  extra_files:
+    - glob: install.sh
+
 changelog:
   disable: true
 
