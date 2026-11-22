@@ -550,16 +550,19 @@ func disableSuppressions(source []byte, cs []comment) {
 	}
 }
 
-// optOuts reads the opt-outs out of the comments of source. A comment is an opt-out when it starts with `june:`.
+// optOuts reads from the first `june:` marker's enclosing `#` segment to the end of each comment.
+// Markers that do not begin their segment are diagnosed as malformed rather than silently ignored.
 func (rs *RuleSet) optOuts(file string, source []byte, cs []comment) []OptOut {
 	var out []OptOut
 	for _, c := range cs {
 		text := string(source[c.start:c.end])
-		if !strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(text, "#")), optOutMarker) {
+		at := strings.Index(text, optOutMarker)
+		if at < 0 {
 			continue
 		}
+		start := strings.LastIndex(text[:at], "#") // Every Python comment starts with #.
 		o := OptOut{File: file, Line: c.line, Col: c.col}
-		o.Rule, o.Reason, o.Problem = rs.parseOptOut(text)
+		o.Rule, o.Reason, o.Problem = rs.parseOptOut(text[start:])
 		out = append(out, o)
 	}
 	return out

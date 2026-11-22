@@ -28,8 +28,7 @@ A finding names the file, line, rule id, and the corrective instruction.
 An agent fixes it with no human translation, the same way it fixes ruff or mypy output.
 june fixes nothing itself, so the agent always sees what was wrong.
 A rule has a severity, and only an error fails the check, so a rule that is right most of the time can still ship as a warning.
-A line can opt out of one named rule with an inline comment that carries a written reason.
-june prints every opt-out a change adds, so a reviewer sees them in the log.
+Opt-outs require a written reason and stay visible to reviewers; their syntax and scope follow the [opt-out contract](README.md#opt-outs).
 june runs in GitHub Actions and GitLab CI and as a pre-commit hook, with the same verdict everywhere.
 In each CI it also reports findings in that CI's native format, beside the plain text.
 The same input gives the same verdict on every run, with no network and no model.

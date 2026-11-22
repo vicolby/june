@@ -515,6 +515,9 @@ t = []  # june: ignore[LST01]	why
 u = []  #  june: ignore[LST01] why
 v = []  # june:  ignore[LST01] why
 w = []  # june: ignore[	LST01	] why
+x = []  # noqa: E501  # june: ignore[LST01] after another comment
+y = []  # type: ignore # june: ignore[LST01]
+z = []  # noqa: E501 june: ignore[LST01] no hash before the marker
 `)
 	got, err := scanFiles(context.Background(), rs, py)
 	if err != nil {
@@ -549,6 +552,7 @@ w = []  # june: ignore[	LST01	] why
 		{8, "", "", true},
 		{9, "", "", true},
 		{10, "", "", true},
+		{12, "", "", true},
 		{14, "", "", true},
 		{15, "", "", true},
 		{16, "LST01", "", true},
@@ -559,6 +563,9 @@ w = []  # june: ignore[	LST01	] why
 		{21, "", "", true},
 		{22, "", "", true},
 		{23, "", "", true},
+		{24, "LST01", "after another comment", false},
+		{25, "LST01", "", true},
+		{26, "", "", true},
 	}
 	if fmt.Sprint(have) != fmt.Sprint(want) {
 		t.Errorf("opt-outs = %v, want %v", have, want)

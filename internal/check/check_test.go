@@ -1055,3 +1055,37 @@ func TestASTGrepDescription(t *testing.T) {
 		t.Errorf("missing: ASTGrep = %q, want %q", got, want)
 	}
 }
+
+func TestOptOutFollowsOtherComments(t *testing.T) {
+	env := tree(t, map[string]string{"a.py": "def a(x=[]):  # noqa: B006  # june: ignore[PY012] shared on purpose\n    pass\n" +
+		"def b(x=[]):  # type: ignore # june: ignore[PY012]\n    pass\n" +
+		"def c(x=[]):  # note june: ignore[PY012] prose, not an opt-out\n    pass\n"})
+	expect(t, change(t, env, "a.py:1-6\n"), 1, "a.py:1:15: PY012 opt-out: shared on purpose\n"+
+		"a.py:3:15: OPTOUT malformed opt-out suppresses nothing: the reason is required. Fix: write # june: ignore[RULE] reason\n"+
+		"a.py:5:15: OPTOUT malformed opt-out suppresses nothing: the comment must start with `# june: ignore[`. Fix: write # june: ignore[RULE] reason\n"+
+		"a.py:3:9: "+py012+
+		"a.py:5:9: "+py012)
+}
+
+// The accept-or-warn contract requires misplaced markers to be visible even without a finding.
+// Exact output rejects silently dropping either the marker or the original violation.
+func TestOptOutEmbeddedMarkersWarn(t *testing.T) {
+	for _, prefix := range []string{"# noqa: B006", "# type: ignore", "# note"} {
+		t.Run(prefix, func(t *testing.T) {
+			env := tree(t, map[string]string{"a.py": "def a(x=[]):  " + prefix + " june: ignore[PY012] shared on purpose\n    pass\n" +
+				"x = 1  " + prefix + " june: ignore[PY012] clean line\n"})
+			const warning = "OPTOUT malformed opt-out suppresses nothing: the comment must start with `# june: ignore[`. Fix: write # june: ignore[RULE] reason\n"
+			expect(t, change(t, env, "a.py:1-3\n"), 1, "a.py:1:15: "+warning+
+				"a.py:3:8: "+warning+
+				"a.py:1:9: "+py012)
+		})
+	}
+}
+
+func TestOptOutCoversExactlyOneMatch(t *testing.T) {
+	env := tree(t, map[string]string{"a.py": "def a(x=[], y=[]):  # june: ignore[PY012] two on one line\n    pass\n"})
+	res := change(t, env, "a.py:1\n")
+	expect(t, res, 1, "a.py:1:21: PY012 opt-out: two on one line (suppresses nothing: 2 PY012 findings on this line, an opt-out covers exactly one. Fix: fix a violation or split the line)\n"+
+		"a.py:1:9: "+py012+
+		"a.py:1:15: "+py012)
+}
