@@ -71,7 +71,24 @@ func change(t *testing.T, env check.Env, list string) check.Result {
 	return res
 }
 
-var summaryLine = regexp.MustCompile(`^june: \d+ errors?, \d+ warnings?, \d+ opt-outs?; checked \d+ files?, \d+ changed lines?(; base \S+ \([a-z -]+\))?\n$`)
+var summaryLine = regexp.MustCompile(`^june: \d+ errors?, \d+ warnings?, \d+ opt-outs?; checked \d+ files?, \d+ changed lines?(; \d+ files? skipped, not readable as text)?(; base \S+ \([a-z -]+\))?\n$`)
+
+// skippedText is the warning june prints when a Python file is left out of the scan.
+func skippedText(file, reason string) string {
+	return file + ":1:1: ENCODING file not scanned: " + reason + ". Fix: add a PEP 263 coding declaration for a supported encoding, or save it as UTF-8\n"
+}
+
+func wantSkippedSummary(t *testing.T, res check.Result, n int) {
+	t.Helper()
+	noun := "files"
+	if n == 1 {
+		noun = "file"
+	}
+	want := fmt.Sprintf("%d %s skipped, not readable as text", n, noun)
+	if !strings.Contains(summaryOf(res), want) {
+		t.Errorf("summary = %q, want it to contain %q", summaryOf(res), want)
+	}
+}
 
 // expect compares the findings in Out; the summary line has its own tests, so here it only has to close the output.
 func expect(t *testing.T, res check.Result, exit int, findings string) {
@@ -115,6 +132,31 @@ func TestRangeTouchesEveryLineInIt(t *testing.T) {
 func TestMatchOnUntouchedLineNeverFails(t *testing.T) {
 	env := tree(t, map[string]string{"app.py": "def f(a=[]):\n    pass\n\nx = 1\n"})
 	expect(t, change(t, env, "app.py:3-4\n"), 0, "")
+}
+
+// Python ends a physical line at CR, LF, or CRLF
+// (https://docs.python.org/3/reference/lexical_analysis.html#physical-lines).
+// CRLF still shares LF with the scanner, so the violation stays on that line.
+// A bare CR does not, and listing the Python line must name the file instead of passing clean.
+func TestCRLFKeepsPythonLineNumbers(t *testing.T) {
+	env := tree(t, map[string]string{
+		"latin.py": "# coding: latin-1\r\nx = '\xe9'\r\ndef f(a=[]): pass\r\n",
+		"utf.py":   "x = 1\r\ndef f(a=[]): pass\r\n",
+	})
+	expect(t, change(t, env, "latin.py:3\nutf.py:2\n"), 1, "latin.py:3:9: "+py012+"utf.py:2:9: "+py012)
+	expect(t, change(t, env, "latin.py:2\nutf.py:1\n"), 0, "")
+}
+
+func TestBareCarriageReturnIsSkippedNotShifted(t *testing.T) {
+	const reason = "it uses bare carriage returns as line endings"
+	env := tree(t, map[string]string{
+		"app.py": "# coding: latin-1\r# caf\xe9\r\ndef f(a=[]): pass\n",
+		"utf.py": "x = 1\rdef f(a=[]): pass\n",
+		"ok.py":  "def g(b=[]): pass\n",
+	})
+	res := change(t, env, "app.py:3\nutf.py:2\nok.py:1\n")
+	expect(t, res, 1, skippedText("app.py", reason)+"ok.py:1:9: "+py012+skippedText("utf.py", reason))
+	wantSkippedSummary(t, res, 2)
 }
 
 func TestMatchIsJudgedOnItsFirstLineOnly(t *testing.T) {

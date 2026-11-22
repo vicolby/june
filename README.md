@@ -67,7 +67,7 @@ Without `--base` or `--changed-lines`, june infers the base, first hit wins: pre
 
 ### Source encoding
 
-june reads a Python file as Python does: UTF-8, or the encoding its first two lines declare (PEP 263, e.g. `# -*- coding: latin-1 -*-`). It transcodes `utf-8`, `latin-1`, `ascii` and `cp1252` files, so line numbers are unchanged. A file it cannot read (another declared encoding, invalid bytes, NUL bytes) is not scanned: june prints `file:1:1: ENCODING file not scanned: <reason>` as a warning and ends the summary with `N files skipped`. Other files are still judged, and a skipped file never changes the exit code.
+june reads a Python file as Python does: UTF-8, or the encoding its first two lines declare (PEP 263, e.g. `# -*- coding: latin-1 -*-`). It transcodes `utf-8`, `latin-1`, `ascii` and `cp1252` files, so line numbers are unchanged. A file it cannot read (another declared encoding, invalid bytes, NUL bytes, or a bare carriage return) is not scanned: june prints `file:1:1: ENCODING file not scanned: <reason>` as a warning and ends the summary with `N files skipped`. Other files are still judged, and a skipped file never changes the exit code.
 
 ## Rules
 

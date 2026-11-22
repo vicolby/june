@@ -23,7 +23,7 @@ Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`, whic
 - Exit 2 means june could not give a verdict (no base, shallow clone, bad rules, missing ast-grep, bad list, unwritable report). Output reads `june: error: <cause>. Fix: <instruction>`.
 - A touched line is one added or edited in the post-image. Pure deletions, mode changes and pure renames touch nothing. A new file touches every line, including an untracked file in a local run.
 - A match is judged on its first line only, so rules match the smallest wrong node.
-- Scan reads each file as Python does (PEP 263) and transcodes utf-8, latin-1, ascii and cp1252 to UTF-8, which keeps line numbers. A file it cannot read as text is skipped with a reason and never fails the scan; `check` warns for each and counts them in the summary.
+- Scan reads each file as Python does (PEP 263) and transcodes utf-8, latin-1, ascii and cp1252 to UTF-8, which keeps line numbers. A file it cannot read as text, including one that uses a bare carriage return, is skipped with a reason and never fails the scan; `check` warns for each and counts them in the summary.
 - If the touched set is unknowable, the exit is 2, never 0 and never every line. A GitHub push with no base and no changed-lines list is unknowable even when the branch tracks its remote.
 - An opt-out is a same-line Python comment `# june: ignore[RULE_ID] <reason>` naming one loaded rule, with a nonblank reason. A comment starting with `june:` that does not parse suppresses nothing and says why. The same text in a string literal is not an opt-out.
 - Every opt-out on a touched line is printed, honoured or not.

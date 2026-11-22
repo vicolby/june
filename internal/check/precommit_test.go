@@ -168,8 +168,10 @@ func TestStagedNULFilterUsesTheIndexBlob(t *testing.T) {
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), old+"\x00")
 	git(t, env.Dir, "add", "app.py")
-	write(t, filepath.Join(env.Dir, "app.py"), old)
-	expect(t, infer(t, hook(env, nil)), 0, "")
+	write(t, filepath.Join(env.Dir, "app.py"), old) // the worktree has the violation; the index blob does not
+	res := infer(t, hook(env, nil))
+	expect(t, res, 0, skippedText("app.py", "it contains NUL bytes"))
+	wantSkippedSummary(t, res, 1)
 }
 
 func TestStagedSymlinkIsNotScannedAsPython(t *testing.T) {
@@ -269,9 +271,11 @@ func TestPreCommitRefsSkipANULInTheCommittedBlob(t *testing.T) {
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), old+"\x00")
 	commit(t, env)
-	write(t, filepath.Join(env.Dir, "app.py"), old)
+	write(t, filepath.Join(env.Dir, "app.py"), old) // the worktree has the violation; the committed blob does not
 	refs := hook(env, map[string]string{"PRE_COMMIT_FROM_REF": "main", "PRE_COMMIT_TO_REF": revParse(t, env.Dir, "HEAD")})
-	expect(t, infer(t, refs), 0, "")
+	res := infer(t, refs)
+	expect(t, res, 0, skippedText("app.py", "it contains NUL bytes"))
+	wantSkippedSummary(t, res, 1)
 }
 
 func TestPreCommitRefsWithAnUnknownToRefAreRefused(t *testing.T) {

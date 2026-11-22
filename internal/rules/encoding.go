@@ -11,7 +11,8 @@ import (
 // Python reads source in the encoding its first two lines declare (PEP 263), UTF-8 when none does.
 // ast-grep only reads UTF-8, so a file is transcoded before it is staged. Every supported encoding
 // maps each byte to one character and never to or from a line break, so line numbers are preserved
-// (columns count characters of the transcoded text).
+// (columns count characters of the transcoded text). A bare carriage return is a Python line ending
+// the scanner does not share, so a file that contains one is skipped rather than shifted.
 
 // codingDeclaration is the PEP 263 pattern, matched against one line.
 var codingDeclaration = regexp.MustCompile(`^[ \t\f]*#.*?coding[:=][ \t]*([-_.a-zA-Z0-9]+)`)
@@ -46,6 +47,17 @@ func cutLine(b []byte) (line, rest []byte) {
 		n++
 	}
 	return b[:i], b[n:]
+}
+
+// bareCR reports a carriage return that does not begin a CRLF pair.
+// Python ends a physical line at that byte; the scanner only ends a line at LF.
+func bareCR(b []byte) bool {
+	for i := 0; i < len(b); i++ {
+		if b[i] == '\r' && (i+1 == len(b) || b[i+1] != '\n') {
+			return true
+		}
+	}
+	return false
 }
 
 type codec int
@@ -92,6 +104,7 @@ func toUTF8(source []byte) ([]byte, string) {
 	if bytes.HasPrefix(source, []byte("\xef\xbb\xbf")) && c != codecUTF8 {
 		return nil, fmt.Sprintf("it starts with a UTF-8 byte order mark but declares %q", name)
 	}
+	var text []byte
 	switch c {
 	case codecUTF8:
 		if !utf8.Valid(source) {
@@ -100,7 +113,7 @@ func toUTF8(source []byte) ([]byte, string) {
 			}
 			return nil, "it is not valid UTF-8 and declares no other encoding"
 		}
-		return source, ""
+		text = source
 	case codecLatin1, codecCP1252, codecASCII:
 		out := make([]byte, 0, len(source)+len(source)/8)
 		for _, b := range source {
@@ -116,7 +129,12 @@ func toUTF8(source []byte) ([]byte, string) {
 			}
 			out = utf8.AppendRune(out, r)
 		}
-		return out, ""
+		text = out
+	default:
+		return nil, fmt.Sprintf("it declares the encoding %q, which june cannot read (supported: utf-8, latin-1, ascii, cp1252)", name)
 	}
-	return nil, fmt.Sprintf("it declares the encoding %q, which june cannot read (supported: utf-8, latin-1, ascii, cp1252)", name)
+	if bareCR(text) {
+		return nil, "it uses bare carriage returns as line endings"
+	}
+	return text, ""
 }

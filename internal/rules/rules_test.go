@@ -260,6 +260,8 @@ func TestScanTranscodesDeclaredEncodings(t *testing.T) {
 		"cp1252":              {"# coding=cp1252\nx = '\x93q\x94'\ny = []\n", ""},
 		"latin-1 but UTF-8":   {"# coding: latin-1\nx = '\u00e9'\ny = []\n", ""},
 		"ascii":               {"# coding: ascii\nx = 1\ny = []\n", ""},
+		"crlf latin-1":        {"# -*- coding: latin-1 -*-\r\nx = '\xe9'\r\ny = []\r\n", ""},
+		"crlf utf-8":          {"x = 1\r\ny = []\r\n", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			py := filepath.Join(t.TempDir(), "legacy.py")
@@ -286,6 +288,9 @@ func TestScanSkipsUnreadableTextAndKeepsOtherFiles(t *testing.T) {
 		"ascii high byte":  "# coding: ascii\nx = '\xe9'\n",
 		"BOM with latin-1": "\xef\xbb\xbf# coding: latin-1\nx = []\n",
 		"declaration late": "x = 1\n# coding: latin-1\ny = '\xe9'\n",
+		"bare cr":          "x = 1\ry = []\n",
+		"bare cr only":     "x = 1\ry = []\r",
+		"bare cr latin-1":  "# coding: latin-1\r# caf\xe9\r\ny = []\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			bad := filepath.Join(dir, "bad.py")
@@ -296,6 +301,9 @@ func TestScanSkipsUnreadableTextAndKeepsOtherFiles(t *testing.T) {
 			}
 			if len(got.Matches) != 1 || got.Matches[0].File != good {
 				t.Errorf("Matches = %+v, want the finding in the readable file", got.Matches)
+			}
+			if strings.HasPrefix(name, "bare cr") && !strings.Contains(got.Skipped[0].Reason, "carriage return") {
+				t.Errorf("Reason = %q, want the bare carriage return named", got.Skipped[0].Reason)
 			}
 		})
 	}
