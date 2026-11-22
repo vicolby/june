@@ -742,7 +742,7 @@ func TestSuppliedListNeedsNeitherGitNorABase(t *testing.T) {
 
 func TestDubiousOwnershipNamesGitAndTheSafeDirectoryFix(t *testing.T) {
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
-	env.Vars = map[string]string{"GIT_TEST_ASSUME_DIFFERENT_OWNER": "1"}
+	env.Vars = dubiousOwnershipEnv()
 	root, err := filepath.EvalSymlinks(env.Dir)
 	if err != nil {
 		t.Fatal(err)
@@ -765,7 +765,7 @@ func TestDubiousOwnershipFromASubdirectoryNamesTheRepositoryRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res := against(t, check.Env{Dir: sub, Vars: map[string]string{"GIT_TEST_ASSUME_DIFFERENT_OWNER": "1"}}, "main")
+	res := against(t, check.Env{Dir: sub, Vars: dubiousOwnershipEnv()}, "main")
 	assertDubiousOwnershipFix(t, res, root)
 	if subRoot, err := filepath.EvalSymlinks(sub); err != nil {
 		t.Fatal(err)
@@ -783,6 +783,17 @@ func TestDubiousOwnershipWithoutARepositoryPathQuotesGitOnly(t *testing.T) {
 	t.Setenv("PATH", bin)
 	res := against(t, check.Env{Dir: t.TempDir()}, "main")
 	refused(t, res, "june: error: git could not inspect the repository (fatal: detected dubious ownership in repository). Fix: run git rev-parse --is-inside-work-tree to see why\n")
+}
+
+// dubiousOwnershipEnv makes git treat the work tree as someone else's.
+// GIT_CONFIG_NOSYSTEM drops host safe.directory exemptions. GitHub-hosted
+// runners set safe.directory=* in the system config, which would accept the
+// repository and hide the refusal.
+func dubiousOwnershipEnv() map[string]string {
+	return map[string]string{
+		"GIT_TEST_ASSUME_DIFFERENT_OWNER": "1",
+		"GIT_CONFIG_NOSYSTEM":             "1",
+	}
 }
 
 // assertDubiousOwnershipFix checks that the refusal's safe.directory value is root.
