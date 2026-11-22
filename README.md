@@ -168,7 +168,7 @@ june: 4 errors, 0 warnings, 1 opt-out; checked 1 file, 12 changed lines; base ma
 
 The summary line ends with the base and where it came from (`--base`, `pre-commit refs`, `staged diff`, `pull request base`, `merge request diff base`, `upstream branch` or `remote default branch`).
 The base label is the one intentional non-report difference between environments, because each vendor resolves its base differently.
-The same lines are the whole output everywhere; CI runs add native annotations beside them.
+Those lines are the whole output everywhere apart from that base label; CI runs add native annotations beside them.
 
 ## Rules
 
@@ -212,7 +212,7 @@ def tag(items, cache={}):  # june: ignore[PY012] cache is shared on purpose
 
 ## GitHub Actions
 
-On a pull request june judges the lines changed since the pull request base and annotates each finding on the diff, beside the same plain text.
+On a pull request june judges the lines changed since the pull request base and annotates each finding on the diff, beside the plain text.
 It needs the base branch in the checkout, so fetch the full history.
 Ubuntu images install Homebrew at `/home/linuxbrew/.linuxbrew` and leave it off `PATH`, so add its `bin` directory before `brew install`:
 
