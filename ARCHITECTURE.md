@@ -60,7 +60,7 @@ The summary line prints the base and where it came from.
 Errors:
 - `Change` returns an `error` for cancellation or when june cannot produce an explanation.
 - Other outcomes june can explain, such as a shallow clone, a missing merge base, a push event with no base, a rule fault, a missing ast-grep or a bad list, come back as a diagnostic with Exit 2.
-- `cmd/june` explains cancellation and a working-directory lookup failure as Exit 2 diagnostics, preserving the lookup cause; it reserves the june-bug message for unexplained errors.
+- `cmd/june` explains cancellation, a working-directory lookup failure and a report file that cannot be written as Exit 2 diagnostics, preserving the lookup or write cause. The report failure follows the verdict text already written. It reserves the june-bug message for unexplained errors.
 - Each reads `june: error: <cause>. Fix: <instruction>`.
 - A cancelled context abandons changed-list reads and kills child processes.
 
@@ -110,20 +110,26 @@ Each is an error with a corrective message and its own valid and invalid example
 The list contains one `path:7` or `path:7-12` entry per line, with one-based, inclusive line ranges and paths relative to the working directory.
 Blank lines are ignored; whitespace in filenames is preserved, and only `.py` files are checked.
 `--base REF` judges lines added or edited since the merge base with REF, including committed changes, worktree changes and untracked files; the list wins when both are given.
-Without either, a bare `june` infers the base locally from git, first hit wins: the upstream branch of HEAD, then the default branch of `origin` (`refs/remotes/origin/HEAD`). Nothing is fetched.
+Without either, a bare `june` infers the base. A GitLab merge request pipeline takes the merge request diff base, described below; otherwise inference is local and first hit wins: the upstream branch of HEAD, then the default branch of `origin` (`refs/remotes/origin/HEAD`). Nothing is fetched.
 When no base can be inferred, git is missing or the directory is not in a work tree, or the merge base is missing (a shallow clone), june exits 2 naming the fix; the touched set is never every line.
-The current check emits plain text. Completed checks (exit 0 or 1) end with a summary line, `june: 1 error, 0 warnings, 0 opt-outs; checked 2 files, 5 changed lines`; a git run adds `; base origin/main (upstream branch)`, naming the base and its source (`--base`, `upstream branch` or `remote default branch`), and a supplied list adds none; refusals (exit 2) have no summary.
+The current check emits plain text. Completed checks (exit 0 or 1) end with a summary line, `june: 1 error, 0 warnings, 0 opt-outs; checked 2 files, 5 changed lines`; a git run adds `; base origin/main (upstream branch)`, naming the base and its source (`--base`, `merge request diff base`, `upstream branch` or `remote default branch`), and a supplied list adds none; refusals (exit 2) have no summary.
 Coverage counts distinct touched Python files and changed lines, counting overlapping ranges only once; the opt-out count is every opt-out printed on a touched line, honoured or not.
 `--legacy` also lists matches on untouched lines of the checked files, one `legacy: file:line:col: CODE message` line each after the findings, and the summary gains `; 2 legacy violations listed`.
 Legacy lines never change the exit code, are off by default, and a valid opt-out on the untouched line hides its legacy line.
 `june verify` runs every example of every rule and prints `june: verified 5 rules, 135 examples` on success. Any fault exits 2, as it does for a normal run, and each fault is one line naming the rules directory, the rule file, or the sidecar, and, for a failing example, the example.
-CI base inference (pre-commit refs, pull and merge request bases, staged diffs) and CI-specific formats remain planned.
+On a check in a GitLab CI job (`GITLAB_CI=true`) the format is inferred as GitLab, and `cmd/june` writes `Files` beside the text: `gl-code-quality-report.json` in the working directory, an empty array for a clean run and no file for a refusal. `june verify` stays text.
+Findings are `major` for an error and `minor` for a warning, opt-outs are `info`, and legacy matches stay out; each fingerprint hashes file, rule, message and the ordinal among identical ones.
+A merge request pipeline takes its base after `--base` and before local inference, and names it `merge request diff base` in the summary.
+A detached pipeline (`CI_MERGE_REQUEST_DIFF_BASE_SHA` set) uses that sha.
+A merged results or merge train pipeline (`CI_MERGE_REQUEST_EVENT_TYPE` of `merged_result` or `merge_train`) uses the merge commit's first parent, `HEAD^1`, resolved to its sha for the summary; `CI_MERGE_REQUEST_TARGET_BRANCH_SHA` is ignored, since on a later merge train car it is the target tip and not the first parent.
+A clone too shallow to hold the base exits 2 pointing at `GIT_DEPTH: 0`.
+Pre-commit refs, the GitHub pull request base, staged diffs and the GitHub format remain planned.
 
 `cmd/june` is a shell and owns no decision.
 It maps flags to a `Request`, snapshots the environment, writes `Out` and `Files`, and returns `Exit`.
 
 ```
-june                          # identical in a dev shell, pre-commit, GitHub Actions and GitLab CI
+june                          # dev shell; a GitLab check also writes the Code Quality report
 june --base main --legacy
 june --changed-lines FILE     # "-" reads stdin
 june --rules shared --rules .june/rules   # shared rules layered under repo rules

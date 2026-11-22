@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 
 	"github.com/vicolby/june/internal/diag"
 	"github.com/vicolby/june/internal/rules"
@@ -30,7 +31,7 @@ type Request struct {
 	// Rules lists the rules directories, merged into one set; empty means ./.june/rules.
 	// A directory named twice counts once, and a rule id defined in two files is a rule fault.
 	Rules []string
-	// Format is the output format; "" means text.
+	// Format is the output format; empty is inferred, and is plain text outside GitLab CI.
 	Format diag.Format
 	// Legacy also lists rule matches on untouched lines of the checked files, as information only.
 	// They never change Exit; off by default.
@@ -55,6 +56,9 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
+	}
+	if req.Format == "" {
+		req.Format = inferFormat(env)
 	}
 	touched, sc, bad, err := findTouched(ctx, env, req)
 	if err != nil {
@@ -237,7 +241,13 @@ func count(n int, noun string) string {
 // The scope is zero for a supplied list. The touched set is never "every line": what cannot be known is refused.
 func findTouched(ctx context.Context, env Env, req Request) (touchedSet, scope, *string, error) {
 	if req.Changed == nil {
-		return gitTouched(ctx, env, req.Base)
+		if req.Base != "" {
+			return gitTouched(ctx, env, req.Base, sourceFlag)
+		}
+		if base := mergeRequestBase(ctx, env); base != "" {
+			return gitTouched(ctx, env, base, sourceMR)
+		}
+		return gitTouched(ctx, env, "", "")
 	}
 	var touched touchedSet
 	var bad *string
@@ -257,7 +267,43 @@ func findTouched(ctx context.Context, env Env, req Request) (touchedSet, scope, 
 	return touched, scope{}, bad, nil
 }
 
+// gitlab reports whether the run is a GitLab CI job.
+func gitlab(env Env) bool { return env.Vars["GITLAB_CI"] == "true" }
+
+// mergeRequestBase is the commit a GitLab merge request pipeline judges from, or "" outside one.
+// Detached pipelines use the diff base. Merged results and merge trains check out a merge commit,
+// so the merge request's own changes are that commit's first parent through HEAD.
+// CI_MERGE_REQUEST_TARGET_BRANCH_SHA is never used for this: it is the target branch tip, which on a later
+// merge train car sits behind the first parent and would blame this merge request for the cars ahead of it.
+// An unresolvable first parent comes back as "HEAD^1", which the git adapter refuses with a named fix.
+func mergeRequestBase(ctx context.Context, env Env) string {
+	if !gitlab(env) {
+		return ""
+	}
+	switch env.Vars["CI_MERGE_REQUEST_EVENT_TYPE"] {
+	case "merged_result", "merge_train":
+		if out, err := git(ctx, env, "", "rev-parse", "--verify", "--quiet", "HEAD^1^{commit}"); err == nil {
+			if sha := strings.TrimSpace(out); sha != "" {
+				return sha
+			}
+		}
+		return "HEAD^1"
+	default:
+		return env.Vars["CI_MERGE_REQUEST_DIFF_BASE_SHA"]
+	}
+}
+
+// inferFormat picks the output format of the CI the run is in; the plain text is the same everywhere.
+func inferFormat(env Env) diag.Format {
+	if gitlab(env) {
+		return diag.GitLab
+	}
+	return diag.Text
+}
+
+// refuse explains why there is no verdict. A refusal is text only: a report would read as a clean run.
 func refuse(req Request, msgs ...string) Result {
+	req.Format = diag.Text
 	ds := make([]diag.Diagnostic, len(msgs))
 	for i, m := range msgs {
 		ds[i] = diag.Diagnostic{Kind: diag.Failure, Sev: diag.Error, Msg: m}
