@@ -386,12 +386,30 @@ func TestPullRequestExplicitBaseThatJudgesNothingWarns(t *testing.T) {
 	}
 }
 
-func TestMergeGroupAtItsBaseIsRefused(t *testing.T) {
-	env, sha := mergeGroup(t)
-	git(t, env.Dir, "checkout", "-q", "--detach", sha)
-	res := infer(t, env)
-	if res.Exit != 2 || !strings.Contains(string(res.Out), "HEAD is the base \""+sha+"\" of this merge group, so nothing was judged.") {
-		t.Errorf("Exit = %d, Out =\n%s", res.Exit, res.Out)
+func TestMergeGroupThatJudgesNothingPassesWithoutWarning(t *testing.T) {
+	for _, state := range []string{"at-base", "docs-only"} {
+		t.Run(state, func(t *testing.T) {
+			env, sha := mergeGroup(t)
+			git(t, env.Dir, "checkout", "-q", "--detach", sha)
+			if state == "docs-only" {
+				write(t, filepath.Join(env.Dir, "README.md"), "docs\n")
+				commit(t, env)
+			}
+			for _, base := range []string{"", sha, "HEAD"} {
+				res := against(t, env, base)
+				if res.Exit != 0 || len(res.Diags) != 0 {
+					t.Errorf("base %q: Exit = %d, Diags = %+v, Out =\n%s", base, res.Exit, res.Diags, res.Out)
+				}
+				wantBase, source := base, "--base"
+				if base == "" {
+					wantBase, source = sha, "merge group base"
+				}
+				want := "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; base " + wantBase + " (" + source + ")"
+				if summaryOf(res) != want {
+					t.Errorf("summary = %q, want %q", summaryOf(res), want)
+				}
+			}
+		})
 	}
 }
 

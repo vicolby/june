@@ -130,7 +130,7 @@ jobs:
 
 Inputs: `rules` (default `.june/rules`), `base` (a git ref to judge against), `version`.
 
-On a pull request june judges lines changed since the PR base and annotates the diff. In a merge queue (`merge_group`) it judges the group against `merge_group.base_sha`. If a pull request or merge group event judges 0 changed lines, june warns; if HEAD is the base, it exits 2. `pull_request_target` checks out the base branch by default, which is that case: use `pull_request`, or check out the pull request head.
+On a pull request june judges lines changed since the PR base and annotates the diff. In a merge queue (`merge_group`) it judges the group against `merge_group.base_sha`. If a pull request event judges 0 changed lines, june warns; if HEAD is the base, it exits 2. `pull_request_target` checks out the base branch by default, which is that case: use `pull_request`, or check out the pull request head.
 
 Without the action, install june with `brew install vicolby/tap/june` or the install script above, and run `june --rules .june/rules`.
 

@@ -83,17 +83,12 @@ func isObjectID(s string) bool {
 	return true
 }
 
-func changeEvent(env Env, sc scope) string {
+func pullRequestDiff(env Env, sc scope) bool {
 	if !onGitHub(env) || sc.base == "" || sc.source == sourceRefs || sc.source == sourceStaged {
-		return ""
+		return false
 	}
-	switch env.Vars["GITHUB_EVENT_NAME"] {
-	case "pull_request", "pull_request_target":
-		return "pull request"
-	case "merge_group":
-		return "merge group"
-	}
-	return ""
+	event := env.Vars["GITHUB_EVENT_NAME"]
+	return event == "pull_request" || event == "pull_request_target"
 }
 
 // gitTouched finds the lines a change added or edited.
@@ -229,14 +224,12 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 			}
 			end = toRef
 		}
-		// A pull request or merge group is a change, so HEAD at its base means the checkout is not the change
-		// (pull_request_target checks out the base branch by default) and a pass would judge nothing.
-		if event := changeEvent(env, sc); event != "" {
+		if pullRequestDiff(env, sc) {
 			head, herr := git(ctx, env, "", "rev-parse", "HEAD^{commit}")
 			target, terr := git(ctx, env, "", "rev-parse", base+"^{commit}")
 			if herr == nil && terr == nil && strings.TrimSpace(head) == strings.TrimSpace(target) {
-				return refuse("HEAD is the base %q of this %s, so nothing was judged. Fix: check out the change under review (with pull_request_target, set ref on actions/checkout to the pull request head), or run june on pull_request",
-					base, event)
+				return refuse("HEAD is the base %q of this pull request, so nothing was judged. Fix: check out the change under review (with pull_request_target, set ref on actions/checkout to the pull request head), or run june on pull_request",
+					base)
 			}
 		}
 		var err error
