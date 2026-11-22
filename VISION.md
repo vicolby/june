@@ -50,7 +50,9 @@ june is not a linter engine, not a replacement for ruff or mypy, and not a rule 
 The check path has no model.
 In version 2 the LLM review is a separate command, and its findings never decide a verdict.
 Version 1 checks Python only.
-It ships through Homebrew, with the bundled rules and ast-grep as a dependency. There is no pip package and no container image.
+It ships through Homebrew, with the bundled rules and ast-grep as a dependency.
+It also ships as release binaries for darwin and linux, with the bundled rules, and ast-grep installed separately.
+There is no pip package and no container image.
 june finds the touched lines itself from git against the target branch, and also accepts a list of changed lines from the CI job or the pre-commit hook.
 Reviewing the guidelines no tool can check belongs to version 2.
 Reporting per-guideline coverage belongs to a later version.

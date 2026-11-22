@@ -10,6 +10,39 @@ brew install vicolby/tap/june
 
 This installs the `june` binary, `ast-grep` as a dependency, and the bundled rules.
 
+### Release binaries
+
+Each [release](https://github.com/vicolby/june/releases) attaches a `tar.gz` archive per platform (`darwin` and `linux`, `amd64` and `arm64`) and a `checksums.txt`.
+An archive holds the `june` binary and a `rules/` directory with the bundled rules.
+Unlike the Homebrew formula, an archive does not install `ast-grep`: install it separately and put it on `PATH`, for example `npm install --global @ast-grep/cli`.
+
+This example fits a CI job. Set `VERSION` to a release without the leading `v`, and `OS` and `ARCH` to the platform:
+
+```sh
+VERSION=0.2.0 OS=linux ARCH=amd64
+ARCHIVE="june_${VERSION}_${OS}_${ARCH}.tar.gz"
+BASE="https://github.com/vicolby/june/releases/download/v${VERSION}"
+curl -fsSLO "${BASE}/${ARCHIVE}"
+curl -fsSLO "${BASE}/checksums.txt"
+grep " ${ARCHIVE}$" checksums.txt | sha256sum -c -   # on macOS: shasum -a 256 -c -
+mkdir -p "$HOME/.local/bin" "$HOME/.local/share/june"
+tar -xzf "${ARCHIVE}" -C "$HOME/.local/share/june" rules
+tar -xzf "${ARCHIVE}" -C "$HOME/.local/bin" june
+june --version
+```
+
+The archive has no top-level directory, so extract it into the places you want: the binary goes on `PATH` and `rules/` anywhere readable.
+june never finds the bundled rules on its own, so pass them with `--rules`:
+
+```sh
+june verify --rules "$HOME/.local/share/june/rules/python"
+june --rules "$HOME/.local/share/june/rules/python"
+```
+
+To adopt them in a repo, copy `rules/python` to `.june/rules`, the default rules directory, and drop `--rules`.
+
+Release assets of a private fork or mirror need a token. Download with `gh release download "v${VERSION}" --repo vicolby/june --pattern "${ARCHIVE}" --pattern checksums.txt` and `GH_TOKEN` set, instead of the `curl` lines.
+
 ## Bundled rules
 
 Bundled rules are opt-in: june never loads them on its own.
