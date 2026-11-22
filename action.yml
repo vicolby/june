@@ -1,0 +1,48 @@
+name: june
+description: Check the lines a change touches against your guideline rules. Installs june and ast-grep, then runs june.
+inputs:
+  version:
+    description: june release to install, X.Y.Z. Default is the release the action is pinned to (uses vicolby/june@vX.Y.Z); required for any other ref.
+    default: ""
+  rules:
+    description: Rules directory.
+    default: .june/rules
+  base:
+    description: Git ref to judge changes against. Default is the pull request base, or the merge group base in a merge queue.
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Install june and ast-grep
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
+      run: |
+        set -eu
+        version=$INPUT_VERSION
+        if [ -z "$version" ]; then
+          case "$ACTION_REF" in
+          v[0-9]*.[0-9]*.[0-9]*) version=${ACTION_REF#v} ;;
+          *)
+            echo "::error title=june::set the version input, or pin the action to a release tag (vicolby/june@vX.Y.Z); got ref '$ACTION_REF'"
+            exit 1
+            ;;
+          esac
+        fi
+        bin="$RUNNER_TEMP/june-bin"
+        # install.sh checks the release sha256 and installs the ast-grep release june is tested against.
+        JUNE_VERSION=$version JUNE_INSTALL_DIR=$bin JUNE_INSTALL_AST_GREP=1 sh "$GITHUB_ACTION_PATH/install.sh"
+        echo "$bin" >> "$GITHUB_PATH"
+    - name: Run june
+      shell: bash
+      env:
+        INPUT_RULES: ${{ inputs.rules }}
+        INPUT_BASE: ${{ inputs.base }}
+      run: |
+        set -eu
+        args=(--rules "$INPUT_RULES")
+        if [ -n "$INPUT_BASE" ]; then
+          args+=(--base "$INPUT_BASE")
+        fi
+        june "${args[@]}"

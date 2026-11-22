@@ -28,7 +28,7 @@ type Kind int
 const (
 	// Finding is a rule match on a touched line, rendered as file:line:col: CODE message.
 	Finding Kind = iota
-	// Failure is a june outcome that is not a finding, rendered as june: error: <Msg>.
+	// Failure is a june outcome that is not a finding, rendered as june: error: <Msg>, or june: warning: <Msg> at Warning severity.
 	Failure
 	// OptOut is an inline opt-out comment on a touched line, honoured or not, rendered like a finding.
 	OptOut
@@ -96,7 +96,7 @@ func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File
 	for _, d := range sorted {
 		switch d.Kind {
 		case Failure:
-			fmt.Fprintf(&b, "june: error: %s\n", escapeControls(d.Msg))
+			fmt.Fprintf(&b, "june: %s: %s\n", d.Sev, escapeControls(d.Msg))
 		case Legacy:
 			fmt.Fprintf(&b, "legacy: %s:%d:%d: %s %s\n", escapeControls(d.File), d.Line, d.Col, escapeControls(d.Code), escapeControls(d.Msg))
 		default:
@@ -131,6 +131,8 @@ func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File
 func annotation(d Diagnostic) string {
 	level := "notice"
 	switch {
+	case d.Kind == Failure && d.Sev == Warning:
+		level = "warning"
 	case d.Kind == Failure:
 		level = "error"
 	case d.Kind == Finding && d.Sev == Error:

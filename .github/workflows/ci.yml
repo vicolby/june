@@ -55,6 +55,7 @@ jobs:
           version: "~> v2"
           args: release --snapshot --clean
       - name: Install from the snapshot archive with install.sh
+        id: snapshot
         run: |
           set -eu
           version=$(jq -r .version dist/metadata.json)
@@ -67,3 +68,19 @@ jobs:
             JUNE_INSTALL_DIR="$RUNNER_TEMP/bin" \
             sh install.sh
           test "$("$RUNNER_TEMP/bin/june" --version | head -n 1)" = "june $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "releases=file://$base" >> "$GITHUB_OUTPUT"
+      # The composite action installs and runs june from the same snapshot; --base HEAD judges nothing, so it passes.
+      - name: Run the action
+        uses: ./
+        env:
+          JUNE_RELEASES_URL: ${{ steps.snapshot.outputs.releases }}
+        with:
+          version: ${{ steps.snapshot.outputs.version }}
+          rules: testdata/rules/python
+          base: HEAD
+      - name: Check what the action installed
+        run: |
+          set -eu
+          test "$(june --version | head -n 1)" = "june ${{ steps.snapshot.outputs.version }}"
+          ast-grep --version

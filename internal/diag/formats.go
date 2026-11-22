@@ -103,7 +103,7 @@ func sarifReport(sorted []Diagnostic) []byte {
 	seen := map[string]bool{}
 	for i, d := range sorted {
 		if d.Kind == Failure {
-			notes = append(notes, notification{"error", text{d.Msg}})
+			notes = append(notes, notification{d.Sev.String(), text{d.Msg}})
 			continue
 		}
 		var p physical

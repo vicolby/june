@@ -190,6 +190,13 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 			lines += touched.lineCount(f)
 		}
 	}
+	// A pull request or merge group that judged nothing passes silently unless it is said, as when
+	// the checkout is not the change or every changed file is out of scope.
+	if lines == 0 && onEventBase(sc.source) {
+		warns++
+		ds = append(ds, diag.Diagnostic{Kind: diag.Failure, Sev: diag.Warning,
+			Msg: "this " + strings.TrimSuffix(sc.source, " base") + " judged 0 changed lines. Fix: if it changes Python files, check that the checkout is the change under review (pull_request_target checks out the base branch by default)"})
+	}
 	sum := summary(errs, warns, optOutCount, checked, lines)
 	if n := len(scanned.Skipped); n > 0 {
 		sum += "; " + count(n, "file") + " skipped, not readable as text"

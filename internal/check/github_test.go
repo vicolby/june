@@ -202,3 +202,101 @@ func TestSARIFUsesRepositoryRootPathsFromASubdirectory(t *testing.T) {
 		t.Errorf("Out =\n%s\nwant the result on sub/app.py", out)
 	}
 }
+
+// mergeGroup is a merge queue checkout: HEAD is the queue commit on top of the base, and the event payload names that base.
+func mergeGroup(t *testing.T) (env check.Env, baseSHA string) {
+	t.Helper()
+	env = pullRequest(t)
+	baseSHA = revParse(t, env.Dir, "origin/main")
+	payload := filepath.Join(t.TempDir(), "event.json")
+	write(t, payload, `{"merge_group":{"base_sha":"`+baseSHA+`","head_sha":"`+revParse(t, env.Dir, "HEAD")+`"}}`)
+	env = onGitHub(env, "merge_group", "")
+	env.Vars["GITHUB_EVENT_PATH"] = payload
+	return env, baseSHA
+}
+
+func TestMergeGroupUsesTheEventBaseSHA(t *testing.T) {
+	env, sha := mergeGroup(t)
+	// Even if the clone's default branch is somewhere else, the queue judges what it adds to base_sha.
+	git(t, env.Dir, "remote", "set-head", "origin", "main")
+	res := infer(t, env)
+	if res.Exit != 1 {
+		t.Errorf("Exit = %d, want 1\n%s", res.Exit, res.Out)
+	}
+	if want := "; checked 1 file, 1 changed line; base " + sha + " (merge group base)"; !strings.HasSuffix(summaryOf(res), want) {
+		t.Errorf("summary = %q, want suffix %q", summaryOf(res), want)
+	}
+}
+
+func TestMergeGroupWithoutAReadablePayloadIsRefused(t *testing.T) {
+	env, _ := mergeGroup(t)
+	env.Vars["GITHUB_EVENT_PATH"] = filepath.Join(t.TempDir(), "missing.json")
+	if res := infer(t, env); res.Exit != 2 || !strings.Contains(string(res.Out), "a merge_group event has no pull request base") {
+		t.Errorf("Exit = %d, Out =\n%s\nwant a refusal naming the event", res.Exit, res.Out)
+	}
+	bad := filepath.Join(t.TempDir(), "event.json")
+	write(t, bad, `{"merge_group":{"base_sha":"--upload-pack=x"}}`)
+	env.Vars["GITHUB_EVENT_PATH"] = bad
+	if res := infer(t, env); res.Exit != 2 {
+		t.Errorf("Exit = %d, want 2 for a base_sha that is not an object name\n%s", res.Exit, res.Out)
+	}
+}
+
+func TestMergeGroupBaseThatWasNotFetchedNamesFetchDepth(t *testing.T) {
+	env, _ := mergeGroup(t)
+	missing := strings.Repeat("a", 40)
+	write(t, env.Vars["GITHUB_EVENT_PATH"], `{"merge_group":{"base_sha":"`+missing+`"}}`)
+	res := infer(t, env)
+	msg := "the merge group base " + missing + " is not a commit in this repository. Fix: set fetch-depth: 0 on actions/checkout so the merge group base is fetched"
+	refused(t, res, "::error title=june::"+msg+"\njune: error: "+msg+"\n")
+}
+
+func TestPullRequestAtItsBaseIsRefused(t *testing.T) {
+	// pull_request_target checks out the base branch, so HEAD is the base and nothing would be judged.
+	env := onGitHub(pullRequest(t), "pull_request_target", "main")
+	git(t, env.Dir, "checkout", "-q", "--detach", "origin/main")
+	res := infer(t, env)
+	msg := "HEAD is the base \"origin/main\" of this pull request, so nothing was judged. Fix: check out the change under review (with pull_request_target, set ref on actions/checkout to the pull request head), or run june on pull_request"
+	refused(t, res, "::error title=june::"+msg+"\njune: error: "+msg+"\n")
+}
+
+func TestMergeGroupAtItsBaseIsRefused(t *testing.T) {
+	env, sha := mergeGroup(t)
+	git(t, env.Dir, "checkout", "-q", "--detach", sha)
+	res := infer(t, env)
+	if res.Exit != 2 || !strings.Contains(string(res.Out), "HEAD is the base \""+sha+"\" of this merge group, so nothing was judged.") {
+		t.Errorf("Exit = %d, Out =\n%s", res.Exit, res.Out)
+	}
+}
+
+func TestPullRequestThatJudgesNothingWarns(t *testing.T) {
+	env := onGitHub(pullRequest(t), "pull_request", "main")
+	// A commit with no Python file leaves HEAD past the base with zero lines to judge.
+	git(t, env.Dir, "reset", "-q", "--hard", "origin/main")
+	write(t, filepath.Join(env.Dir, "README.md"), "docs\n")
+	commit(t, env)
+	res := infer(t, env)
+	if res.Exit != 0 {
+		t.Errorf("Exit = %d, want 0 (a warning, not a failure)\n%s", res.Exit, res.Out)
+	}
+	out := string(res.Out)
+	if want := "::warning title=june::this pull request judged 0 changed lines."; !strings.Contains(out, want) {
+		t.Errorf("Out =\n%s\nwant annotation %q", out, want)
+	}
+	if want := "june: warning: this pull request judged 0 changed lines."; !strings.Contains(out, want) {
+		t.Errorf("Out =\n%s\nwant text %q", out, want)
+	}
+	if want := "june: 0 errors, 1 warning, 0 opt-outs; checked 0 files, 0 changed lines; base origin/main (pull request base)"; summaryOf(res) != want {
+		t.Errorf("summary = %q, want %q", summaryOf(res), want)
+	}
+}
+
+func TestLocalRunThatJudgesNothingDoesNotWarn(t *testing.T) {
+	env := pullRequest(t)
+	git(t, env.Dir, "branch", "-q", "--set-upstream-to=origin/main", "feature")
+	git(t, env.Dir, "reset", "-q", "--hard", "origin/main")
+	res := infer(t, env)
+	if res.Exit != 0 || strings.Contains(string(res.Out), "judged 0 changed lines") {
+		t.Errorf("Exit = %d, Out =\n%s\nwant a quiet pass outside a pull request event", res.Exit, res.Out)
+	}
+}

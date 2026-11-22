@@ -112,10 +112,12 @@ An opt-out covers exactly one finding: if a line has several findings of that ru
 
 ### GitHub Actions
 
-On a pull request june judges lines changed since the PR base and annotates the diff. Fetch full history. Homebrew on Ubuntu images is off `PATH`:
+The action installs a verified june release and the tested ast-grep, then runs june. Pin it to a release tag (replace `X.Y.Z`); that tag also picks the june version. For any other ref set `version: X.Y.Z`. Fetch full history:
 
 ```yaml
-on: pull_request
+on:
+  pull_request:
+  merge_group:
 jobs:
   june:
     runs-on: ubuntu-latest
@@ -123,10 +125,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - run: echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
-      - run: brew install vicolby/tap/june
-      - run: june --rules .june/rules
+      - uses: vicolby/june@vX.Y.Z
 ```
+
+Inputs: `rules` (default `.june/rules`), `base` (a git ref to judge against), `version`.
+
+On a pull request june judges lines changed since the PR base and annotates the diff. In a merge queue (`merge_group`) it judges the group against `merge_group.base_sha`. If a pull request or merge group event judges 0 changed lines, june warns; if HEAD is the base, it exits 2. `pull_request_target` checks out the base branch by default, which is that case: use `pull_request`, or check out the pull request head.
+
+Without the action, install june with `brew install vicolby/tap/june` or the install script above, and run `june --rules .june/rules`.
 
 When `GITHUB_STEP_SUMMARY` is set, june appends a Markdown table of findings, opt-outs and refusals to the job summary (at most 100 rows).
 
