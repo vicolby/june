@@ -92,7 +92,9 @@ exclude:
   - migrations/**
 ```
 
-Globs are relative to the working directory: `*` stays within one path segment, `**` spans directories, a glob that matches a directory excludes everything under it, and whitespace in a glob is literal. Excluded files are not scanned, and the summary says how many were excluded. An unknown key in the config is an error. git still reads a large excluded file while it computes the diff; exclusion saves the scan, not the diff.
+Globs are relative to the working directory: `*` stays within one path segment, `**` spans directories, a glob that matches a directory excludes everything under it, and whitespace in a glob is literal. An unknown key in the config is an error.
+
+Exclusion applies after discovery: excluded files are not scanned or counted as checked, and the summary reports how many were excluded. Git still reads them to compute the diff, so unreadable excluded files can refuse the run. Python paths in `--changed-lines` must exist even when excluded.
 
 ### Opt-outs
 
