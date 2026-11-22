@@ -1,0 +1,8 @@
+- id: june
+  name: june
+  description: Fail the lines a commit adds or edits that break a guideline rule.
+  entry: june
+  language: system
+  types: [python]
+  pass_filenames: false
+  stages: [pre-commit, pre-merge-commit, pre-push, manual]

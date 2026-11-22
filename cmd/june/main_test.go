@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/vicolby/june/internal/check"
+	"gopkg.in/yaml.v3"
 )
 
 func TestVersion(t *testing.T) {
@@ -359,5 +360,83 @@ func TestUnwritableReportExitsTwoAndKeepsTheVerdictText(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "PY012") {
 		t.Errorf("stdout = %q, want the findings still printed", out.String())
+	}
+}
+
+// hookDefinition is the repo's published pre-commit hook, as pre-commit reads it.
+type hookDefinition struct {
+	ID            string   `yaml:"id"`
+	Entry         string   `yaml:"entry"`
+	Language      string   `yaml:"language"`
+	Types         []string `yaml:"types"`
+	PassFilenames *bool    `yaml:"pass_filenames"`
+	Stages        []string `yaml:"stages"`
+}
+
+func publishedHook(t *testing.T) hookDefinition {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "..", ".pre-commit-hooks.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hooks []hookDefinition
+	if err := yaml.Unmarshal(b, &hooks); err != nil {
+		t.Fatal(err)
+	}
+	if len(hooks) != 1 || hooks[0].ID != "june" {
+		t.Fatalf("hooks = %+v, want exactly the june hook", hooks)
+	}
+	return hooks[0]
+}
+
+func TestPublishedHookRunsWithoutFilenamesAndOnlyForPython(t *testing.T) {
+	h := publishedHook(t)
+	if h.PassFilenames == nil || *h.PassFilenames {
+		t.Errorf("pass_filenames = %v, want false: june finds its own scope", h.PassFilenames)
+	}
+	if len(h.Types) != 1 || h.Types[0] != "python" {
+		t.Errorf("types = %v, want [python]", h.Types)
+	}
+	if h.Language != "system" || h.Entry != "june" {
+		t.Errorf("language = %q, entry = %q, want system and june: a brew-installed binary on PATH", h.Language, h.Entry)
+	}
+	if got, want := strings.Join(h.Stages, ","), "pre-commit,pre-merge-commit,pre-push,manual"; got != want {
+		t.Errorf("stages = %v, want pre-commit, pre-merge-commit, pre-push, and manual", h.Stages)
+	}
+}
+
+// TestPublishedHookInThePreCommitEnvironment runs the hook's entry the way pre-commit does:
+// no filenames, PRE_COMMIT=1, the working directory at the repository root, and the staged diff as the scope.
+func TestPublishedHookInThePreCommitEnvironment(t *testing.T) {
+	h := publishedHook(t)
+	env := project(t)
+	env.Vars = map[string]string{"PRE_COMMIT": "1"}
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(context.Background(), "git", args...)
+		cmd.Dir = env.Dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "main")
+	git("config", "user.name", "june")
+	git("config", "user.email", "june@example.com")
+	git("config", "commit.gpgsign", "false")
+	git("add", "-A")
+	git("commit", "-q", "-m", "base") // app.py already holds a violation; it is legacy and must not fail
+	var out, errOut bytes.Buffer
+	args := strings.Fields(strings.TrimPrefix(h.Entry, "june"))
+	if code := run(context.Background(), args, nil, &out, &errOut, env); code != 0 || out.String() != "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines; base HEAD (staged diff)\n" || errOut.Len() != 0 {
+		t.Fatalf("nothing staged: exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+	if err := os.WriteFile(filepath.Join(env.Dir, "new.py"), []byte("def g(b={}): pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "new.py")
+	out.Reset()
+	code := run(context.Background(), args, nil, &out, &errOut, env)
+	if code != 1 || out.String() != "new.py:1:9: "+py012+"june: 1 error, 0 warnings, 0 opt-outs; checked 1 file, 1 changed line; base HEAD (staged diff)\n" || errOut.Len() != 0 {
+		t.Errorf("staged violation: exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
 	}
 }

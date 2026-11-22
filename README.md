@@ -64,6 +64,31 @@ june --version
 The archive has no top-level directory, so extract it where you want: the binary on `PATH`, `rules/` anywhere readable.
 june never finds the bundled rules on its own, so pass them with `--rules "$HOME/.local/share/june/rules/python"`, or copy them to `.june/rules`.
 
+## Pre-commit
+
+Install june with Homebrew, then add the hook to `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: https://github.com/vicolby/june
+    rev: v0.1.0  # use the latest release tag
+    hooks:
+      - id: june
+```
+
+The hook runs without filenames, only when Python files are involved, and judges the staged change against HEAD.
+It reads `.june/rules`; to use the bundled rules, copy them there as above, or point the hook at them. Paste the path `brew --prefix` prints:
+
+```yaml
+      - id: june
+        args: [--rules, PREFIX/share/june/rules/python]
+```
+
+`PREFIX` is the output of `brew --prefix` (`/opt/homebrew` on Apple Silicon, `/usr/local` for Intel Homebrew, `/home/linuxbrew/.linuxbrew` for Linuxbrew). pre-commit does not expand a command such as `$(brew --prefix)`.
+
+Under `pre-commit run --from-ref A --to-ref B`, and on a pre-push that sets those ref variables, it judges the lines the commits in that range add.
+A first push of a history that includes a root commit gives pre-commit no ref variables, so the pre-push stage judges nothing for it. CI is where that range is judged.
+
 ## Usage
 
 ```text
@@ -80,7 +105,7 @@ june --version
 | `--legacy` | Also list violations on untouched lines, as information only. They never change the exit code. |
 | `--version` | Print the version. |
 
-With no `--base` and no `--changed-lines`, june infers the base: the pull request or merge request base in CI, otherwise the upstream branch or the remote default branch.
+With no `--base` and no `--changed-lines`, june infers the base: pre-commit refs, then the pull request or merge request base in CI, then the pre-commit staged diff, otherwise the upstream branch or the remote default branch.
 It never guesses: when the touched lines cannot be determined, for example in a shallow clone, june exits 2 and names the fix.
 june fixes nothing itself, so the agent always sees what was wrong.
 
@@ -98,7 +123,7 @@ app/orders.py:6:17: PY014 Comparison to None with == or !=. Fix: use is None or 
 june: 4 errors, 0 warnings, 1 opt-out; checked 1 file, 12 changed lines; base main (--base)
 ```
 
-The summary line ends with the base and where it came from (`--base`, `pull request base`, `merge request diff base`, `upstream branch` or `remote default branch`).
+The summary line ends with the base and where it came from (`--base`, `pre-commit refs`, `staged diff`, `pull request base`, `merge request diff base`, `upstream branch` or `remote default branch`).
 The same lines are the whole output everywhere; CI runs add native annotations beside them.
 
 ## Rules
@@ -228,7 +253,7 @@ Warnings, `--legacy` lines and opt-outs never change the exit code.
 ## Roadmap
 
 Version 2 plans an advisory LLM review of the taste and design guidelines no tool can decide, as a separate command that never fails a build.
-A pre-commit hook is also planned. Neither exists yet; see [VISION.md](VISION.md).
+That review does not exist yet; see [VISION.md](VISION.md).
 
 ## Learn more
 
