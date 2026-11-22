@@ -1,2 +1,2 @@
-// Package install tests install.sh, the release installer at the repository root.
+// Package install tests the release installer and GitHub Action at the repository root.
 package install

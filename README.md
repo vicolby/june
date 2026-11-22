@@ -65,7 +65,7 @@ june --help | -h
 june --rules path/to/rules --base main
 ```
 
-Without `--base` or `--changed-lines`, june infers the base, first hit wins: pre-commit refs, pull request or merge request base in CI, pre-commit staged diff, upstream branch, remote default branch. The summary names the one used. When the touched lines cannot be determined (a shallow clone, say) june exits 2 and names the fix.
+Without `--base` or `--changed-lines`, june infers the base, first hit wins: pre-commit refs, CI event base (see [GitHub Actions](#github-actions) and [GitLab CI](#gitlab-ci)), pre-commit staged diff, upstream branch, remote default branch. The summary names the one used. When the touched lines cannot be determined (a shallow clone, say) june exits 2 and names the fix.
 
 ### Source encoding
 
@@ -130,7 +130,9 @@ jobs:
 
 Inputs: `rules` (default `.june/rules`), `base` (a git ref to judge against), `version`.
 
-On a pull request june judges lines changed since the PR base and annotates the diff. In a merge queue (`merge_group`) it judges the group against `merge_group.base_sha`. If a pull request event judges 0 changed lines, june warns; if HEAD is the base, it exits 2. `pull_request_target` checks out the base branch by default, which is that case: use `pull_request`, or check out the pull request head.
+On a pull request june judges lines changed since the PR base and annotates the diff. In a merge queue (`merge_group`) it judges the group against `merge_group.base_sha`. When inferring that base, an unreadable or invalid event payload exits 2 instead of falling back to another branch; provide a readable `GITHUB_EVENT_PATH` with a valid `merge_group.base_sha`, or set `base` explicitly.
+
+If a pull request event judges 0 changed Python lines, june warns; if HEAD is the base, it exits 2. These safeguards also apply with an explicit base, supplied changed lines or pre-commit scopes. `pull_request_target` checks out the base branch by default, which is that case: use `pull_request`, or check out the pull request head.
 
 Without the action, install june with `brew install vicolby/tap/june` or the install script above, and run `june --rules .june/rules`.
 

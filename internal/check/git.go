@@ -41,7 +41,7 @@ func onGitHub(env Env) bool { return env.Vars["GITHUB_ACTIONS"] == "true" }
 
 // eventBase is the base a GitHub event names: the remote-tracking ref of the branch a pull request
 // targets (actions/checkout fetches it with fetch-depth: 0), or the commit a merge group is queued on.
-// It is "" outside those events.
+// It returns an empty base outside those events and an error for an unreadable or invalid merge group payload.
 func eventBase(env Env) (base, source string, err error) {
 	if !onGitHub(env) {
 		return "", "", nil
@@ -55,7 +55,7 @@ func eventBase(env Env) (base, source string, err error) {
 		// GITHUB_BASE_REF is empty for a merge group; the event payload has merge_group.base_sha.
 		data, err := os.ReadFile(env.Vars["GITHUB_EVENT_PATH"])
 		if err != nil {
-			return "", "", fmt.Errorf("the merge group event payload cannot be read (%v). Fix: provide a readable GITHUB_EVENT_PATH, or pass --base REF", err)
+			return "", "", fmt.Errorf("the merge group event payload cannot be read (%w). Fix: provide a readable GITHUB_EVENT_PATH, or pass --base REF", err)
 		}
 		var payload struct {
 			MergeGroup struct {
@@ -92,9 +92,7 @@ func pullRequestEvent(env Env) bool {
 }
 
 // gitTouched finds the lines a change added or edited.
-// An empty base is inferred, first hit wins: pre-commit's from and to refs, a GitHub pull request base,
-// a GitLab merge request base passed in by the caller, pre-commit's staged diff (the index against HEAD,
-// or the repository's empty tree before the first commit), the upstream branch of HEAD, else the remote default branch.
+// An empty base follows the inference order documented in README.md under Usage.
 // Refs and the staged diff are read from the Env, never from the process.
 // A ref run reads the to-ref from the object store. A staged or ref run scans that diff's
 // post-image, not the worktree. A local run includes the worktree and untracked files.
@@ -117,8 +115,7 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 		msg := fmt.Sprintf(format, a...)
 		return nil, scope{}, &msg, nil
 	}
-	// An explicit --base wins. Pre-commit refs, then a GitHub pull request base, outrank a merge
-	// request base the caller already resolved. The staged diff comes after that base.
+	// A caller-resolved GitLab base must still yield to pre-commit refs or a GitHub event base.
 	if source != sourceFlag {
 		from, to := env.Vars["PRE_COMMIT_FROM_REF"], env.Vars["PRE_COMMIT_TO_REF"]
 		if from != "" && to != "" {

@@ -10,7 +10,7 @@ cmd/june -> check -> rules   (load and verify rules, scan files)
                   -> diag    (render diagnostics)
 ```
 
-Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`, which only tests `install.sh`. Tests keep fixture rules in `testdata/rules` and `internal/rules/testdata`; june ships no rules.
+Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`. Tests keep fixture rules in `testdata/rules` and `internal/rules/testdata`; june ships no rules.
 
 - `cmd/june` is a shell and owns no decision. It maps flags to a `check.Request`, snapshots the environment, writes the output and report files, and returns the exit code.
 - `check` is the deep module. It decides one change: which lines are touched, which findings land on them, which opt-outs apply, and the exit code. It hides repo discovery, CI detection and scope inference, merge-base and shallow-clone handling, diff parsing, the changed-lines list parser, opt-out matching and sorting.
@@ -27,18 +27,18 @@ Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`, whic
 - Source files follow the [source-encoding contract](README.md#source-encoding).
 - If the touched set is unknowable, the exit is 2, never 0 and never every line. A GitHub push with no base and no changed-lines list is unknowable even when the branch tracks its remote.
 - Opt-out syntax, suppression limits and visibility follow the [opt-out contract](README.md#opt-outs).
-- The same touched lines yield the same exit code and the same findings. Each format renders them differently: text, JSON and GitLab paths stay relative to the working directory, GitHub annotations and SARIF use repository-root paths when that root is known, and SARIF omits the summary. The summary's base label names the base and where it came from.
+- The same input yields the same exit code and the same findings; CI event context is part of that input (see [GitHub Actions](README.md#github-actions)). Each format renders them differently: text, JSON and GitLab paths stay relative to the working directory, GitHub annotations and SARIF use repository-root paths when that root is known, and SARIF omits the summary. The summary's base label names the base and where it came from.
 - Output is sorted, with no clock and no ANSI. The safe.directory fix may name the repository path.
 - A rule fault anywhere refuses the whole run, never a partial rule set. An unsupported or unreadable ast-grep version is a rule fault.
 - Nothing is fetched. The check path uses no network, model or clock.
 
 ## Where things are
 
-- Scope inference order and the CLI contract: `internal/check/git.go`, `cmd/june/main.go` (`june --help`).
+- Scope inference order: [README.md](README.md#usage). CLI contract: `cmd/june/main.go` (`june --help`).
 - Output formats: `internal/diag`.
 - Behavior by example: the scenario tests in `internal/check` (real git, real ast-grep), plus `internal/rules` and `internal/diag` tests.
 - ast-grep compatibility and the tested pin: `internal/rules/version.go`, `.ast-grep-version`, and [README.md](README.md#install). Scheduled floor/latest suite runs: `.github/workflows/ast-grep-canary.yml`.
-- Install and release: `install.sh`, `.goreleaser.yaml`, `.github/workflows/release.yml`, and [README.md](README.md#install).
+- Install and release: `install.sh`, `.goreleaser.yaml`, `.github/workflows/release.yml`, and [README.md](README.md#install). GitHub Action: `action.yml` and [usage](README.md#github-actions).
 
 ## House rules
 
