@@ -82,7 +82,10 @@ main() {
 	[ -n "$version" ] || fail "empty JUNE_VERSION"
 
 	# Install locations.
-	if [ "$(id -u)" = 0 ]; then
+	# HOME only matters when a default path derived from it is needed.
+	if [ -n "${JUNE_INSTALL_DIR:-}" ] && [ -n "${JUNE_RULES_DIR:-}" ]; then
+		prefix=
+	elif [ "$(id -u)" = 0 ]; then
 		prefix=/usr/local
 	else
 		[ -n "${HOME:-}" ] || fail "HOME is not set (set JUNE_INSTALL_DIR and JUNE_RULES_DIR)"
