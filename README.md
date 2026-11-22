@@ -15,7 +15,7 @@ Version 1 checks Python only.
 
 ## Install
 
-june needs `ast-grep` 0.51.1 or newer on `PATH`; an older one exits 2 with the fix. 0.51.3 is the tested version, and `june --version` and `june verify` print the one in use. june ships no rules: you supply your own with `--rules DIR` or in `.june/rules`.
+june needs `ast-grep` 0.51.1 or newer on `PATH`; a check or `june verify` with an older one exits 2 with the fix. 0.51.3 is the tested version, and `june --version` and a successful `june verify` print the one in use. june ships no rules: you supply your own with `--rules DIR` or in `.june/rules`.
 
 **Homebrew.** Installs `june` and Homebrew's current `ast-grep`.
 
@@ -166,7 +166,7 @@ Install june with Homebrew. The hook runs without filenames when Python files ar
 | --- | --- |
 | `0` | No error-severity finding on a touched line. |
 | `1` | An error-severity finding on a touched line with no valid opt-out. |
-| `2` | No verdict: bad usage, bad rules directory, shallow clone, no base, missing `ast-grep`. Output: `june: error: <cause>. Fix: <instruction>`. |
+| `2` | No verdict: bad usage, bad rules directory, shallow clone, no base, missing, too-old, or unreadable `ast-grep`. Output: `june: error: <cause>. Fix: <instruction>`. |
 
 Warnings, `--legacy` lines and opt-outs never change the exit code.
 

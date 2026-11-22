@@ -20,7 +20,7 @@ import (
 // astGrepVersion is the on-PATH `ast-grep --version` stdout. june --version and verify must print that line.
 func astGrepVersion(t *testing.T) string {
 	t.Helper()
-	out, err := exec.Command("ast-grep", "--version").Output()
+	out, err := exec.CommandContext(context.Background(), "ast-grep", "--version").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
