@@ -45,7 +45,20 @@ const (
 	GitHub Format = "github"
 	// GitLab renders the plain text and a GitLab Code Quality report beside it.
 	GitLab Format = "gitlab"
+	// JSON is one JSON document of the diagnostics and the summary, and nothing else.
+	JSON Format = "json"
+	// SARIF is one SARIF 2.1.0 log, which GitHub code scanning accepts, and nothing else.
+	SARIF Format = "sarif"
 )
+
+// ParseFormat reads a --format value.
+func ParseFormat(s string) (Format, bool) {
+	switch f := Format(s); f {
+	case Text, GitHub, GitLab, JSON, SARIF:
+		return f, true
+	}
+	return "", false
+}
 
 // GitLabReport is the path of the Code Quality report, which GitLab reads as a codequality artifact.
 const GitLabReport = "gl-code-quality-report.json"
@@ -64,8 +77,11 @@ type Diagnostic struct {
 
 // File is an extra artifact rendered beside the plain output.
 type File struct {
+	// Path is relative to the working directory, or absolute for a file the CI names.
 	Path string
 	Data []byte
+	// Append adds Data to the file instead of replacing it.
+	Append bool
 }
 
 // Render returns sorted plain-text diagnostics, followed by summary when it is not empty.
@@ -73,7 +89,7 @@ type File struct {
 // GitLab as a Code Quality File beside it. The closed switch below is the only place a format is chosen. The output carries no ANSI.
 func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File) {
 	sorted := append([]Diagnostic(nil), ds...)
-	sort.SliceStable(sorted, func(i, j int) bool { return less(sorted[i], sorted[j]) })
+	sortDiagnostics(sorted)
 
 	var b bytes.Buffer
 	for _, d := range sorted {
@@ -90,6 +106,10 @@ func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File
 		fmt.Fprintf(&b, "%s\n", escapeControls(summary))
 	}
 	switch f {
+	case JSON:
+		return jsonReport(sorted, summary), nil
+	case SARIF:
+		return sarifReport(sorted), nil
 	case GitHub:
 		// Commands lead so the text still ends with the summary line, as it does everywhere.
 		var a bytes.Buffer
@@ -153,20 +173,16 @@ func codeQuality(sorted []Diagnostic) []byte {
 		Severity    string   `json:"severity"`
 		Location    location `json:"location"`
 	}
-	type key struct{ file, code, msg string }
-	seen := map[key]int{}
+	prints := fingerprints(sorted)
 	report := []entry{}
-	for _, d := range sorted {
+	for i, d := range sorted {
 		if d.Kind != Finding && d.Kind != OptOut {
 			continue
 		}
-		k := key{d.File, d.Code, d.Msg}
-		sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d", d.File, d.Code, d.Msg, seen[k])))
-		seen[k]++
 		report = append(report, entry{
 			Description: d.Msg,
 			CheckName:   d.Code,
-			Fingerprint: hex.EncodeToString(sum[:]),
+			Fingerprint: prints[i],
 			Severity:    codeQualitySeverity(d),
 			Location:    location{Path: d.File, Lines: lines{Begin: d.Line}},
 		})
@@ -176,6 +192,20 @@ func codeQuality(sorted []Diagnostic) []byte {
 		panic("diag: code quality report is not marshalable: " + err.Error()) // strings and ints always marshal
 	}
 	return append(data, '\n')
+}
+
+// fingerprints hashes each diagnostic's file, rule, message and ordinal among identical ones in sorted order.
+func fingerprints(sorted []Diagnostic) []string {
+	type key struct{ file, code, msg string }
+	seen := map[key]int{}
+	out := make([]string, len(sorted))
+	for i, d := range sorted {
+		k := key{d.File, d.Code, d.Msg}
+		sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d", d.File, d.Code, d.Msg, seen[k])))
+		seen[k]++
+		out[i] = hex.EncodeToString(sum[:])
+	}
+	return out
 }
 
 // codeQualitySeverity maps a diagnostic to a Code Quality severity: an error is major, a warning minor, an opt-out info.
@@ -200,6 +230,10 @@ func escapeControls(text string) string {
 		}
 	}
 	return b.String()
+}
+
+func sortDiagnostics(ds []Diagnostic) {
+	sort.SliceStable(ds, func(i, j int) bool { return less(ds[i], ds[j]) })
 }
 
 func less(a, b Diagnostic) bool {

@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/vicolby/june/internal/check"
+	"github.com/vicolby/june/internal/diag"
 )
 
 // version is stamped at build time with -ldflags "-X main.version=...".
@@ -54,7 +55,7 @@ func snapshotEnv(getwd func() (string, error)) (check.Env, error) {
 
 // usage is the help text: `june --help` and `june -h` print it to stdout and exit 0.
 const usage = `usage:
-  june [--legacy] [--rules DIR]... [--base REF | --changed-lines FILE]
+  june [--format FORMAT] [--legacy] [--rules DIR]... [--base REF | --changed-lines FILE]
   june verify [--rules DIR]...
   june --version
   june --help | -h
@@ -62,6 +63,7 @@ const usage = `usage:
 flags:
   --base REF            judge lines changed since the merge base of REF and HEAD
   --changed-lines FILE  file of touched lines, path:7 or path:7-12 per line; - reads stdin
+  --format FORMAT       text, json, sarif, github or gitlab (default: github under GitHub Actions, gitlab under GitLab CI, else text)
   --legacy              also list violations on untouched lines, information only
   --rules DIR           rules directory, repeatable (default ./.june/rules)
   --version             print the version
@@ -82,6 +84,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	showVersion := fs.Bool("version", false, "print the version")
 	base := fs.String("base", "", "git ref; judge lines changed since its merge base with HEAD")
 	changedLines := fs.String("changed-lines", "", "file of touched lines, path:7 or path:7-12 per line; - reads stdin")
+	format := fs.String("format", "", "output format: text, json, sarif, github or gitlab")
 	legacy := fs.Bool("legacy", false, "also list violations on untouched lines, information only")
 	var rulesDirs dirList
 	fs.Var(&rulesDirs, "rules", "rules directory, repeatable (default ./.june/rules)")
@@ -101,6 +104,13 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 
 	req := check.Request{Rules: rulesDirs, Base: *base, Legacy: *legacy}
+	if *format != "" {
+		f, ok := diag.ParseFormat(*format)
+		if !ok {
+			return usageError(stderr, fmt.Sprintf("unknown format %q", *format))
+		}
+		req.Format = f
+	}
 	switch *changedLines {
 	case "":
 	case "-":
@@ -158,6 +168,13 @@ func finish(dir string, stdout, stderr io.Writer, res check.Result, err error) i
 	}
 	_, _ = stdout.Write(res.Out) // Output write failures have no recovery path, as with fail.
 	for _, f := range res.Files {
+		if f.Append {
+			// The job summary is a convenience beside the verdict, so a failure to write it never changes the exit code.
+			if err := appendFile(f.Path, f.Data); err != nil {
+				fmt.Fprintf(stderr, "june: warning: the job summary %s cannot be written (%v)\n", f.Path, err)
+			}
+			continue
+		}
 		// A report that cannot be written is no verdict for the CI that reads it, so it exits 2, whatever the findings were.
 		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(f.Path)), f.Data, 0o644); err != nil {
 			return fail(stderr, fmt.Sprintf("the report %s cannot be written (%v). Fix: make the working directory writable", f.Path, err))
@@ -166,8 +183,18 @@ func finish(dir string, stdout, stderr io.Writer, res check.Result, err error) i
 	return res.Exit
 }
 
+func appendFile(path string, data []byte) (err error) {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, f.Close()) }()
+	_, err = f.Write(data)
+	return err
+}
+
 func usageError(stderr io.Writer, cause string) int {
-	return fail(stderr, cause+". Fix: usage is june [--legacy] [--rules DIR]... [--base REF | --changed-lines FILE], june verify [--rules DIR]..., june --version, or june --help")
+	return fail(stderr, cause+". Fix: usage is june [--format FORMAT] [--legacy] [--rules DIR]... [--base REF | --changed-lines FILE], june verify [--rules DIR]..., june --version, or june --help")
 }
 
 func fail(stderr io.Writer, msg string) int {

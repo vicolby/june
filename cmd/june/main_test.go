@@ -535,3 +535,123 @@ func TestTerminatedRunCleansUpAndExplainsItself(t *testing.T) {
 		t.Errorf("temporary directories left behind: %v, %v", left, err)
 	}
 }
+
+func runFormat(t *testing.T, env check.Env, args ...string) (int, string, string) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	args = append(args, "--changed-lines", "-")
+	code := run(context.Background(), args, strings.NewReader("app.py:2-3\n"), &out, &errOut, env)
+	return code, out.String(), errOut.String()
+}
+
+func TestFormatFlagChoosesTheFormatAnywhere(t *testing.T) {
+	for _, tc := range []struct {
+		format, want string
+	}{
+		{"json", `"rule": "PY012"`},
+		{"sarif", `"ruleId": "PY012"`},
+		{"github", "::error file=app.py,line=2,col=9,title=PY012::"},
+		{"text", "app.py:2:9: PY012"},
+	} {
+		code, out, errOut := runFormat(t, project(t), "--format", tc.format)
+		if code != 1 || !strings.Contains(out, tc.want) || errOut != "" {
+			t.Errorf("--format %s: exit = %d, stdout = %q, stderr = %q", tc.format, code, out, errOut)
+		}
+	}
+}
+
+func TestFormatFlagOverridesTheInferredFormat(t *testing.T) {
+	env := project(t)
+	env.Vars = map[string]string{"GITLAB_CI": "true"}
+	code, out, _ := runFormat(t, env, "--format", "text")
+	if code != 1 || strings.Contains(out, "::") {
+		t.Errorf("exit = %d, stdout = %q", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(env.Dir, "gl-code-quality-report.json")); !os.IsNotExist(err) {
+		t.Errorf("--format text still wrote the GitLab report (stat err = %v)", err)
+	}
+}
+
+func TestFormatGitLabWritesTheReportOutsideGitLabCI(t *testing.T) {
+	env := project(t)
+	code, out, _ := runFormat(t, env, "--format", "gitlab")
+	if code != 1 || !strings.HasPrefix(out, "app.py:2:9: PY012") {
+		t.Errorf("exit = %d, stdout = %q", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(env.Dir, "gl-code-quality-report.json")); err != nil {
+		t.Errorf("report not written: %v", err)
+	}
+}
+
+func TestUnknownFormatIsAUsageError(t *testing.T) {
+	code, out, errOut := runFormat(t, project(t), "--format", "xml")
+	if code != 2 || out != "" || !strings.HasPrefix(errOut, `june: error: unknown format "xml". Fix: usage is `) {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out, errOut)
+	}
+}
+
+func TestSARIFRefusalIsStillAValidLog(t *testing.T) {
+	env := project(t)
+	code, out, _ := runFormat(t, env, "--format", "sarif", "--rules", "missing")
+	if code != 2 || !strings.Contains(out, `"executionSuccessful": false`) || !strings.Contains(out, `"results": []`) {
+		t.Errorf("exit = %d, stdout = %q", code, out)
+	}
+}
+
+func TestStepSummaryIsAppendedWhenTheCIsetsIt(t *testing.T) {
+	env := project(t)
+	summary := filepath.Join(t.TempDir(), "summary.md")
+	if err := os.WriteFile(summary, []byte("earlier step\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env.Vars = map[string]string{"GITHUB_STEP_SUMMARY": summary}
+	code, out, errOut := runFormat(t, env)
+	if code != 1 || !strings.HasPrefix(out, "app.py:2:9: PY012") || errOut != "" {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out, errOut)
+	}
+	got, err := os.ReadFile(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(got), "earlier step\n## june\n") || !strings.Contains(string(got), "| error | `app.py:2:9` | PY012 |") {
+		t.Errorf("summary = %q", got)
+	}
+	// A second june step adds to the file instead of replacing it.
+	runFormat(t, env)
+	if again, _ := os.ReadFile(summary); strings.Count(string(again), "## june") != 2 {
+		t.Errorf("second run replaced the summary: %q", again)
+	}
+}
+
+func TestStepSummaryWrittenForARefusalAndEveryFormat(t *testing.T) {
+	env := project(t)
+	summary := filepath.Join(t.TempDir(), "summary.md")
+	env.Vars = map[string]string{"GITHUB_STEP_SUMMARY": summary}
+	runFormat(t, env, "--format", "sarif", "--rules", "missing")
+	got, _ := os.ReadFile(summary)
+	if !strings.Contains(string(got), "| error |  |  | ") {
+		t.Errorf("summary = %q", got)
+	}
+}
+
+func TestUnwritableStepSummaryWarnsButKeepsTheVerdict(t *testing.T) {
+	env := project(t)
+	env.Vars = map[string]string{"GITHUB_STEP_SUMMARY": filepath.Join(t.TempDir(), "missing", "summary.md")}
+	code, out, errOut := runFormat(t, env)
+	if code != 1 || !strings.Contains(out, "PY012") || !strings.HasPrefix(errOut, "june: warning: the job summary ") {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out, errOut)
+	}
+}
+
+func TestVerifyIgnoresStepSummary(t *testing.T) {
+	env := project(t)
+	summary := filepath.Join(t.TempDir(), "summary.md")
+	env.Vars = map[string]string{"GITHUB_STEP_SUMMARY": summary}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"verify"}, strings.NewReader(""), &out, &errOut, env); code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errOut.String())
+	}
+	if _, err := os.Stat(summary); !os.IsNotExist(err) {
+		t.Errorf("verify wrote a job summary (stat err = %v)", err)
+	}
+}

@@ -269,7 +269,7 @@ func TestGitLabFingerprintsAreStableAndUnique(t *testing.T) {
 func TestGitLabEmptyReportIsAnEmptyArray(t *testing.T) {
 	_, files := diag.Render(nil, "june: clean", diag.GitLab)
 	if len(files) != 1 || string(files[0].Data) != "[]\n" {
-		t.Errorf("files = %q, want an empty JSON array", files)
+		t.Errorf("files = %+v, want an empty JSON array", files)
 	}
 }
 
@@ -281,5 +281,192 @@ func TestGitLabReportEscapesNothingElseAndIsDeterministic(t *testing.T) {
 	}
 	if strings.ContainsRune(string(one[0].Data), '\x1b') {
 		t.Errorf("report carries ANSI")
+	}
+}
+
+func TestParseFormat(t *testing.T) {
+	for _, s := range []string{"text", "json", "sarif", "github", "gitlab"} {
+		if f, ok := diag.ParseFormat(s); !ok || string(f) != s {
+			t.Errorf("ParseFormat(%q) = %q, %v", s, f, ok)
+		}
+	}
+	for _, s := range []string{"", "SARIF", "xml"} {
+		if _, ok := diag.ParseFormat(s); ok {
+			t.Errorf("ParseFormat(%q) accepted", s)
+		}
+	}
+}
+
+func TestJSONIsOnlyTheDocument(t *testing.T) {
+	out, files := diag.Render(gitlabDiags(), "june: sum", diag.JSON)
+	if files != nil {
+		t.Errorf("files = %+v, want none", files)
+	}
+	var doc struct {
+		Version     int `json:"version"`
+		Diagnostics []struct {
+			Kind, Severity, File, Rule, Message string
+			Line, Column                        int
+		} `json:"diagnostics"`
+		Summary string `json:"summary"`
+	}
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, out)
+	}
+	if doc.Version != 1 || doc.Summary != "june: sum" || len(doc.Diagnostics) != 5 {
+		t.Fatalf("doc = %+v", doc)
+	}
+	// Opt-outs and failures lead, then findings in file order, legacy last.
+	var kinds []string
+	for _, d := range doc.Diagnostics {
+		kinds = append(kinds, d.Kind)
+	}
+	if want := []string{"opt-out", "failure", "finding", "finding", "legacy"}; !reflect.DeepEqual(kinds, want) {
+		t.Errorf("kinds = %v, want %v", kinds, want)
+	}
+	if f := doc.Diagnostics[2]; f.File != "a.py" || f.Line != 2 || f.Column != 9 || f.Rule != "PY012" || f.Severity != "error" {
+		t.Errorf("finding = %+v", f)
+	}
+	if f := doc.Diagnostics[1]; f.File != "" || f.Rule != "" {
+		t.Errorf("failure carries a location: %+v", f)
+	}
+}
+
+func TestJSONEmptyIsAnEmptyList(t *testing.T) {
+	out, _ := diag.Render(nil, "", diag.JSON)
+	if !strings.Contains(string(out), `"diagnostics": []`) {
+		t.Errorf("out = %s", out)
+	}
+}
+
+type sarifLog struct {
+	Schema  string `json:"$schema"`
+	Version string `json:"version"`
+	Runs    []struct {
+		Tool struct {
+			Driver struct {
+				Name  string
+				Rules []struct{ ID string }
+			}
+		}
+		Invocations []struct {
+			ExecutionSuccessful        bool
+			ToolExecutionNotifications []struct {
+				Level   string
+				Message struct{ Text string }
+			}
+		}
+		Results []struct {
+			RuleID    string
+			Level     string
+			Message   struct{ Text string }
+			Locations []struct {
+				PhysicalLocation struct {
+					ArtifactLocation struct{ URI string }
+					Region           struct{ StartLine, StartColumn int }
+				}
+			}
+			PartialFingerprints map[string]string
+		}
+	}
+}
+
+func TestSARIFReportsLevelsLocationsAndFailures(t *testing.T) {
+	ds := gitlabDiags()
+	ds[1].Path = "svc/a.py"
+	out, files := diag.Render(ds, "june: sum", diag.SARIF)
+	if files != nil {
+		t.Errorf("files = %+v, want none", files)
+	}
+	var log sarifLog
+	if err := json.Unmarshal(out, &log); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, out)
+	}
+	if log.Version != "2.1.0" || !strings.Contains(log.Schema, "sarif-2.1.0") || len(log.Runs) != 1 {
+		t.Fatalf("log = %+v", log)
+	}
+	run := log.Runs[0]
+	if run.Tool.Driver.Name != "june" || len(run.Tool.Driver.Rules) != 2 {
+		t.Errorf("driver = %+v", run.Tool.Driver)
+	}
+	var got []string
+	for _, r := range run.Results {
+		loc := r.Locations[0].PhysicalLocation
+		if r.PartialFingerprints["june/v1"] == "" {
+			t.Errorf("%s has no fingerprint", r.RuleID)
+		}
+		got = append(got, r.Level+" "+r.RuleID+" "+loc.ArtifactLocation.URI)
+	}
+	want := []string{"note PY012 a.py", "error PY012 svc/a.py", "warning PY013 b.py", "note PY012 a.py"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("results = %v, want %v", got, want)
+	}
+	if r := run.Results[1]; r.Locations[0].PhysicalLocation.Region.StartLine != 2 || r.Locations[0].PhysicalLocation.Region.StartColumn != 9 {
+		t.Errorf("region = %+v", r.Locations[0].PhysicalLocation.Region)
+	}
+	inv := run.Invocations[0]
+	if inv.ExecutionSuccessful || len(inv.ToolExecutionNotifications) != 1 || inv.ToolExecutionNotifications[0].Level != "error" {
+		t.Errorf("invocation = %+v", inv)
+	}
+}
+
+func TestSARIFCleanRunIsSuccessfulWithEmptyResults(t *testing.T) {
+	out, _ := diag.Render(nil, "june: clean", diag.SARIF)
+	var log sarifLog
+	if err := json.Unmarshal(out, &log); err != nil {
+		t.Fatal(err)
+	}
+	run := log.Runs[0]
+	if !run.Invocations[0].ExecutionSuccessful || run.Results == nil || len(run.Results) != 0 || len(run.Tool.Driver.Rules) != 0 {
+		t.Errorf("run = %+v", run)
+	}
+	if !strings.Contains(string(out), `"results": []`) || !strings.Contains(string(out), `"rules": []`) {
+		t.Errorf("empty lists must be arrays, not null:\n%s", out)
+	}
+}
+
+func TestSARIFLineIsNeverZero(t *testing.T) {
+	out, _ := diag.Render([]diag.Diagnostic{{File: "a.py", Code: "X", Kind: diag.Finding, Msg: "m"}}, "", diag.SARIF)
+	if !strings.Contains(string(out), `"startLine": 1`) {
+		t.Errorf("out = %s", out)
+	}
+}
+
+func TestStepSummaryTablesFindingsAndSkipsLegacy(t *testing.T) {
+	ds := gitlabDiags()
+	ds[0].Msg = "a|b <c> `d`\nx"
+	got := string(diag.StepSummary(ds, "june: 1 error"))
+	for _, want := range []string{
+		"## june\n\njune: 1 error\n\n",
+		"| Severity | Location | Rule | Message |\n",
+		"| error | `a.py:2:9` | PY012 | Mutable default argument. |\n",
+		"| opt-out | `a.py:7:1` | PY012 | opt-out: legacy shim |\n",
+		`| warning | ` + "`b.py:4:2`" + ` | PY013 | a\|b &lt;c&gt; \` + "`d\\`" + `\nx |`,
+		"| error |  |  | unused |\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("summary lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "a.py:9") {
+		t.Errorf("legacy match listed:\n%s", got)
+	}
+}
+
+func TestStepSummaryCleanRunHasNoTable(t *testing.T) {
+	got := string(diag.StepSummary(nil, "june: clean"))
+	if got != "## june\n\njune: clean\n\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestStepSummaryCapsRows(t *testing.T) {
+	var ds []diag.Diagnostic
+	for i := 1; i <= 130; i++ {
+		ds = append(ds, diag.Diagnostic{File: "a.py", Line: i, Code: "X", Kind: diag.Finding, Msg: "m"})
+	}
+	got := string(diag.StepSummary(ds, ""))
+	if rows := strings.Count(got, "\n| error |"); rows != 100 || !strings.Contains(got, "30 more not shown") {
+		t.Errorf("rows = %d:\n%s", rows, got[len(got)-80:])
 	}
 }
