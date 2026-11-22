@@ -38,6 +38,10 @@ type Request struct {
 	// Legacy also lists rule matches on untouched lines of the checked files, as information only.
 	// They never change Exit; off by default.
 	Legacy bool
+	// IgnoreSpace treats a line whose only change is whitespace (git diff -w semantics) as untouched.
+	// It applies to a git-derived change and is off by default: a touched line that violates a rule always fails.
+	// It is meaningless with Changed, whose lines the caller already chose, so Change refuses the pair.
+	IgnoreSpace bool
 
 	// root is the working directory's path under the repository root, with a trailing slash, for native formats.
 	root string
@@ -291,12 +295,16 @@ func repoPrefix(ctx context.Context, env Env, f diag.Format) string {
 func findTouched(ctx context.Context, env Env, req Request) (touchedSet, scope, *string, error) {
 	if req.Changed == nil {
 		if req.Base != "" {
-			return gitTouched(ctx, env, req.Base, sourceFlag)
+			return gitTouched(ctx, env, req.Base, sourceFlag, req.IgnoreSpace)
 		}
 		if base := mergeRequestBase(ctx, env); base != "" {
-			return gitTouched(ctx, env, base, sourceMR)
+			return gitTouched(ctx, env, base, sourceMR, req.IgnoreSpace)
 		}
-		return gitTouched(ctx, env, "", "")
+		return gitTouched(ctx, env, "", "", req.IgnoreSpace)
+	}
+	if req.IgnoreSpace {
+		msg := "--ignore-whitespace has no effect on --changed-lines, which already names the touched lines. Fix: drop --ignore-whitespace, or drop --changed-lines to let june read git"
+		return nil, scope{}, &msg, nil
 	}
 	var touched touchedSet
 	var bad *string

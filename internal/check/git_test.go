@@ -840,3 +840,82 @@ func TestNonUTF8PythonFileIsNamedAndBlamesNeitherAstGrepNorTheScope(t *testing.T
 	res := against(t, env, "main")
 	refused(t, res, "june: error: \"pkg/legacy.py\" is not UTF-8 text, so it cannot be scanned. Fix: save it as UTF-8 without NUL bytes and run june again\n")
 }
+
+func ignoringSpace(t *testing.T, env check.Env, base string) check.Result {
+	t.Helper()
+	res, err := check.Change(context.Background(), env, check.Request{Base: base, IgnoreSpace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+func TestIgnoreWhitespaceIndentOnlyEdit(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": "def f(a=[]):\n    return a\n"})
+	write(t, filepath.Join(env.Dir, "app.py"), "class C:\n    def f(a=[]):\n        return a\n")
+	commit(t, env)
+
+	strict := against(t, env, "main")
+	if strict.Exit != 1 || !strings.Contains(string(strict.Out), "app.py:2:") {
+		t.Errorf("strict: Exit = %d, Out = %s, want 1 with PY012 on the indented def", strict.Exit, strict.Out)
+	}
+	loose := ignoringSpace(t, env, "main")
+	if loose.Exit != 0 || !strings.Contains(string(loose.Out), "0 errors") || !strings.Contains(string(loose.Out), "1 changed line;") {
+		t.Errorf("ignore whitespace: Exit = %d, Out = %s, want 0 and only the new class line touched", loose.Exit, loose.Out)
+	}
+}
+
+func TestIgnoreWhitespaceRewrapOnlyEdit(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": "def f(x,\n      a=[]):\n    return a\n"})
+	write(t, filepath.Join(env.Dir, "app.py"), "def f(x,\n        a=[]):\n    return a\n")
+	commit(t, env)
+
+	if strict := against(t, env, "main"); strict.Exit != 1 {
+		t.Errorf("strict: Exit = %d, Out = %s, want 1", strict.Exit, strict.Out)
+	}
+	loose := ignoringSpace(t, env, "main")
+	if loose.Exit != 0 || !strings.Contains(string(loose.Out), "checked 0 files, 0 changed lines") {
+		t.Errorf("ignore whitespace: Exit = %d, Out = %s, want 0 and nothing touched", loose.Exit, loose.Out)
+	}
+}
+
+func TestIgnoreWhitespaceStillFailsARealEditOnTheLine(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": "def f(x,\n      a=[]):\n    return a\n"})
+	// The second line changes more than whitespace: a new default value joins the indent change.
+	write(t, filepath.Join(env.Dir, "app.py"), "def f(x,\n        a=[1]):\n    return a\n")
+	commit(t, env)
+
+	res := ignoringSpace(t, env, "main")
+	if res.Exit != 1 || !strings.Contains(string(res.Out), "app.py:2:") {
+		t.Errorf("Exit = %d, Out = %s, want 1 with PY012 on line 2", res.Exit, res.Out)
+	}
+}
+
+func TestIgnoreWhitespaceCoversUncommittedAndStagedChanges(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": "def f(x,\n      a=[]):\n    return a\n"})
+	write(t, filepath.Join(env.Dir, "app.py"), "def f(x,\n        a=[]):\n    return a\n")
+	if res := ignoringSpace(t, env, "main"); res.Exit != 0 {
+		t.Errorf("worktree: Exit = %d, Out = %s, want 0", res.Exit, res.Out)
+	}
+	git(t, env.Dir, "add", "-A")
+	if res := ignoringSpace(t, env, "main"); res.Exit != 0 {
+		t.Errorf("index: Exit = %d, Out = %s, want 0", res.Exit, res.Out)
+	}
+}
+
+func TestIgnoreWhitespaceDoesNotHideNewFiles(t *testing.T) {
+	env := repo(t, map[string]string{"keep.py": "x = 1\n"})
+	write(t, filepath.Join(env.Dir, "new.py"), old)
+	if res := ignoringSpace(t, env, "main"); res.Exit != 1 {
+		t.Errorf("Exit = %d, Out = %s, want 1 for an added violating file", res.Exit, res.Out)
+	}
+}
+
+func TestIgnoreWhitespaceRefusesChangedLines(t *testing.T) {
+	env := tree(t, map[string]string{"app.py": old})
+	res, err := check.Change(context.Background(), env, check.Request{Changed: strings.NewReader("app.py:1\n"), IgnoreSpace: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused(t, res, "june: error: --ignore-whitespace has no effect on --changed-lines, which already names the touched lines. Fix: drop --ignore-whitespace, or drop --changed-lines to let june read git\n")
+}

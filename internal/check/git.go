@@ -60,9 +60,10 @@ func pullRequestBase(env Env) string {
 // A ref run reads the to-ref from the object store. A staged or ref run scans that diff's
 // post-image, not the worktree. A local run includes the worktree and untracked files.
 // source says where a non-empty base came from, so a refusal can name the right fix.
+// ignoreSpace reads the patch with git diff -w, so a line that differs from its old self only in whitespace is not touched.
 // Paths are relative to env.Dir. The returned message is a complete "<cause>. Fix: <instruction>" refusal.
 // A cancelled context returns its error.
-func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, scope, *string, error) {
+func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace bool) (touchedSet, scope, *string, error) {
 	sc := scope{base: base, source: source}
 	staged := false
 	toRef := ""
@@ -268,6 +269,9 @@ func gitTouched(ctx context.Context, env Env, base, source string) (touchedSet, 
 	if len(want) > 0 {
 		// One patch for every Python file: its size does not depend on how many files changed.
 		args := append(append([]string{"-c", "core.quotepath=off", "diff"}, cached...), patchFlags...)
+		if ignoreSpace {
+			args = append(args, "-w")
+		}
 		args = append(append(args, strings.TrimSpace(mb)), tip...)
 		patch, err := git(ctx, env, "", append(args, "--", pythonPathspec)...)
 		if err != nil {

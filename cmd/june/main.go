@@ -64,6 +64,8 @@ flags:
   --base REF            judge lines changed since the merge base of REF and HEAD
   --changed-lines FILE  file of touched lines, path:7 or path:7-12 per line; - reads stdin
   --format FORMAT       text, json, sarif, github or gitlab (default: github under GitHub Actions, gitlab under GitLab CI, else text)
+  --ignore-whitespace, -w
+                        do not count a line whose only change is whitespace as touched (git diff -w)
   --legacy              also list violations on untouched lines, information only
   --rules DIR           rules directory, repeatable (default ./.june/rules)
   --version             print the version
@@ -85,6 +87,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	base := fs.String("base", "", "git ref; judge lines changed since its merge base with HEAD")
 	changedLines := fs.String("changed-lines", "", "file of touched lines, path:7 or path:7-12 per line; - reads stdin")
 	format := fs.String("format", "", "output format: text, json, sarif, github or gitlab")
+	ignoreSpace := fs.Bool("ignore-whitespace", false, "do not count a line whose only change is whitespace as touched (git diff -w)")
+	fs.BoolVar(ignoreSpace, "w", false, "same as --ignore-whitespace")
 	legacy := fs.Bool("legacy", false, "also list violations on untouched lines, information only")
 	var rulesDirs dirList
 	fs.Var(&rulesDirs, "rules", "rules directory, repeatable (default ./.june/rules)")
@@ -103,7 +107,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return 0
 	}
 
-	req := check.Request{Rules: rulesDirs, Base: *base, Legacy: *legacy}
+	req := check.Request{Rules: rulesDirs, Base: *base, Legacy: *legacy, IgnoreSpace: *ignoreSpace}
 	if *format != "" {
 		f, ok := diag.ParseFormat(*format)
 		if !ok {
