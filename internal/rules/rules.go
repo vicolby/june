@@ -822,7 +822,7 @@ func readRule(dir, name string) (entry, []Fault) {
 }
 
 // readUtils reads the global utility rules of dir: the rule files directly inside its utils directory.
-// A directory without one has none. A utility rule is a rule other rules use with matches, so it needs only an id.
+// A directory without one has none. june validates utility ids here; ast-grep validates their language and matcher during verification.
 func readUtils(dir string) ([]utilEntry, []Fault) {
 	files, err := ruleFiles(filepath.Join(dir, utilsDir))
 	if errors.Is(err, fs.ErrNotExist) {

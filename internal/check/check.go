@@ -286,7 +286,7 @@ func Verify(ctx context.Context, env Env, v VerifyRequest) (Result, error) {
 }
 
 // New writes a minimal rule and its examples for id into the one rules directory, which verify accepts as written.
-// An existing rule is never overwritten. Exit 2 means nothing was written.
+// An existing rule is never overwritten. Exit 2 reports invalid input or a file-creation failure.
 func New(env Env, dirs []string, id string) (Result, error) {
 	if env.Dir == "" {
 		return Result{}, errors.New("check: Env.Dir is empty")
@@ -528,7 +528,7 @@ func resolve(dir, path string) string {
 // A fault that concerns no directory, such as a missing ast-grep, has no label.
 // A failure carries the labelled file and the rule id for machine-readable formats.
 // display holds the directories as the caller spelled them, indexed like Fault.Dir.
-// base is the working directory an absolute spelling is made relative to.
+// base is the working directory used to shorten absolute paths within it.
 func faultDiagnostics(base string, display []string, faults []rules.Fault) []diag.Diagnostic {
 	ds := make([]diag.Diagnostic, len(faults))
 	for i, f := range faults {

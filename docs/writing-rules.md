@@ -9,7 +9,7 @@ june new MY001                  # writes .june/rules/MY001.yml and .june/rules/r
 june new --rules rules MY001    # or into another rules directory
 ```
 
-The scaffold is a rule that already verifies (it flags `print(...)`): edit the pattern, the message and the examples together. `june new` never overwrites a file, and an id may use letters, digits, `-` and `_`.
+The scaffold is a rule that already verifies (it flags `print(...)`): edit the pattern, the message and the examples together. `june new` never overwrites a file, and an id must start with a letter or digit, followed by letters, digits, `-` or `_`.
 
 ## Anatomy of a rule
 
@@ -24,7 +24,7 @@ rule:
   pattern: print($$$ARGS)
 ```
 
-- `message` is the corrective instruction: the person or agent reading a CI failure only has this line. Say what to do, not only what is wrong.
+- `message` is the corrective instruction: make the finding actionable without following its URL. Say what to do, not only what is wrong.
 - `note` and `url` are optional strings. They print under the finding (`  note: ...`, `  url: ...`) and travel into every format: `note` and `url` in JSON, the annotation message on GitHub, `content.body` in the GitLab report. In SARIF, `note` becomes the rule's `help` text; an absolute URI in `url` becomes `helpUri`, while other values are included in `help` text. Empty or whitespace-only values are omitted.
 - `files` and `ignores` scope a rule by path. Keys june does not use (such as `fix` or `labels`) are refused by name, so nothing is dropped silently.
 

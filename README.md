@@ -53,7 +53,7 @@ june --help | -h
 
 | Flag | Meaning |
 | --- | --- |
-| `--rules DIR` | Rules directory, repeatable. Default: `./.june/rules`. |
+| `--rules DIR` | Rules directory, repeatable for checks and `verify`; `new` takes one. Default: `./.june/rules`. |
 | `--base REF` | Judge lines changed since the merge base of `REF` and `HEAD`. |
 | `--changed-lines FILE` | Judge lines listed in `FILE`, one `path:7` or `path:7-12` per line; `-` reads stdin. |
 | `--format FORMAT` | `text`, `json`, `sarif`, `github` or `gitlab`. Default: `github` under GitHub Actions, `gitlab` under GitLab CI, else `text`. `june verify` takes it too. |
