@@ -28,7 +28,7 @@ june is not a linter with a rule set. It enforces your own team's guidelines as 
 | Rules | Yours, in YAML, each verified against examples. | Ruff's built-in rules; ruff has no user-defined rules. | Yours or the registry's, in YAML. |
 | Old violations | Never judged: only touched lines can fail. | reviewdog filters findings to the diff when configured to; ruff itself reports the whole file. | `--baseline-commit` reports findings new since that commit, compared by finding, not by line. |
 | Rule quality | A rule whose examples misbehave is refused. | Not applicable. | Rule tests are optional (`semgrep --test`). |
-| Network | None on the check path. | None for ruff; reviewdog posts to your forge. | Rules from the registry and metrics need the network unless you use local rules and `--metrics=off`. |
+| Network | None on the check path. | None for ruff; reviewdog's [default local reporter](https://github.com/reviewdog/reviewdog#reporter-local--reporterlocal-default) filters locally without posting to a forge. Forge API reporters use the network. | Registry rules, metrics and version checks use the network; avoid those requests with local rules and `--metrics=off --disable-version-check` ([CLI reference](https://docs.semgrep.dev/cli-reference)). |
 
 Pick ruff for the standard Python lint rules, and Semgrep for a large shared rule registry or taint analysis. Pick june when the rules are your own guidelines, an AI agent has to fix their failures, and the gate must be the same everywhere. It is Python only in version 1.
 
