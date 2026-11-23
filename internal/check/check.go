@@ -258,7 +258,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 
 // VerifyRequest describes one verification of rule examples.
 type VerifyRequest struct {
-	// Rules lists the rules directories; none uses the config, else repository-root .june/rules.
+	// Rules lists the rules directories, with the same defaults as Request.Rules.
 	Rules []string
 	// Rule is the id of the one rule to verify, empty for all of them.
 	Rule string
@@ -266,7 +266,7 @@ type VerifyRequest struct {
 	Format diag.Format
 }
 
-// Rules verifies every example of every rule in dirs; none uses the config, else repository-root .june/rules.
+// Rules verifies every example of every rule in dirs, using Request.Rules defaults when none are given.
 // Exit 0 means every example behaved. Any rule fault is Exit 2.
 func Rules(ctx context.Context, env Env, dirs []string) (Result, error) {
 	return Verify(ctx, env, VerifyRequest{Rules: dirs})

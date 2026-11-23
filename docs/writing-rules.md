@@ -5,9 +5,11 @@ june runs [ast-grep](https://ast-grep.github.io) rules. Each rule is a YAML file
 ## Scaffold
 
 ```sh
-june new MY001                  # writes .june/rules/MY001.yml and .june/rules/rule-tests/MY001-test.yml
+june new MY001                  # writes MY001.yml and rule-tests/MY001-test.yml in the selected directory
 june new --rules rules MY001    # or into another rules directory
 ```
+
+Directory selection follows the [usage](../README.md#usage) and [config](../README.md#config-file) contracts.
 
 The scaffold is a rule that already verifies (it flags `print(...)`): edit the pattern, the message and the examples together. `june new` never overwrites a file, and an id must start with a letter or digit, followed by letters, digits, `-` or `_`.
 
@@ -111,4 +113,4 @@ Exit 0. Then it runs `june verify` for all rules, and `june --base main` to see 
 | `ast-grep was not found` | Install ast-grep and put it on `PATH`. Not about any rules directory. |
 | `rule X has the key "fix", which june does not use` | Remove the key; put the correction in `message`. |
 
-A rules directory outside the working directory is named as you spelled it, absolute if you gave it that way.
+An explicit rules directory outside the working directory is named as you spelled it. An automatically selected directory outside the working directory is named with its absolute path.

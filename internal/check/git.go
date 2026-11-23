@@ -122,7 +122,7 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 		msg := fmt.Sprintf(format, a...)
 		return nil, scope{}, &msg, nil
 	}
-	// A caller-resolved GitLab base must still yield to pre-commit refs or a GitHub event base.
+	// A caller-resolved GitLab or config base must still yield to pre-commit refs or a GitHub event base.
 	if source != sourceFlag {
 		from, to := env.Vars["PRE_COMMIT_FROM_REF"], env.Vars["PRE_COMMIT_TO_REF"]
 		if from != "" && to != "" {
@@ -333,7 +333,7 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 	}
 	parsed := touchedSet{}
 	if len(want) > 0 {
-		// Without exclusions, one Python patch suffices. Exclusions use the bounded pair batches
+		// Without exclusions or positional narrowing, one Python patch suffices. Filtered runs use the bounded pair batches
 		// below so discarded destinations and unrelated deletions never enter a content patch.
 		args := append(append([]string{"-c", "core.quotepath=off", "diff"}, cached...), patchFlags...)
 		if ignoreSpace {
