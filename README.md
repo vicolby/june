@@ -26,7 +26,7 @@ june is not a linter with a rule set. It enforces your own team's guidelines as 
 | | june | ruff + reviewdog | Semgrep with a baseline |
 | --- | --- | --- | --- |
 | Rules | Yours, in YAML, each verified against examples. | Ruff's built-in rules; ruff has no user-defined rules. | Yours or the registry's, in YAML. |
-| Old violations | Never judged: only touched lines can fail. | reviewdog filters findings to the diff when configured to; ruff itself reports the whole file. | `--baseline-commit` reports findings new since that commit, compared by finding, not by line. |
+| Old violations | Only touched lines can fail; [`--legacy`](#usage) can list untouched findings as information. | reviewdog filters findings to the diff when configured to; ruff itself reports the whole file. | `--baseline-commit` reports findings new since that commit, compared by finding, not by line. |
 | Rule quality | A rule whose examples misbehave is refused. | Not applicable. | Rule tests are optional (`semgrep --test`). |
 | Network | None on the check path. | None for ruff; reviewdog's [default local reporter](https://github.com/reviewdog/reviewdog#reporter-local--reporterlocal-default) filters locally without posting to a forge. Forge API reporters use the network. | Registry rules, metrics and version checks use the network; avoid those requests with local rules and `--metrics=off --disable-version-check` ([CLI reference](https://docs.semgrep.dev/cli-reference)). |
 
@@ -119,7 +119,7 @@ A rule can scope itself with ast-grep's `files:` and `ignores:`, matched against
 3. `june verify --rule MY001` until it exits 0, then `june verify` for all rules.
 4. `june --rules .june/rules --base main` to see the rule on a real change.
 
-**Drafting with an LLM.** Give the model one guideline, `june new` as the starting point and the loop below; it never needs to be trusted, because june refuses a rule whose examples disagree. Prompt:
+**Drafting with an LLM.** Give the model one guideline, `june new` as the starting point and the loop below to check the draft against its examples. Prompt:
 
 ```text
 Write a june rule MY001 for this guideline: "<guideline>". Run `june new MY001`, then edit
