@@ -19,10 +19,10 @@ No other code is used for a verdict. Warnings, `--legacy` lines and opt-outs nev
 Every verdict ends with one line:
 
 ```text
-june: <N> error[s], <N> warning[s], <N> opt-out[s]; checked <N> file[s], <N> changed line[s][; <coverage notes>]; base <label> (<source>)
+june: <N> error[s], <N> warning[s], <N> opt-out[s]; checked <N> file[s], <N> changed line[s][; <coverage notes>][; base <label> (<source>)]
 ```
 
-The prefix up to `changed line[s]` and the order of its fields are stable, so a script can read the counts. The coverage notes, the base label and its source are for people: their wording can change in any minor release, and a script must not match on them. A refusal has no summary line; it is one `june: error: <cause>. Fix: <instruction>` line.
+The base suffix appears only for Git-derived scope; `--changed-lines` omits it. The prefix up to `changed line[s]` and the order of its fields are stable, so a script can read the counts. The coverage notes, the base label and its source are for people: their wording can change in any minor release, and a script must not match on them. A refusal has no summary line; it is one `june: error: <cause>. Fix: <instruction>` line.
 
 ## Output formats
 
