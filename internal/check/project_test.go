@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/vicolby/june/internal/check"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // twoPackages is a repo whose rules sit at the root and whose changes sit in two packages.
