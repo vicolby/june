@@ -91,7 +91,7 @@ func TestConfigExcludeMasksUnreadableSibling(t *testing.T) {
 				".june/config.yml":  "exclude: [vendor/**]\n",
 			})
 			file := filepath.Join(env.Dir, "vendor", "a.py")
-			write(t, file, "x = 2\n")
+			write(t, file, "x = 22\n")
 			write(t, filepath.Join(env.Dir, "svc", "nested", "app.py"), badDefault)
 			if err := os.Chmod(file, 0); err != nil {
 				t.Fatal(err)
@@ -196,18 +196,42 @@ func TestExcludedUnreadableGitPath(t *testing.T) {
 }
 
 // A deleted excluded sibling stays a rename source when the check runs elsewhere.
+// A path that only shares a leading directory with the working directory is the same case.
 func TestExcludedSiblingDeletionRemainsARenameSource(t *testing.T) {
 	t.Parallel()
-	env := repo(t, map[string]string{
-		"vendor/old.py":    badDefault,
-		"svc/keep.py":      "x = 1\n",
-		".june/config.yml": "exclude: [vendor/**]\n",
-	})
-	if err := os.Rename(filepath.Join(env.Dir, "vendor", "old.py"), filepath.Join(env.Dir, "svc", "new.py")); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name, from, to, dir string
+		files               map[string]string
+	}{
+		{
+			name: "no shared directory",
+			files: map[string]string{
+				"vendor/old.py":    badDefault,
+				"svc/keep.py":      "x = 1\n",
+				".june/config.yml": "exclude: [vendor/**]\n",
+			},
+			from: "vendor/old.py", to: "svc/new.py", dir: "svc",
+		},
+		{
+			name: "shared ancestor",
+			files: map[string]string{
+				"svc/legacy/old.py": badDefault,
+				"svc/pkg/keep.py":   "x = 1\n",
+				".june/config.yml":  "exclude: [svc/legacy/**]\n",
+			},
+			from: "svc/legacy/old.py", to: "svc/pkg/new.py", dir: "svc/pkg",
+		},
 	}
-	sub := check.Env{Dir: filepath.Join(env.Dir, "svc")}
-	expect(t, against(t, sub, "main"), 0, "")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := repo(t, tt.files)
+			if err := os.Rename(filepath.Join(env.Dir, filepath.FromSlash(tt.from)), filepath.Join(env.Dir, filepath.FromSlash(tt.to))); err != nil {
+				t.Fatal(err)
+			}
+			sub := check.Env{Dir: filepath.Join(env.Dir, tt.dir)}
+			expect(t, against(t, sub, "main"), 0, "")
+		})
+	}
 }
 
 func TestExcludedDeletedPathRemainsARenameSource(t *testing.T) {

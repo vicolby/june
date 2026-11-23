@@ -249,11 +249,12 @@ func (e *excluder) fromRoot(root string) string {
 	if len(e.prefix) == 0 {
 		return root
 	}
-	prefix := strings.Join(e.prefix, "/") + "/"
-	if strings.HasPrefix(root, prefix) {
-		return strings.TrimPrefix(root, prefix)
+	rootSegs := strings.Split(root, "/")
+	i := 0
+	for i < len(e.prefix) && i < len(rootSegs) && e.prefix[i] == rootSegs[i] {
+		i++
 	}
-	return strings.Repeat("../", len(e.prefix)) + root
+	return strings.Repeat("../", len(e.prefix)-i) + strings.Join(rootSegs[i:], "/")
 }
 
 // parseGlob splits a glob into slash-separated segments. A leading "./" and a trailing "/" mean nothing.
