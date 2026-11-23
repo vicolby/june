@@ -2,6 +2,7 @@ package check_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -231,7 +232,7 @@ func TestRuleSetExistsOnlyIfEveryExampleBehaved(t *testing.T) {
 	}
 	out := string(res.Out)
 	fix := ". Fix: make the rule and its examples in rule-tests/PY012-test.yml agree\n"
-	want := "june: error: .june/rules/rule-tests/PY012-test.yml: rule PY012 valid example \"def f(a=[]): pass\" is reported by the rule" + fix
+	want := "june: error: .june/rules/rule-tests/PY012-test.yml: rule PY012 valid example #1 \"def f(a=[]): pass\" is reported by the rule" + fix
 	if out != want {
 		t.Errorf("Out = %q, want %q", out, want)
 	}
@@ -257,7 +258,7 @@ func TestRefusals(t *testing.T) {
 		{name: "escaping path", list: ptr("../app.py:1\n"), out: "june: error: changed-lines line 1 is not valid: the path is not inside the repository. Fix: " + listFix + "\n"},
 		{name: "missing file", list: ptr("nope.py:1\n"), out: "june: error: changed-lines names nope.py, which is not a file in the tree. Fix: regenerate the list from the current tree\n"},
 		{name: "missing rules", list: ptr("app.py:1\n"), rules: "absent", out: "june: error: absent: the rules directory does not exist. Fix: create it or point --rules at an existing rules directory\n"},
-		{name: "missing ast-grep", list: ptr("app.py:1\n"), path: "none", out: "june: error: .june/rules: ast-grep was not found. Fix: install ast-grep and put it on PATH, for example npm install --global @ast-grep/cli\n"},
+		{name: "missing ast-grep", list: ptr("app.py:1\n"), path: "none", out: "june: error: ast-grep was not found. Fix: install ast-grep and put it on PATH, for example npm install --global @ast-grep/cli\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -680,8 +681,8 @@ func TestRulesFaultsRefuseVerifyAndRunAlike(t *testing.T) {
 		{
 			name:  "failing example",
 			files: map[string]string{"LST01.yml": rule("m"), sidecar: "id: LST01\nvalid:\n  - \"x = [1]\"\ninvalid:\n  - \"x = (1,)\"\n"},
-			out: "june: error: rules/rule-tests/LST01-test.yml: rule LST01 invalid example \"x = (1,)\" is not reported by the rule. Fix: make the rule and its examples in rule-tests/LST01-test.yml agree\n" +
-				"june: error: rules/rule-tests/LST01-test.yml: rule LST01 valid example \"x = [1]\" is reported by the rule. Fix: make the rule and its examples in rule-tests/LST01-test.yml agree\n",
+			out: "june: error: rules/rule-tests/LST01-test.yml: rule LST01 invalid example #1 \"x = (1,)\" is not reported by the rule. Fix: make the rule and its examples in rule-tests/LST01-test.yml agree\n" +
+				"june: error: rules/rule-tests/LST01-test.yml: rule LST01 valid example #1 \"x = [1]\" is reported by the rule. Fix: make the rule and its examples in rule-tests/LST01-test.yml agree\n",
 		},
 		{
 			name:  "zero rules",
@@ -825,16 +826,17 @@ func TestAbsoluteRulesDirectoriesWithTheSameBaseNameStayDistinct(t *testing.T) {
 	local := filepath.Join(app, ".june", "rules")
 	lst01(t, shared, "LST01.yml", "LST01", "No lists.")
 	lst01(t, local, "LST01.yml", "LST01", "Still no lists.")
-	want := "june: error: .june/rules/LST01.yml: the rule id LST01 is duplicated (also defined in ../shared/rules/LST01.yml). Fix: give every rule a unique id\n"
+	// A directory outside the working directory is named as given, never as a climb of ".." that only fits where the reader stands.
+	want := "june: error: .june/rules/LST01.yml: the rule id LST01 is duplicated (also defined in " + filepath.ToSlash(shared) + "/LST01.yml). Fix: give every rule a unique id\n"
 	res := changeWith(t, env, []string{shared, local}, "app.py:1\n")
-	if res.Exit != 2 || string(res.Out) != want || strings.Contains(string(res.Out), root) {
+	if res.Exit != 2 || string(res.Out) != want {
 		t.Errorf("Exit = %d, Out = %q, want 2 and %q", res.Exit, res.Out, want)
 	}
 	verified, err := check.Rules(context.Background(), env, []string{shared, local})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if verified.Exit != 2 || string(verified.Out) != want || strings.Contains(string(verified.Out), root) {
+	if verified.Exit != 2 || string(verified.Out) != want {
 		t.Errorf("verify Exit = %d, Out = %q, want 2 and %q", verified.Exit, verified.Out, want)
 	}
 }
@@ -893,7 +895,7 @@ func TestFailingExampleNamesItsOwnDirectory(t *testing.T) {
 	lst01(t, filepath.Join(env.Dir, "shared"), "LST01.yml", "LST01", "No lists.")
 	write(t, filepath.Join(env.Dir, "shared", "rule-tests", "LST01-test.yml"), "id: LST01\nvalid:\n  - \"x = [1]\"\ninvalid:\n  - \"x = [1]\"\n")
 	res := changeWith(t, env, []string{".june/rules", "shared"}, "app.py:1\n")
-	want := "june: error: shared/rule-tests/LST01-test.yml: rule LST01 valid example \"x = [1]\" is reported by the rule. Fix: make the rule and its examples in rule-tests/LST01-test.yml agree\n"
+	want := "june: error: shared/rule-tests/LST01-test.yml: rule LST01 valid example #1 \"x = [1]\" is reported by the rule. Fix: make the rule and its examples in rule-tests/LST01-test.yml agree\n"
 	if res.Exit != 2 || string(res.Out) != want {
 		t.Errorf("Exit = %d, Out = %q, want 2 and %q", res.Exit, res.Out, want)
 	}
@@ -1125,4 +1127,152 @@ func TestSyntaxErrorOnUntouchedLinesIsQuiet(t *testing.T) {
 	env := tree(t, map[string]string{"bad.py": "x = 1\n\n\n\n\ny = (\n"})
 	res := change(t, env, "bad.py:1\n")
 	expect(t, res, 0, "")
+}
+
+const noteRule = "id: LST01\nlanguage: python\nseverity: error\nmessage: No lists.\nnote: Use a tuple.\nurl: https://example.com/LST01\nrule:\n  kind: list\n"
+
+func noteEnv(t *testing.T) check.Env {
+	t.Helper()
+	env := tree(t, map[string]string{"app.py": "x = [1]\n"})
+	lst01(t, filepath.Join(env.Dir, "notes"), "LST01.yml", "LST01", "No lists.")
+	write(t, filepath.Join(env.Dir, "notes", "LST01.yml"), noteRule)
+	return env
+}
+
+func TestFindingPrintsNoteAndURLOfItsRule(t *testing.T) {
+	env := noteEnv(t)
+	res := changeWith(t, env, []string{"notes"}, "app.py:1\n")
+	want := "app.py:1:5: LST01 No lists.\n  note: Use a tuple.\n  url: https://example.com/LST01\n"
+	if res.Exit != 1 || !strings.HasPrefix(string(res.Out), want) {
+		t.Errorf("Exit = %d, Out = %q, want 1 and prefix %q", res.Exit, res.Out, want)
+	}
+}
+
+func TestNoteAndURLTravelIntoEveryFormat(t *testing.T) {
+	env := noteEnv(t)
+	for format, want := range map[diag.Format][]string{
+		diag.JSON:   {`"note": "Use a tuple."`, `"url": "https://example.com/LST01"`},
+		diag.SARIF:  {`"helpUri": "https://example.com/LST01"`, `"text": "Use a tuple."`},
+		diag.GitHub: {"::error file=app.py,line=1,col=5,title=LST01::No lists.%0Anote: Use a tuple.%0Aurl: https://example.com/LST01\n"},
+		diag.GitLab: {`"body": "Use a tuple.\n\nhttps://example.com/LST01"`},
+	} {
+		t.Run(string(format), func(t *testing.T) {
+			res, err := check.Change(context.Background(), env, check.Request{Rules: []string{"notes"}, Changed: strings.NewReader("app.py:1\n"), Format: format})
+			if err != nil {
+				t.Fatal(err)
+			}
+			all := string(res.Out)
+			for _, f := range res.Files {
+				all += string(f.Data)
+			}
+			for _, w := range want {
+				if !strings.Contains(all, w) {
+					t.Errorf("output lacks %q:\n%s", w, all)
+				}
+			}
+		})
+	}
+}
+
+func TestVerifyOneRuleIgnoresTheExamplesOfOthers(t *testing.T) {
+	env := tree(t, nil)
+	lst01(t, filepath.Join(env.Dir, "mine"), "LST01.yml", "LST01", "No lists.")
+	lst01(t, filepath.Join(env.Dir, "mine"), "LST02.yml", "LST02", "No lists either.")
+	write(t, filepath.Join(env.Dir, "mine", "rule-tests", "LST02-test.yml"), "id: LST02\nvalid:\n  - \"x = [1]\"\ninvalid:\n  - \"x = [1]\"\n")
+	all, err := check.Verify(context.Background(), env, check.VerifyRequest{Rules: []string{"mine"}})
+	if err != nil || all.Exit != 2 {
+		t.Fatalf("verify of all = %d, %v, want 2", all.Exit, err)
+	}
+	one, err := check.Verify(context.Background(), env, check.VerifyRequest{Rules: []string{"mine"}, Rule: "LST01"})
+	if err != nil || one.Exit != 0 || !strings.HasPrefix(string(one.Out), "june: verified 1 rule, 2 examples with ast-grep ") {
+		t.Fatalf("verify of LST01 = %d %q, %v, want it verified", one.Exit, one.Out, err)
+	}
+	bad, err := check.Verify(context.Background(), env, check.VerifyRequest{Rules: []string{"mine"}, Rule: "LST02"})
+	if err != nil || bad.Exit != 2 || !strings.Contains(string(bad.Out), "rule LST02 valid example #1") {
+		t.Fatalf("verify of LST02 = %d %q, %v, want its failing example", bad.Exit, bad.Out, err)
+	}
+	none, err := check.Verify(context.Background(), env, check.VerifyRequest{Rules: []string{"mine"}, Rule: "NOPE"})
+	want := "june: error: no rule has the id NOPE (rules found: LST01, LST02). Fix: pass the id of a rule in the rules directories to --rule\n"
+	if err != nil || none.Exit != 2 || string(none.Out) != want {
+		t.Errorf("verify of NOPE = %d %q, %v, want 2 and %q", none.Exit, none.Out, err, want)
+	}
+}
+
+// An author's tool reads the JSON, so a failing example names its file and rule without parsing the sentence.
+func TestVerifyJSONNamesTheFailingExamplesFileAndRule(t *testing.T) {
+	env := tree(t, nil)
+	lst01(t, filepath.Join(env.Dir, "mine"), "LST01.yml", "LST01", "No lists.")
+	write(t, filepath.Join(env.Dir, "mine", "rule-tests", "LST01-test.yml"), "id: LST01\nvalid:\n  - \"x = [1]\"\ninvalid:\n  - \"x = [1]\"\n")
+	res, err := check.Verify(context.Background(), env, check.VerifyRequest{Rules: []string{"mine"}, Rule: "LST01", Format: diag.JSON})
+	if err != nil || res.Exit != 2 {
+		t.Fatalf("Verify = %d, %v, want 2", res.Exit, err)
+	}
+	var doc struct {
+		Diagnostics []struct{ Kind, Severity, File, Rule, Message string }
+	}
+	if err := json.Unmarshal(res.Out, &doc); err != nil || len(doc.Diagnostics) != 1 {
+		t.Fatalf("Out = %s, %v, want one diagnostic", res.Out, err)
+	}
+	d := doc.Diagnostics[0]
+	if d.Kind != "failure" || d.Severity != "error" || d.File != "mine/rule-tests/LST01-test.yml" || d.Rule != "LST01" || !strings.Contains(d.Message, "valid example #1") {
+		t.Errorf("diagnostic = %+v", d)
+	}
+	ok, err := check.Verify(context.Background(), tree(t, nil), check.VerifyRequest{Format: diag.JSON})
+	if err != nil || ok.Exit != 0 || !strings.Contains(string(ok.Out), `"diagnostics": []`) || !strings.Contains(string(ok.Out), "june: verified") {
+		t.Errorf("passing verify = %d %s, %v, want an empty diagnostics list and the summary", ok.Exit, ok.Out, err)
+	}
+}
+
+func TestMissingAstGrepIsNotAttributedToARulesDirectory(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	env := tree(t, nil)
+	for _, f := range []diag.Format{diag.Text, diag.JSON} {
+		res, err := check.Verify(context.Background(), env, check.VerifyRequest{Format: f})
+		if err != nil || res.Exit != 2 || !strings.Contains(string(res.Out), "ast-grep was not found") || strings.Contains(string(res.Out), ".june/rules") {
+			t.Errorf("%s: Verify = %d %q, %v, want a refusal that names no rules directory", f, res.Exit, res.Out, err)
+		}
+	}
+}
+
+func TestFileAsRulesDirectoryIsSaidSo(t *testing.T) {
+	env := tree(t, map[string]string{"x.py": "x = 1\n"})
+	res := changeWith(t, env, []string{".june/rules/PY012.yml"}, "x.py:1\n")
+	want := "june: error: .june/rules/PY012.yml: the rules path is a file, not a directory. Fix: point --rules at the directory that holds the rule files, not at one rule file\n"
+	if res.Exit != 2 || string(res.Out) != want {
+		t.Errorf("Exit = %d, Out = %q, want 2 and %q", res.Exit, res.Out, want)
+	}
+}
+
+func TestNewWritesRuleThatVerifiesAndNeverOverwrites(t *testing.T) {
+	env := tree(t, nil)
+	res, err := check.New(env, []string{"mine"}, "MY001")
+	want := "created mine/MY001.yml\ncreated mine/rule-tests/MY001-test.yml\nnext: edit the rule and its examples, then run june verify --rule MY001\n"
+	if err != nil || res.Exit != 0 || string(res.Out) != want {
+		t.Fatalf("New = %d %q, %v, want %q", res.Exit, res.Out, err, want)
+	}
+	if v, err := check.Verify(context.Background(), env, check.VerifyRequest{Rules: []string{"mine"}, Rule: "MY001"}); err != nil || v.Exit != 0 {
+		t.Fatalf("the scaffold does not verify: %d %q, %v", v.Exit, v.Out, err)
+	}
+	again, err := check.New(env, []string{"mine"}, "MY001")
+	if err != nil || again.Exit != 2 || !strings.Contains(string(again.Out), "mine/MY001.yml: the file already exists") {
+		t.Errorf("second New = %d %q, %v, want a refusal", again.Exit, again.Out, err)
+	}
+	dir, err := check.New(env, []string{"a", "b"}, "MY002")
+	if err != nil || dir.Exit != 2 || !strings.Contains(string(dir.Out), "one rules directory") {
+		t.Errorf("New with two directories = %d %q, %v, want a refusal", dir.Exit, dir.Out, err)
+	}
+	if _, err := os.Stat(filepath.Join(env.Dir, "a")); err == nil {
+		t.Error("New created a directory although it refused")
+	}
+}
+
+func TestNewDefaultsToTheJuneRulesDirectory(t *testing.T) {
+	env := check.Env{Dir: t.TempDir()}
+	res, err := check.New(env, nil, "MY001")
+	if err != nil || res.Exit != 0 || !strings.HasPrefix(string(res.Out), "created .june/rules/MY001.yml\n") {
+		t.Fatalf("New = %d %q, %v", res.Exit, res.Out, err)
+	}
+	if v, err := check.Verify(context.Background(), env, check.VerifyRequest{}); err != nil || v.Exit != 0 {
+		t.Errorf("verify of the default directory = %d %q, %v", v.Exit, v.Out, err)
+	}
 }

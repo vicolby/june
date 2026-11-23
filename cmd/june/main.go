@@ -59,7 +59,8 @@ func snapshotEnv(getwd func() (string, error)) (check.Env, error) {
 // usage is the help text: `june --help` and `june -h` print it to stdout and exit 0.
 const usage = `usage:
   june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--exclude GLOB]... [--base REF | --changed-lines FILE]
-  june verify [--rules DIR]...
+  june verify [--rules DIR]... [--rule ID] [--format FORMAT]
+  june new [--rules DIR] RULE
   june --version
   june --help | -h
 
@@ -67,10 +68,11 @@ flags:
   --base REF            judge lines changed since the merge base of REF and HEAD
   --changed-lines FILE  file of touched lines, path:7 or path:7-12 per line; - reads stdin
   --exclude GLOB        keep paths out of the check, repeatable; adds to exclude in .june/config.yml
-  --format FORMAT       text, json, sarif, github or gitlab (default: github under GitHub Actions, gitlab under GitLab CI, else text)
+  --format FORMAT       text, json, sarif, github or gitlab (default: github under GitHub Actions, gitlab under GitLab CI, else text); verify takes it too
+  --rule ID             with verify: check the examples of one rule only
   --ignore-whitespace   do not count a line whose only change is whitespace as touched (git diff -w)
   --legacy              also list violations on untouched lines, information only
-  --rules DIR           rules directory, repeatable (default ./.june/rules)
+  --rules DIR           rules directory, repeatable (default ./.june/rules); june new takes one
   --version             print the june and ast-grep versions
   --help, -h            print this help
 
@@ -83,6 +85,9 @@ exit codes:
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, env check.Env) int {
 	if len(args) > 0 && args[0] == "verify" {
 		return verify(ctx, args[1:], stdout, stderr, env)
+	}
+	if len(args) > 0 && args[0] == "new" {
+		return newRule(args[1:], stdout, stderr, env)
 	}
 	fs := flag.NewFlagSet("june", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -139,12 +144,14 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	return finish(env.Dir, stdout, stderr, res, err)
 }
 
-// verify is `june verify [--rules DIR]...`: every example of every rule behaves, or the run is refused.
+// verify is `june verify [--rules DIR]... [--rule ID] [--format FORMAT]`: every example of every rule, or of one rule, behaves, or the run is refused.
 func verify(ctx context.Context, args []string, stdout, stderr io.Writer, env check.Env) int {
 	fs := flag.NewFlagSet("june verify", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var rulesDirs dirList
 	fs.Var(&rulesDirs, "rules", "rules directory, repeatable (default ./.june/rules)")
+	rule := fs.String("rule", "", "verify the examples of this rule id only")
+	format := fs.String("format", "", "output format: text, json, sarif, github or gitlab")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(stdout, usage)
@@ -155,7 +162,46 @@ func verify(ctx context.Context, args []string, stdout, stderr io.Writer, env ch
 	if fs.NArg() > 0 {
 		return usageError(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
 	}
-	res, err := check.Rules(ctx, env, rulesDirs)
+	req := check.VerifyRequest{Rules: rulesDirs, Rule: *rule}
+	if *format != "" {
+		f, ok := diag.ParseFormat(*format)
+		if !ok {
+			return usageError(stderr, fmt.Sprintf("unknown format %q", *format))
+		}
+		req.Format = f
+	}
+	res, err := check.Verify(ctx, env, req)
+	return finish(env.Dir, stdout, stderr, res, err)
+}
+
+// newRule is `june new [--rules DIR] RULE`: it writes a minimal rule and its examples, which verify accepts as written.
+// The rule id may come before or after the flag.
+func newRule(args []string, stdout, stderr io.Writer, env check.Env) int {
+	fs := flag.NewFlagSet("june new", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var rulesDirs dirList
+	fs.Var(&rulesDirs, "rules", "rules directory (default ./.june/rules)")
+	var id string
+	for rest := args; ; {
+		if err := fs.Parse(rest); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				fmt.Fprint(stdout, usage)
+				return 0
+			}
+			return usageError(stderr, err.Error())
+		}
+		if rest = fs.Args(); len(rest) == 0 {
+			break
+		}
+		if id != "" {
+			return usageError(stderr, fmt.Sprintf("unexpected argument %q", rest[0]))
+		}
+		id, rest = rest[0], rest[1:]
+	}
+	if id == "" {
+		return usageError(stderr, "june new needs a rule id")
+	}
+	res, err := check.New(env, rulesDirs, id)
 	return finish(env.Dir, stdout, stderr, res, err)
 }
 
@@ -205,7 +251,7 @@ func appendFile(path string, data []byte) (err error) {
 }
 
 func usageError(stderr io.Writer, cause string) int {
-	return fail(stderr, cause+". Fix: usage is june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--exclude GLOB]... [--base REF | --changed-lines FILE], june verify [--rules DIR]..., june --version, or june --help")
+	return fail(stderr, cause+". Fix: usage is june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--exclude GLOB]... [--base REF | --changed-lines FILE], june verify [--rules DIR]... [--rule ID] [--format FORMAT], june new [--rules DIR] RULE, june --version, or june --help")
 }
 
 func fail(stderr io.Writer, msg string) int {

@@ -46,8 +46,8 @@ func TestLoadNamesEveryMisbehavingExample(t *testing.T) {
 		t.Fatalf("faults = %v, want 2", faults)
 	}
 	want := []string{
-		`rule LST01 valid example "x = [1]" is reported by the rule`,
-		`rule LST01 invalid example "x = (1,)" is not reported by the rule`,
+		`rule LST01 valid example #1 "x = [1]" is reported by the rule`,
+		`rule LST01 invalid example #1 "x = (1,)" is not reported by the rule`,
 	}
 	for i, f := range faults {
 		if f.Path != "rule-tests/LST01-test.yml" || f.Cause != want[i] {
@@ -62,7 +62,7 @@ func TestLoadRefusesUnverifiedRules(t *testing.T) {
 		wantPath  string
 		wantCause string
 	}{
-		{"bad_example", "rule-tests/LST01-test.yml", "valid example \"x = [1]\" is reported"},
+		{"bad_example", "rule-tests/LST01-test.yml", "valid example #1 \"x = [1]\" is reported"},
 		{"empty_message", "LST01.yml", "empty message"},
 		{"no_examples", "LST01.yml", "no examples"},
 		{"one_sided", "rule-tests/LST01-test.yml", "both valid and invalid"},
@@ -392,8 +392,8 @@ func TestLoadQuotesEachExampleWhenAnotherRulePasses(t *testing.T) {
 		t.Fatal("Load returned a rule set")
 	}
 	want := []string{
-		`rule ZZZ valid example "x = [1]" is reported by the rule`,
-		`rule ZZZ invalid example "x = (1,)" is not reported by the rule`,
+		`rule ZZZ valid example #1 "x = [1]" is reported by the rule`,
+		`rule ZZZ invalid example #1 "x = (1,)" is not reported by the rule`,
 	}
 	if len(faults) != len(want) {
 		t.Fatalf("faults = %+v, want %d", faults, len(want))
@@ -427,8 +427,8 @@ func TestLoadExecutesSeverityOffRules(t *testing.T) {
 			t.Fatal("Load returned a rule set")
 		}
 		want := []string{
-			`rule DRAFT valid example "x = [1]" is reported by the rule`,
-			`rule DRAFT invalid example "x = (1,)" is not reported by the rule`,
+			`rule DRAFT valid example #1 "x = [1]" is reported by the rule`,
+			`rule DRAFT invalid example #1 "x = (1,)" is not reported by the rule`,
 		}
 		if len(faults) != len(want) {
 			t.Fatalf("faults = %+v, want %d", faults, len(want))
@@ -879,8 +879,9 @@ func TestScanAppliesRulePathFilters(t *testing.T) {
 func TestLoadRefusesRuleKeysJuneIgnores(t *testing.T) {
 	tests := []struct{ name, extra, wantCause string }{
 		{"fix", "fix: x = ()\n", `the key "fix", which june does not use`},
-		{"note", "note: use a tuple\n", `the key "note", which june does not use`},
-		{"url", "url: https://example.com\n", `the key "url"`},
+		{"empty note", "note: ' '\n", "an empty note"},
+		{"url that is not a link", "url: not a link\n", "not an http or https link"},
+		{"url with another scheme", "url: javascript:alert(1)\n", "not an http or https link"},
 		{"labels", "labels:\n  x: {style: primary}\n", `the key "labels"`},
 		{"metadata", "metadata:\n  a: 1\n", `the key "metadata"`},
 		{"bad glob", "files: ['[unclosed']\n", "not a valid glob"},
@@ -957,5 +958,236 @@ func TestScanReportsSyntaxErrorSpans(t *testing.T) {
 		if m.Rule == "june-parse-error" {
 			t.Errorf("the built-in rule leaked into Matches: %+v", m)
 		}
+	}
+}
+
+// writeRuleSet lays out a rules directory: files maps a path under dir to its text.
+func writeRuleSet(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range files {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write(t, path, body)
+	}
+	return dir
+}
+
+const listRule = "id: %s\nlanguage: python\nseverity: error\nmessage: 'Fix: no lists'\n%srule:\n  kind: list\n"
+
+func listRuleFiles(id, extra string) map[string]string {
+	return map[string]string{
+		id + ".yml":                      fmt.Sprintf(listRule, id, extra),
+		"rule-tests/" + id + "-test.yml": "id: " + id + "\nvalid: ['x = (1,)']\ninvalid: ['x = [1]']\n",
+	}
+}
+
+func TestScanCarriesNoteAndURLOfTheRule(t *testing.T) {
+	dir := writeRuleSet(t, listRuleFiles("LST01", "note: |\n  Use a tuple.\n  Lists are mutable.\nurl: https://example.com/LST01\n"))
+	rs, faults := rules.Load(context.Background(), dir)
+	if rs == nil {
+		t.Fatalf("Load: %+v", faults)
+	}
+	root := t.TempDir()
+	write(t, filepath.Join(root, "a.py"), "x = [1]\n")
+	got, err := rs.Scan(context.Background(), root, []string{"a.py"})
+	if err != nil || len(got.Matches) != 1 {
+		t.Fatalf("Scan = %+v, %v, want one match", got, err)
+	}
+	if m := got.Matches[0]; m.Note != "Use a tuple.\nLists are mutable." || m.URL != "https://example.com/LST01" {
+		t.Errorf("Note, URL = %q, %q", m.Note, m.URL)
+	}
+}
+
+func TestScanLeavesNoteAndURLEmptyWhenTheRuleHasNone(t *testing.T) {
+	rs := loadGood(t)
+	root := t.TempDir()
+	write(t, filepath.Join(root, "a.py"), "x = [1]\n")
+	got, err := rs.Scan(context.Background(), root, []string{"a.py"})
+	if err != nil || len(got.Matches) != 1 || got.Matches[0].Note != "" || got.Matches[0].URL != "" {
+		t.Fatalf("Scan = %+v, %v, want one match without note or url", got, err)
+	}
+}
+
+// A broken rule elsewhere refuses the run, but a broken example of another rule does not hide the one author is working on.
+func TestLoadRuleVerifiesOnlyTheNamedRule(t *testing.T) {
+	files := listRuleFiles("LST01", "")
+	for name, body := range listRuleFiles("LST02", "") {
+		files[name] = body
+	}
+	files["rule-tests/LST02-test.yml"] = "id: LST02\nvalid: ['x = [1]']\ninvalid: ['x = [1]']\n"
+	dir := writeRuleSet(t, files)
+	if _, faults := rules.Load(context.Background(), dir); len(faults) == 0 {
+		t.Fatal("Load accepted a rule whose example misbehaves")
+	}
+	rs, faults := rules.LoadRule(context.Background(), "LST01", dir)
+	if rs == nil || rs.Rules() != 1 || rs.Examples() != 2 {
+		t.Fatalf("LoadRule = %v, %+v, want a set of the one rule", rs, faults)
+	}
+	_, faults = rules.LoadRule(context.Background(), "LST02", dir)
+	if len(faults) != 1 || faults[0].Rule != "LST02" || faults[0].Path != "rule-tests/LST02-test.yml" {
+		t.Errorf("faults = %+v, want one for the examples of LST02", faults)
+	}
+}
+
+func TestLoadRuleUnknownIDListsTheRulesThereAre(t *testing.T) {
+	dir := writeRuleSet(t, listRuleFiles("LST01", ""))
+	rs, faults := rules.LoadRule(context.Background(), "NOPE", dir)
+	if rs != nil || len(faults) != 1 || faults[0].Dir != rules.NoDir || !strings.Contains(faults[0].Cause, "no rule has the id NOPE (rules found: LST01)") {
+		t.Errorf("LoadRule = %v, %+v, want one fault naming the known ids", rs, faults)
+	}
+}
+
+func TestLoadFaultNamesTheExampleNumber(t *testing.T) {
+	files := listRuleFiles("LST01", "")
+	files["rule-tests/LST01-test.yml"] = "id: LST01\nvalid: ['x = (1,)', 'y = [2]']\ninvalid: ['x = [1]', 'z = (3,)']\n"
+	_, faults := rules.Load(context.Background(), writeRuleSet(t, files))
+	want := []string{
+		`rule LST01 valid example #2 "y = [2]" is reported by the rule`,
+		`rule LST01 invalid example #2 "z = (3,)" is not reported by the rule`,
+	}
+	if len(faults) != 2 {
+		t.Fatalf("faults = %+v, want 2", faults)
+	}
+	for i, f := range faults {
+		if f.Cause != want[i] || f.Rule != "LST01" {
+			t.Errorf("fault %d = %+v, want cause %q for rule LST01", i, f, want[i])
+		}
+	}
+}
+
+func TestLoadSharesUtilityRulesAcrossRules(t *testing.T) {
+	files := map[string]string{
+		"utils/is-list.yml": "id: is-list\nlanguage: python\nrule:\n  kind: list\n",
+	}
+	for _, id := range []string{"LST01", "LST02"} {
+		files[id+".yml"] = "id: " + id + "\nlanguage: python\nseverity: error\nmessage: 'Fix: no lists'\nrule:\n  matches: is-list\n"
+		files["rule-tests/"+id+"-test.yml"] = "id: " + id + "\nvalid: ['x = (1,)']\ninvalid: ['x = [1]']\n"
+	}
+	rs, faults := rules.Load(context.Background(), writeRuleSet(t, files))
+	if rs == nil {
+		t.Fatalf("Load: %+v", faults)
+	}
+	if rs.Rules() != 2 {
+		t.Errorf("Rules = %d, want 2: a utility rule is not a rule that is run", rs.Rules())
+	}
+	root := t.TempDir()
+	write(t, filepath.Join(root, "a.py"), "x = [1]\n")
+	got, err := rs.Scan(context.Background(), root, []string{"a.py"})
+	if err != nil || len(got.Matches) != 2 {
+		t.Fatalf("Scan = %+v, %v, want one match per rule through the shared utility", got, err)
+	}
+}
+
+func TestLoadUtilityRuleFaults(t *testing.T) {
+	util := "id: is-list\nlanguage: python\nrule:\n  kind: list\n"
+	tests := []struct {
+		name  string
+		utils map[string]string
+		cause string
+		path  string
+	}{
+		{"unreadable yaml", map[string]string{"utils/a.yml": "rule: [\n"}, "one valid YAML document", "utils/a.yml"},
+		{"no id", map[string]string{"utils/a.yml": "language: python\nrule:\n  kind: list\n"}, "no id", "utils/a.yml"},
+		{"unparseable", map[string]string{"utils/a.yml": "id: a\nlanguage: python\nrule:\n  kind: list\n  bogus: 1\n"}, "unknown field `bogus`", ""},
+		{"duplicate", map[string]string{"utils/a.yml": util, "utils/b.yml": util}, "utility rule id is-list is duplicated", "utils/b.yml"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			files := listRuleFiles("LST01", "")
+			for name, body := range tt.utils {
+				files[name] = body
+			}
+			rs, faults := rules.Load(context.Background(), writeRuleSet(t, files))
+			// ast-grep does not say which utility rule it cannot read, so that fault has no path.
+			if rs != nil || len(faults) != 1 || faults[0].Path != tt.path || !strings.Contains(faults[0].Cause, tt.cause) {
+				t.Fatalf("Load = %v, %+v, want one fault at %s containing %q", rs, faults, tt.path, tt.cause)
+			}
+		})
+	}
+}
+
+func TestLoadFileAsRulesDirectoryIsNotMissing(t *testing.T) {
+	dir := writeRuleSet(t, listRuleFiles("LST01", ""))
+	_, faults := rules.Load(context.Background(), filepath.Join(dir, "LST01.yml"))
+	if len(faults) != 1 || !strings.Contains(faults[0].Cause, "is a file, not a directory") || !strings.Contains(faults[0].Fix, "not at one rule file") {
+		t.Errorf("faults = %+v, want one saying the path is a file", faults)
+	}
+}
+
+// A fault about ast-grep belongs to no rules directory, so it must not be labelled with one.
+func TestLoadEnvironmentFaultsConcernNoDirectory(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	_, faults := rules.Load(context.Background(), fixture("good"))
+	if len(faults) != 1 || faults[0].Dir != rules.NoDir {
+		t.Errorf("faults = %+v, want one with no directory", faults)
+	}
+	_, faults = rules.Load(context.Background())
+	if len(faults) != 1 || faults[0].Dir != rules.NoDir {
+		t.Errorf("faults = %+v, want one with no directory", faults)
+	}
+}
+
+func TestScaffoldWritesARuleThatVerifies(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "new", "rules")
+	made, fault := rules.Scaffold(dir, "MY001")
+	if fault != nil || !slices.Equal(made, []string{"MY001.yml", "rule-tests/MY001-test.yml"}) {
+		t.Fatalf("Scaffold = %v, %+v", made, fault)
+	}
+	rs, faults := rules.Load(context.Background(), dir)
+	if rs == nil || rs.Rules() != 1 || rs.Examples() != 2 {
+		t.Fatalf("the scaffold does not verify: %v, %+v", rs, faults)
+	}
+	root := t.TempDir()
+	write(t, filepath.Join(root, "a.py"), "print(1)\n")
+	if got, err := rs.Scan(context.Background(), root, []string{"a.py"}); err != nil || len(got.Matches) != 1 {
+		t.Errorf("Scan = %+v, %v, want the scaffolded rule to find print", got, err)
+	}
+}
+
+func TestScaffoldNeverOverwrites(t *testing.T) {
+	dir := writeRuleSet(t, listRuleFiles("LST01", ""))
+	before, err := os.ReadFile(filepath.Join(dir, "LST01.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if made, fault := rules.Scaffold(dir, "LST01"); made != nil || fault == nil || fault.Path != "LST01.yml" {
+		t.Errorf("Scaffold = %v, %+v, want a fault at LST01.yml", made, fault)
+	}
+	// A leftover examples file alone also blocks, and nothing half-written is left behind.
+	orphan := t.TempDir()
+	write(t, filepath.Join(orphan, "x"), "")
+	if err := os.Mkdir(filepath.Join(orphan, "rule-tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(orphan, "rule-tests", "MY001-test.yml"), "keep")
+	if _, fault := rules.Scaffold(orphan, "MY001"); fault == nil || fault.Path != "rule-tests/MY001-test.yml" {
+		t.Errorf("fault = %+v, want one at the examples file", fault)
+	}
+	if _, err := os.Stat(filepath.Join(orphan, "MY001.yml")); err == nil {
+		t.Error("a rule file was written next to an existing examples file")
+	}
+	after, _ := os.ReadFile(filepath.Join(dir, "LST01.yml"))
+	if string(after) != string(before) {
+		t.Error("the existing rule was changed")
+	}
+}
+
+func TestScaffoldRefusesUnusableIDs(t *testing.T) {
+	for _, id := range []string{"", "a/b", "../x", "a b", "a: b", "-x", ".", "june-parse-error", "JUNE-Parse-Error"} {
+		dir := t.TempDir()
+		if made, fault := rules.Scaffold(dir, id); made != nil || fault == nil {
+			t.Errorf("Scaffold(%q) = %v, %+v, want a fault", id, made, fault)
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+			t.Errorf("Scaffold(%q) wrote %d entries", id, len(entries))
+		}
+	}
+	file := filepath.Join(t.TempDir(), "f")
+	write(t, file, "")
+	if _, fault := rules.Scaffold(file, "MY001"); fault == nil || !strings.Contains(fault.Cause, "is a file") {
+		t.Errorf("fault = %+v, want one saying the path is a file", fault)
 	}
 }

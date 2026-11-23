@@ -338,7 +338,7 @@ func TestVerifyFaultExitsTwo(t *testing.T) {
 	}
 	var out, errOut bytes.Buffer
 	code := run(context.Background(), []string{"verify"}, strings.NewReader(""), &out, &errOut, env)
-	want := "june: error: .june/rules/rule-tests/PY012-test.yml: rule PY012 valid example \"def f(a=[]): pass\" is reported by the rule. Fix: make the rule and its examples in rule-tests/PY012-test.yml agree\n"
+	want := "june: error: .june/rules/rule-tests/PY012-test.yml: rule PY012 valid example #1 \"def f(a=[]): pass\" is reported by the rule. Fix: make the rule and its examples in rule-tests/PY012-test.yml agree\n"
 	if code != 2 || out.String() != want {
 		t.Errorf("exit = %d, stdout = %q, want 2 and %q", code, out.String(), want)
 	}
@@ -799,5 +799,67 @@ func TestInternalErrorNamesWhereToReportAndTheVersion(t *testing.T) {
 	want := "Fix: report this as a june bug at https://github.com/vicolby/june/issues with june " + version
 	if !strings.Contains(errOut.String(), want) {
 		t.Errorf("stderr = %q, want it to contain %q", errOut.String(), want)
+	}
+}
+
+func runArgs(t *testing.T, env check.Env, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	code = run(context.Background(), args, strings.NewReader(""), &out, &errOut, env)
+	return code, out.String(), errOut.String()
+}
+
+func TestNewScaffoldsARuleThatVerifies(t *testing.T) {
+	env := check.Env{Dir: t.TempDir()}
+	for _, args := range [][]string{{"new", "MY001"}, {"new", "--rules", "other", "MY002"}, {"new", "MY003", "--rules", "other"}} {
+		if code, out, errOut := runArgs(t, env, args...); code != 0 || !strings.HasPrefix(out, "created ") || errOut != "" {
+			t.Fatalf("%v: exit = %d, stdout = %q, stderr = %q", args, code, out, errOut)
+		}
+	}
+	for _, args := range [][]string{{"verify"}, {"verify", "--rules", "other", "--rule", "MY003", "--format", "json"}} {
+		if code, out, errOut := runArgs(t, env, args...); code != 0 || !strings.Contains(out, "verified") || errOut != "" {
+			t.Errorf("%v: exit = %d, stdout = %q, stderr = %q", args, code, out, errOut)
+		}
+	}
+}
+
+func TestNewArguments(t *testing.T) {
+	env := check.Env{Dir: t.TempDir()}
+	for _, args := range [][]string{{"new"}, {"new", "A", "B"}, {"new", "--format", "json", "A"}, {"new", "--bogus"}} {
+		code, out, errOut := runArgs(t, env, args...)
+		if code != 2 || out != "" || !strings.Contains(errOut, ". Fix: usage is") {
+			t.Errorf("%v: exit = %d, stdout = %q, stderr = %q, want a usage error", args, code, out, errOut)
+		}
+	}
+	if entries, _ := os.ReadDir(env.Dir); len(entries) != 0 {
+		t.Errorf("a refused new wrote %d entries", len(entries))
+	}
+}
+
+func TestVerifyOneRuleAsJSON(t *testing.T) {
+	env := project(t)
+	code, out, errOut := runArgs(t, env, "verify", "--rule", "PY012", "--format", "json")
+	if code != 0 || errOut != "" || !strings.Contains(out, `"diagnostics": []`) || !strings.Contains(out, "verified 1 rule, 19 examples") {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out, errOut)
+	}
+	code, out, errOut = runArgs(t, env, "verify", "--rule", "NOPE")
+	if code != 2 || !strings.Contains(out, "no rule has the id NOPE (rules found: PY012)") || errOut != "" {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out, errOut)
+	}
+}
+
+func TestVerifyUnknownFormatIsUsageError(t *testing.T) {
+	code, out, errOut := runArgs(t, project(t), "verify", "--format", "xml")
+	if code != 2 || out != "" || !strings.Contains(errOut, `unknown format "xml"`) {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out, errOut)
+	}
+}
+
+func TestHelpListsTheAuthoringCommands(t *testing.T) {
+	_, out, _ := runArgs(t, project(t), "--help")
+	for _, want := range []string{"june verify [--rules DIR]... [--rule ID] [--format FORMAT]", "june new [--rules DIR] RULE", "--rule ID"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help lacks %q", want)
+		}
 	}
 }

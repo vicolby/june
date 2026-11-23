@@ -545,3 +545,109 @@ func TestStepSummaryCapsRows(t *testing.T) {
 		t.Errorf("rows = %d:\n%s", rows, got[len(got)-80:])
 	}
 }
+
+var withNote = diag.Diagnostic{File: "a.py", Line: 3, Col: 1, Code: "MY001", Sev: diag.Error, Kind: diag.Finding, Msg: "No print.",
+	Note: "Use logging.\nIt keeps output.", URL: "https://example.com/MY001"}
+
+func TestRenderTextPrintsNoteAndURLUnderTheFinding(t *testing.T) {
+	out, _ := diag.Render([]diag.Diagnostic{withNote, {File: "b.py", Line: 1, Col: 1, Code: "MY002", Msg: "plain"}}, "", diag.Text)
+	want := "a.py:3:1: MY001 No print.\n  note: Use logging.\n        It keeps output.\n  url: https://example.com/MY001\nb.py:1:1: MY002 plain\n"
+	if string(out) != want {
+		t.Errorf("out =\n%s\nwant\n%s", out, want)
+	}
+}
+
+func TestRenderTextEscapesControlsInNoteAndURL(t *testing.T) {
+	d := withNote
+	d.Note, d.URL = "bell\a", "https://example.com/\x1b[31m"
+	out, _ := diag.Render([]diag.Diagnostic{d}, "", diag.Text)
+	if strings.ContainsAny(string(out), "\a\x1b") {
+		t.Errorf("out has raw control characters: %q", out)
+	}
+}
+
+// Legacy matches and opt-outs are information, so they stay as short as before.
+func TestRenderLegacyAndOptOutCarryNoNote(t *testing.T) {
+	legacy, optOut := withNote, withNote
+	legacy.Kind, optOut.Kind = diag.Legacy, diag.OptOut
+	out, _ := diag.Render([]diag.Diagnostic{legacy, optOut}, "", diag.Text)
+	if strings.Contains(string(out), "note:") || strings.Contains(string(out), "url:") {
+		t.Errorf("out = %q, want no note or url", out)
+	}
+}
+
+func TestRenderJSONCarriesNoteURLAndAFailuresFileAndRule(t *testing.T) {
+	failure := diag.Diagnostic{Kind: diag.Failure, Sev: diag.Error, File: "rules/rule-tests/X-test.yml", Code: "X", Msg: "bad example"}
+	out, _ := diag.Render([]diag.Diagnostic{withNote, failure}, "", diag.JSON)
+	var doc struct {
+		Diagnostics []map[string]any
+	}
+	if err := json.Unmarshal(out, &doc); err != nil || len(doc.Diagnostics) != 2 {
+		t.Fatalf("out = %s, %v", out, err)
+	}
+	f, finding := doc.Diagnostics[0], doc.Diagnostics[1]
+	if f["file"] != "rules/rule-tests/X-test.yml" || f["rule"] != "X" || f["note"] != nil {
+		t.Errorf("failure = %v", f)
+	}
+	if finding["note"] != withNote.Note || finding["url"] != withNote.URL {
+		t.Errorf("finding = %v", finding)
+	}
+	plain, _ := diag.Render([]diag.Diagnostic{{File: "a.py", Line: 1, Col: 1, Code: "R", Msg: "m"}}, "", diag.JSON)
+	if strings.Contains(string(plain), `"note"`) || strings.Contains(string(plain), `"url"`) {
+		t.Errorf("a finding without a note prints note or url keys: %s", plain)
+	}
+}
+
+func TestRenderSARIFPutsNoteAndURLOnTheRuleEvenWhenAnOptOutNamesItFirst(t *testing.T) {
+	optOut := diag.Diagnostic{File: "a.py", Line: 1, Col: 1, Code: "MY001", Kind: diag.OptOut, Sev: diag.Warning, Msg: "opt-out: reason"}
+	out, _ := diag.Render([]diag.Diagnostic{optOut, withNote}, "", diag.SARIF)
+	var log struct {
+		Runs []struct {
+			Tool struct {
+				Driver struct {
+					Rules []struct {
+						ID      string
+						HelpURI string `json:"helpUri"`
+						Help    struct{ Text string }
+					}
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal(out, &log); err != nil {
+		t.Fatal(err)
+	}
+	rules := log.Runs[0].Tool.Driver.Rules
+	if len(rules) != 1 || rules[0].ID != "MY001" || rules[0].HelpURI != withNote.URL || rules[0].Help.Text != withNote.Note {
+		t.Errorf("rules = %+v, want one MY001 with the url and note", rules)
+	}
+}
+
+func TestRenderGitHubKeepsNoteInTheAnnotation(t *testing.T) {
+	out, _ := diag.Render([]diag.Diagnostic{withNote}, "", diag.GitHub)
+	want := "::error file=a.py,line=3,col=1,title=MY001::No print.%0Anote: Use logging.%0AIt keeps output.%0Aurl: https://example.com/MY001\n"
+	if !strings.HasPrefix(string(out), want) {
+		t.Errorf("out = %q, want prefix %q", out, want)
+	}
+}
+
+func TestRenderGitLabReportHasContentOnlyWithNoteOrURL(t *testing.T) {
+	_, files := diag.Render([]diag.Diagnostic{withNote, {File: "b.py", Line: 1, Col: 1, Code: "R", Sev: diag.Error, Msg: "m"}}, "", diag.GitLab)
+	var report []struct {
+		CheckName string `json:"check_name"`
+		Content   *struct{ Body string }
+	}
+	if err := json.Unmarshal(files[0].Data, &report); err != nil || len(report) != 2 {
+		t.Fatalf("report = %s, %v", files[0].Data, err)
+	}
+	if report[0].Content == nil || report[0].Content.Body != "Use logging.\nIt keeps output.\n\nhttps://example.com/MY001" || report[1].Content != nil {
+		t.Errorf("report = %+v", report)
+	}
+}
+
+func TestStepSummaryShowsNoteAndURL(t *testing.T) {
+	out := string(diag.StepSummary([]diag.Diagnostic{withNote}, ""))
+	if !strings.Contains(out, "No print.<br>Use logging.<br>It keeps output.<br>https://example.com/MY001 |") {
+		t.Errorf("summary = %q", out)
+	}
+}
