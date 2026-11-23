@@ -175,33 +175,22 @@ func verify(ctx context.Context, args []string, stdout, stderr io.Writer, env ch
 }
 
 // newRule is `june new [--rules DIR] RULE`: it writes a minimal rule and its examples, which verify accepts as written.
-// The rule id may come before or after the flag.
 func newRule(args []string, stdout, stderr io.Writer, env check.Env) int {
 	fs := flag.NewFlagSet("june new", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var rulesDirs dirList
 	fs.Var(&rulesDirs, "rules", "rules directory (default ./.june/rules)")
-	var id string
-	for rest := args; ; {
-		if err := fs.Parse(rest); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				fmt.Fprint(stdout, usage)
-				return 0
-			}
-			return usageError(stderr, err.Error())
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprint(stdout, usage)
+			return 0
 		}
-		if rest = fs.Args(); len(rest) == 0 {
-			break
-		}
-		if id != "" {
-			return usageError(stderr, fmt.Sprintf("unexpected argument %q", rest[0]))
-		}
-		id, rest = rest[0], rest[1:]
+		return usageError(stderr, err.Error())
 	}
-	if id == "" {
-		return usageError(stderr, "june new needs a rule id")
+	if fs.NArg() != 1 {
+		return usageError(stderr, "june new needs exactly one rule id after its flags")
 	}
-	res, err := check.New(env, rulesDirs, id)
+	res, err := check.New(env, rulesDirs, fs.Arg(0))
 	return finish(env.Dir, stdout, stderr, res, err)
 }
 

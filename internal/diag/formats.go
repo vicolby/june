@@ -4,6 +4,9 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"net/netip"
+	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -133,11 +136,21 @@ func sarifReport(sorted []Diagnostic, summary string) []byte {
 			rules = append(rules, rule{ID: d.Code})
 		}
 		// An opt-out can name a rule before its first finding does, so the details are taken from whichever carries them.
-		if rules[at].HelpURI == "" {
-			rules[at].HelpURI = d.URL
+		help := d.Note
+		if d.URL != "" {
+			if absoluteURI(d.URL) {
+				if rules[at].HelpURI == "" {
+					rules[at].HelpURI = d.URL
+				}
+			} else {
+				if help != "" {
+					help += "\n\n"
+				}
+				help += d.URL
+			}
 		}
-		if rules[at].Help == nil && d.Note != "" {
-			rules[at].Help = &text{d.Note}
+		if rules[at].Help == nil && help != "" {
+			rules[at].Help = &text{help}
 		}
 		results = append(results, result{
 			RuleID: d.Code, Level: level, Message: text{d.Msg},
@@ -173,6 +186,23 @@ func sarifReport(sorted []Diagnostic, summary string) []byte {
 		Version string `json:"version"`
 		Runs    []run  `json:"runs"`
 	}{"https://json.schemastore.org/sarif-2.1.0.json", "2.1.0", []run{r}})
+}
+
+var uriComponent = regexp.MustCompile(`^(?:[A-Za-z0-9._~!$&'()*+,;=:@/?-]|%[0-9A-Fa-f]{2})*$`)
+
+func absoluteURI(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil || !u.IsAbs() || u.String() != u.Scheme+s[len(u.Scheme):] {
+		return false
+	}
+	if !uriComponent.MatchString(u.Opaque) || !uriComponent.MatchString(u.RawQuery) {
+		return false
+	}
+	if strings.HasPrefix(u.Host, "[") {
+		addr, err := netip.ParseAddr(u.Hostname())
+		return err == nil && addr.Is6() && addr.Zone() == ""
+	}
+	return strings.Count(u.Host, ":") <= 1
 }
 
 // maxSummaryRows keeps the job summary far below GitHub's 1 MiB limit for it.

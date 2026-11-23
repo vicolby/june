@@ -346,7 +346,11 @@ type sarifLog struct {
 		Tool struct {
 			Driver struct {
 				Name  string
-				Rules []struct{ ID string }
+				Rules []struct {
+					ID      string
+					HelpURI string `json:"helpUri"`
+					Help    *struct{ Text string }
+				}
 			}
 		}
 		Invocations []struct {
@@ -601,25 +605,85 @@ func TestRenderJSONCarriesNoteURLAndAFailuresFileAndRule(t *testing.T) {
 func TestRenderSARIFPutsNoteAndURLOnTheRuleEvenWhenAnOptOutNamesItFirst(t *testing.T) {
 	optOut := diag.Diagnostic{File: "a.py", Line: 1, Col: 1, Code: "MY001", Kind: diag.OptOut, Sev: diag.Warning, Msg: "opt-out: reason"}
 	out, _ := diag.Render([]diag.Diagnostic{optOut, withNote}, "", diag.SARIF)
-	var log struct {
-		Runs []struct {
-			Tool struct {
-				Driver struct {
-					Rules []struct {
-						ID      string
-						HelpURI string `json:"helpUri"`
-						Help    struct{ Text string }
-					}
-				}
-			}
-		}
-	}
+	var log sarifLog
 	if err := json.Unmarshal(out, &log); err != nil {
 		t.Fatal(err)
 	}
 	rules := log.Runs[0].Tool.Driver.Rules
-	if len(rules) != 1 || rules[0].ID != "MY001" || rules[0].HelpURI != withNote.URL || rules[0].Help.Text != withNote.Note {
+	if len(rules) != 1 || rules[0].ID != "MY001" || rules[0].HelpURI != withNote.URL || rules[0].Help == nil || rules[0].Help.Text != withNote.Note {
 		t.Errorf("rules = %+v, want one MY001 with the url and note", rules)
+	}
+}
+
+func TestRenderSARIFUsesRFC3986HelpURIAndKeepsOtherURLsInHelp(t *testing.T) {
+	for _, tt := range []struct {
+		name, url string
+		absolute  bool
+	}{
+		{"absent", "", false},
+		{"https", "https://example.com/rules/MY001#examples", true},
+		{"uppercase scheme", "HTTPS://example.com/MY001", true},
+		{"encoded query", "https://example.com/?rule=MY%20001", true},
+		{"file URI", "file:///docs/MY001", true},
+		{"mailto", "mailto:author@example.com", true},
+		{"urn", "urn:example:MY001", true},
+		{"IPv6", "https://[2001:db8::1]/MY001", true},
+		{"relative path", "docs/rules/MY001", false},
+		{"absolute path", "/docs/rules/MY001", false},
+		{"network path", "//example.com/MY001", false},
+		{"fragment", "#MY001", false},
+		{"text", "not a link", false},
+		{"bad host", "https://[", false},
+		{"bad IPv6", "https://[not-an-address]/MY001", false},
+		{"bad IPvFuture", "https://[vZ.example]/MY001", false},
+		{"unbracketed IPv6", "https://2001:db8::1/MY001", false},
+		{"path space", "https://example.com/my rule", false},
+		{"query space", "https://example.com/?q=my rule", false},
+		{"query brackets", "https://example.com/?q=[rule]", false},
+		{"query unicode", "https://example.com/?q=文", false},
+		{"query escape", "https://example.com/?q=%zz", false},
+		{"opaque space", "urn:my rule", false},
+		{"opaque escape", "urn:rule%zz", false},
+		{"control", "https://example.com/\x1bMY001", false},
+	} {
+		for _, note := range []string{"", "Use logging.\nIt keeps output."} {
+			t.Run(tt.name+"/"+note, func(t *testing.T) {
+				d := withNote
+				d.Note, d.URL = note, tt.url
+				optOut := diag.Diagnostic{File: "a.py", Line: 1, Col: 1, Code: d.Code, Kind: diag.OptOut, Msg: "opt-out: reason"}
+				repeated := d
+				repeated.Line++
+				out, _ := diag.Render([]diag.Diagnostic{repeated, optOut, d}, "", diag.SARIF)
+				var log sarifLog
+				if err := json.Unmarshal(out, &log); err != nil || len(log.Runs) != 1 {
+					t.Fatalf("SARIF = %s, %v", out, err)
+				}
+				rules := log.Runs[0].Tool.Driver.Rules
+				if len(rules) != 1 || rules[0].ID != d.Code {
+					t.Fatalf("rules = %+v, want one %s", rules, d.Code)
+				}
+				wantURI, wantHelp := "", note
+				if tt.absolute {
+					wantURI = tt.url
+				} else if tt.url != "" {
+					if wantHelp != "" {
+						wantHelp += "\n\n"
+					}
+					wantHelp += tt.url
+				}
+				rule := rules[0]
+				if rule.HelpURI != wantURI {
+					t.Errorf("helpUri = %q, want %q", rule.HelpURI, wantURI)
+				}
+				if wantHelp == "" {
+					if rule.Help != nil {
+						t.Errorf("unexpected help: %+v", rule.Help)
+					}
+				} else if rule.Help == nil || rule.Help.Text != wantHelp {
+					t.Errorf("help = %+v, want %q", rule.Help, wantHelp)
+				}
+			})
+		}
 	}
 }
 

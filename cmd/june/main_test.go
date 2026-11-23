@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -812,12 +811,12 @@ func runArgs(t *testing.T, env check.Env, args ...string) (code int, stdout, std
 
 func TestNewScaffoldsARuleThatVerifies(t *testing.T) {
 	env := check.Env{Dir: t.TempDir()}
-	for _, args := range [][]string{{"new", "MY001"}, {"new", "--rules", "other", "MY002"}, {"new", "MY003", "--rules", "other"}} {
+	for _, args := range [][]string{{"new", "MY001"}, {"new", "--rules", "other", "MY002"}} {
 		if code, out, errOut := runArgs(t, env, args...); code != 0 || !strings.HasPrefix(out, "created ") || errOut != "" {
 			t.Fatalf("%v: exit = %d, stdout = %q, stderr = %q", args, code, out, errOut)
 		}
 	}
-	for _, args := range [][]string{{"verify"}, {"verify", "--rules", "other", "--rule", "MY003", "--format", "json"}} {
+	for _, args := range [][]string{{"verify"}, {"verify", "--rules", "other", "--rule", "MY002", "--format", "json"}} {
 		if code, out, errOut := runArgs(t, env, args...); code != 0 || !strings.Contains(out, "verified") || errOut != "" {
 			t.Errorf("%v: exit = %d, stdout = %q, stderr = %q", args, code, out, errOut)
 		}
@@ -826,37 +825,31 @@ func TestNewScaffoldsARuleThatVerifies(t *testing.T) {
 
 func TestNewSuggestedCommandVerifiesTheChosenDirectory(t *testing.T) {
 	for _, dir := range []string{"", "mine", "author's rules $HOME; $(printf wrong) `printf wrong`"} {
-		for _, flagFirst := range []bool{true, false} {
-			t.Run(fmt.Sprintf("%s/flagFirst=%t", dir, flagFirst), func(t *testing.T) {
-				env := check.Env{Dir: t.TempDir()}
-				args := []string{"new", "null"}
-				if dir != "" {
-					if flagFirst {
-						args = []string{"new", "--rules", dir, "null"}
-					} else {
-						args = append(args, "--rules", dir)
-					}
-				}
-				code, out, errOut := runArgs(t, env, args...)
-				if code != 0 || errOut != "" {
-					t.Fatalf("new = %d, %q, %q", code, out, errOut)
-				}
-				_, command, ok := strings.Cut(out, "then run ")
-				if !ok {
-					t.Fatalf("no suggested command: %q", out)
-				}
-				cmd := exec.Command("sh", "-c", "june() { printf '%s\\000' \"$@\"; }; "+command)
-				cmd.Dir = env.Dir
-				parsed, err := cmd.Output()
-				if err != nil {
-					t.Fatalf("parse suggested command: %v", err)
-				}
-				verifyArgs := strings.Split(strings.TrimSuffix(string(parsed), "\x00"), "\x00")
-				if code, out, errOut := runArgs(t, env, verifyArgs...); code != 0 || errOut != "" || !strings.Contains(out, "verified 1 rule, 2 examples") {
-					t.Errorf("suggested command = %d, %q, %q", code, out, errOut)
-				}
-			})
-		}
+		t.Run(dir, func(t *testing.T) {
+			env := check.Env{Dir: t.TempDir()}
+			args := []string{"new", "null"}
+			if dir != "" {
+				args = []string{"new", "--rules", dir, "null"}
+			}
+			code, out, errOut := runArgs(t, env, args...)
+			if code != 0 || errOut != "" {
+				t.Fatalf("new = %d, %q, %q", code, out, errOut)
+			}
+			_, command, ok := strings.Cut(out, "then run ")
+			if !ok {
+				t.Fatalf("no suggested command: %q", out)
+			}
+			cmd := exec.Command("sh", "-c", "june() { printf '%s\\000' \"$@\"; }; "+command)
+			cmd.Dir = env.Dir
+			parsed, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("parse suggested command: %v", err)
+			}
+			verifyArgs := strings.Split(strings.TrimSuffix(string(parsed), "\x00"), "\x00")
+			if code, out, errOut := runArgs(t, env, verifyArgs...); code != 0 || errOut != "" || !strings.Contains(out, "verified 1 rule, 2 examples") {
+				t.Errorf("suggested command = %d, %q, %q", code, out, errOut)
+			}
+		})
 	}
 }
 
@@ -909,9 +902,9 @@ func TestNewRollsBackWhenExamplesCannotBeCreated(t *testing.T) {
 
 func TestNewArguments(t *testing.T) {
 	env := check.Env{Dir: t.TempDir()}
-	for _, args := range [][]string{{"new"}, {"new", "A", "B"}, {"new", "--format", "json", "A"}, {"new", "--bogus"}} {
+	for _, args := range [][]string{{"new"}, {"new", "A", "B"}, {"new", "--format", "json", "A"}, {"new", "--bogus"}, {"new", "MY001", "--rules", "other"}} {
 		code, out, errOut := runArgs(t, env, args...)
-		if code != 2 || out != "" || !strings.Contains(errOut, ". Fix: usage is") {
+		if code != 2 || out != "" || !strings.Contains(errOut, ". Fix: usage is") || !strings.Contains(errOut, "june new [--rules DIR] RULE") {
 			t.Errorf("%v: exit = %d, stdout = %q, stderr = %q, want a usage error", args, code, out, errOut)
 		}
 	}

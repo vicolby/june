@@ -25,7 +25,7 @@ rule:
 ```
 
 - `message` is the corrective instruction: the person or agent reading a CI failure only has this line. Say what to do, not only what is wrong.
-- `note` and `url` are optional strings. They print under the finding (`  note: ...`, `  url: ...`) and travel into every format: `note` and `url` in JSON, the rule's `help` and `helpUri` in SARIF, the annotation message on GitHub, `content.body` in the GitLab report. Empty or whitespace-only values are omitted.
+- `note` and `url` are optional strings. They print under the finding (`  note: ...`, `  url: ...`) and travel into every format: `note` and `url` in JSON, the annotation message on GitHub, `content.body` in the GitLab report. In SARIF, `note` becomes the rule's `help` text; an absolute URI in `url` becomes `helpUri`, while other values are included in `help` text. Empty or whitespace-only values are omitted.
 - `files` and `ignores` scope a rule by path. Keys june does not use (such as `fix` or `labels`) are refused by name, so nothing is dropped silently.
 
 The examples sit in `rule-tests/MY001-test.yml`: every `invalid` snippet must be reported by the rule and every `valid` snippet must not be.
