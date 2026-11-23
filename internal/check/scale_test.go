@@ -81,6 +81,9 @@ func TestChangeThreeThousandChangedFilesWithinBudget(t *testing.T) {
 
 // Past about 7000 paths a pathspec per changed file overflows argv, on every kind of run.
 func TestChangeSevenThousandChangedFiles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a repository of 7000 changed files")
+	}
 	env, want := manyChanges(t, 7000)
 	const budget = 10 * time.Second
 	expectWith(t, timed(t, budget, env, check.Request{Base: "main"}), want, "checked 7000 files, 7000 changed lines")
@@ -165,6 +168,9 @@ func hugeRepo(t *testing.T, n int) check.Env {
 // Files renamed from a path that is not Python are judged against their source, however many there are:
 // only the edited lines count, and none of the explicit pairs may overflow argv.
 func TestChangeManyRenamesFromNonPython(t *testing.T) {
+	if testing.Short() {
+		t.Skip("renames 900 files")
+	}
 	// Below git's own limit on inexact rename detection, and far past what fits in one set of pathspecs.
 	const n = 900
 	body := func(i int) string { return fmt.Sprintf("import os\nimport sys\nx = %d\ny = 2\nz = 3\n", i) }

@@ -69,6 +69,7 @@ func mergedResultCheckout(t *testing.T) (env check.Env, diffBase, target string)
 }
 
 func TestMergedResultScopeIsTheMergeCommitFirstParent(t *testing.T) {
+	t.Parallel()
 	env, diffBase, target := mergedResultCheckout(t)
 	for _, tc := range []struct {
 		name   string
@@ -104,6 +105,7 @@ func TestMergedResultScopeIsTheMergeCommitFirstParent(t *testing.T) {
 // A two-car merge train: car 1 lands a violation on a.py, then car 2's pipeline checks out the merge of car 1's result with its own branch.
 // GitLab sets CI_MERGE_REQUEST_TARGET_BRANCH_SHA to the real target tip, which is not the merge commit's first parent.
 func TestMergeTrainSecondCarIsNotBlamedForTheFirst(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"a.py": "x = 1\n", "b.py": "y = 1\n"})
 	git(t, env.Dir, "checkout", "-q", "main")
 	realTarget := head(t, env.Dir, "HEAD")
@@ -136,6 +138,7 @@ func TestMergeTrainSecondCarIsNotBlamedForTheFirst(t *testing.T) {
 }
 
 func TestDetachedMergeRequestKeepsTheDiffBase(t *testing.T) {
+	t.Parallel()
 	env := editedTopic(t)
 	tip := head(t, env.Dir, "HEAD")
 	env = mergeRequest(env, tip)
@@ -150,6 +153,7 @@ func TestDetachedMergeRequestKeepsTheDiffBase(t *testing.T) {
 }
 
 func TestMergeRequestScopeComesFromTheDiffBase(t *testing.T) {
+	t.Parallel()
 	env := editedTopic(t)
 	res := bare(t, mergeRequest(env, head(t, env.Dir, "main")))
 	expect(t, res, 1, "app.py:3:9: "+py012)
@@ -159,6 +163,7 @@ func TestMergeRequestScopeComesFromTheDiffBase(t *testing.T) {
 }
 
 func TestMergeRequestBaseIsJudgedBeforeAnInferredOne(t *testing.T) {
+	t.Parallel()
 	env := editedTopic(t)
 	git(t, env.Dir, "branch", "--set-upstream-to=main")
 	// The diff base is the topic's own tip, so nothing is touched, though the upstream would blame line 3.
@@ -167,6 +172,7 @@ func TestMergeRequestBaseIsJudgedBeforeAnInferredOne(t *testing.T) {
 }
 
 func TestExplicitBaseWinsOverTheMergeRequestBase(t *testing.T) {
+	t.Parallel()
 	env := editedTopic(t)
 	res, err := check.Change(context.Background(), mergeRequest(env, head(t, env.Dir, "HEAD")), check.Request{Base: "main"})
 	if err != nil {
@@ -179,6 +185,7 @@ func TestExplicitBaseWinsOverTheMergeRequestBase(t *testing.T) {
 }
 
 func TestMergeRequestVariableIsIgnoredOutsideGitLab(t *testing.T) {
+	t.Parallel()
 	env := editedTopic(t)
 	env.Vars = map[string]string{"CI_MERGE_REQUEST_DIFF_BASE_SHA": head(t, env.Dir, "main")}
 	res := bare(t, env)
@@ -186,6 +193,7 @@ func TestMergeRequestVariableIsIgnoredOutsideGitLab(t *testing.T) {
 }
 
 func TestMergeRequestBaseMissingFromAShallowCloneNamesFullDepth(t *testing.T) {
+	t.Parallel()
 	env := editedTopic(t)
 	sha := head(t, env.Dir, "main")
 	shallow := filepath.Join(t.TempDir(), "clone")
@@ -195,6 +203,7 @@ func TestMergeRequestBaseMissingFromAShallowCloneNamesFullDepth(t *testing.T) {
 }
 
 func TestMergeRequestWithoutMergeBaseNamesFullDepth(t *testing.T) {
+	t.Parallel()
 	env := editedTopic(t)
 	sha := head(t, env.Dir, "main")
 	shallow := filepath.Join(t.TempDir(), "clone")
@@ -207,6 +216,7 @@ func TestMergeRequestWithoutMergeBaseNamesFullDepth(t *testing.T) {
 }
 
 func TestGitLabAddsACodeQualityReportBesideTheSameText(t *testing.T) {
+	t.Parallel()
 	env := editedTopic(t)
 	sha := head(t, env.Dir, "main")
 	plain, err := check.Change(context.Background(), env, check.Request{Base: "main"})
@@ -229,6 +239,7 @@ func TestGitLabAddsACodeQualityReportBesideTheSameText(t *testing.T) {
 }
 
 func TestGitLabCleanRunStillWritesAnEmptyReport(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	res := bare(t, mergeRequest(env, head(t, env.Dir, "main")))
 	expect(t, res, 0, "")
@@ -238,6 +249,7 @@ func TestGitLabCleanRunStillWritesAnEmptyReport(t *testing.T) {
 }
 
 func TestGitLabRefusalWritesNoReport(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	res := bare(t, mergeRequest(env, strings.Repeat("0", 40)))
 	if res.Exit != 2 || len(res.Files) != 0 {
@@ -246,6 +258,7 @@ func TestGitLabRefusalWritesNoReport(t *testing.T) {
 }
 
 func TestGitLabSuppliedListAlsoWritesTheReport(t *testing.T) {
+	t.Parallel()
 	env := mergeRequest(tree(t, map[string]string{"app.py": old}), "")
 	delete(env.Vars, "CI_MERGE_REQUEST_DIFF_BASE_SHA")
 	res := change(t, env, "app.py:1\n")

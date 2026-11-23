@@ -37,6 +37,7 @@ func pullRequest(t *testing.T) check.Env {
 }
 
 func TestPullRequestScopeComesFromTheEventBase(t *testing.T) {
+	t.Parallel()
 	env := onGitHub(pullRequest(t), "pull_request", "main")
 	res := infer(t, env)
 	if res.Exit != 1 {
@@ -52,6 +53,7 @@ func TestPullRequestScopeComesFromTheEventBase(t *testing.T) {
 }
 
 func TestPullRequestTargetUsesTheSameBase(t *testing.T) {
+	t.Parallel()
 	env := onGitHub(pullRequest(t), "pull_request_target", "main")
 	if got, want := summaryOf(infer(t, env)), "; base origin/main (pull request base)"; !strings.HasSuffix(got, want) {
 		t.Errorf("summary = %q, want suffix %q", got, want)
@@ -59,6 +61,7 @@ func TestPullRequestTargetUsesTheSameBase(t *testing.T) {
 }
 
 func TestPullRequestEmitsAnnotationsBesidePlainText(t *testing.T) {
+	t.Parallel()
 	env := pullRequest(t)
 	git(t, env.Dir, "branch", "-q", "--set-upstream-to=origin/main", "feature")
 	plain := infer(t, env)
@@ -73,6 +76,7 @@ func TestPullRequestEmitsAnnotationsBesidePlainText(t *testing.T) {
 }
 
 func TestPullRequestWinsOverNothingButExplicitScope(t *testing.T) {
+	t.Parallel()
 	env := onGitHub(pullRequest(t), "pull_request", "main")
 	git(t, env.Dir, "branch", "-q", "release", "origin/main")
 	res, err := check.Change(context.Background(), env, check.Request{Base: "release"})
@@ -92,6 +96,7 @@ func TestPullRequestWinsOverNothingButExplicitScope(t *testing.T) {
 }
 
 func TestPullRequestBaseThatWasNotFetchedNamesFetchDepth(t *testing.T) {
+	t.Parallel()
 	env := onGitHub(pullRequest(t), "pull_request", "gone")
 	res := infer(t, env)
 	msg := "the base \"origin/gone\" is not a commit in this repository. Fix: set fetch-depth: 0 on actions/checkout so the pull request base is fetched, or pass an existing branch, tag or commit to --base"
@@ -99,6 +104,7 @@ func TestPullRequestBaseThatWasNotFetchedNamesFetchDepth(t *testing.T) {
 }
 
 func TestPushEventWithoutABaseIsRefusedWithANamedFix(t *testing.T) {
+	t.Parallel()
 	env := onGitHub(pullRequest(t), "push", "")
 	res := infer(t, env)
 	msg := "a push event has no pull request base, so the touched lines cannot be found. Fix: pass --base REF (for example --base origin/main) with fetch-depth: 0 on actions/checkout, or run june on pull_request"
@@ -106,6 +112,7 @@ func TestPushEventWithoutABaseIsRefusedWithANamedFix(t *testing.T) {
 }
 
 func TestPushEventWithAnExplicitBaseIsJudged(t *testing.T) {
+	t.Parallel()
 	env := onGitHub(pullRequest(t), "push", "")
 	if res := against(t, env, "origin/main"); res.Exit != 1 {
 		t.Errorf("Exit = %d, want 1\n%s", res.Exit, res.Out)
@@ -113,6 +120,7 @@ func TestPushEventWithAnExplicitBaseIsJudged(t *testing.T) {
 }
 
 func TestOutsideGitHubAPullRequestVariableIsIgnored(t *testing.T) {
+	t.Parallel()
 	env := pullRequest(t)
 	env.Vars = map[string]string{"GITHUB_EVENT_NAME": "pull_request", "GITHUB_BASE_REF": "main"}
 	refused(t, infer(t, env),
@@ -120,6 +128,7 @@ func TestOutsideGitHubAPullRequestVariableIsIgnored(t *testing.T) {
 }
 
 func TestTextIsTheSameInADevShellAndOnGitHub(t *testing.T) {
+	t.Parallel()
 	env := pullRequest(t)
 	git(t, env.Dir, "branch", "-q", "--set-upstream-to=origin/main", "feature")
 	plain := infer(t, env)
@@ -150,6 +159,7 @@ func pushCheckout(t *testing.T) check.Env {
 }
 
 func TestPushEventIsRefusedEvenWhenTheBranchTracksItsOwnRemote(t *testing.T) {
+	t.Parallel()
 	env := pushCheckout(t)
 	res := infer(t, env)
 	msg := "a push event has no pull request base, so the touched lines cannot be found. Fix: pass --base REF (for example --base origin/main) with fetch-depth: 0 on actions/checkout, or run june on pull_request"
@@ -157,6 +167,7 @@ func TestPushEventIsRefusedEvenWhenTheBranchTracksItsOwnRemote(t *testing.T) {
 }
 
 func TestPushEventStillHonoursAnExplicitBaseAndList(t *testing.T) {
+	t.Parallel()
 	env := pushCheckout(t)
 	git(t, env.Dir, "branch", "-q", "older", "HEAD~1")
 	if res := against(t, env, "HEAD~1"); res.Exit != 1 {
@@ -168,6 +179,7 @@ func TestPushEventStillHonoursAnExplicitBaseAndList(t *testing.T) {
 }
 
 func TestAnnotationsUseRepositoryRootPathsFromASubdirectory(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"keep.py": "x = 1\n"})
 	git(t, env.Dir, "remote", "add", "origin", env.Dir)
 	git(t, env.Dir, "fetch", "-q", "origin")
@@ -190,6 +202,7 @@ func TestAnnotationsUseRepositoryRootPathsFromASubdirectory(t *testing.T) {
 }
 
 func TestSARIFUsesRepositoryRootPathsFromASubdirectory(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"keep.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "sub", "app.py"), old)
 	copyDir(t, filepath.Join("..", "..", "testdata", "rules", "python"), filepath.Join(env.Dir, "sub", ".june", "rules"))
@@ -217,6 +230,7 @@ func mergeGroup(t *testing.T) (env check.Env, baseSHA string) {
 }
 
 func TestMergeGroupUsesTheEventBaseSHA(t *testing.T) {
+	t.Parallel()
 	env, sha := mergeGroup(t)
 	// Even if the clone's default branch is somewhere else, the queue judges what it adds to base_sha.
 	git(t, env.Dir, "remote", "set-head", "origin", "main")
@@ -230,6 +244,7 @@ func TestMergeGroupUsesTheEventBaseSHA(t *testing.T) {
 }
 
 func TestMergeGroupWithoutAValidPayloadIsRefused(t *testing.T) {
+	t.Parallel()
 	for _, fallback := range []string{"default", "upstream"} {
 		t.Run(fallback, func(t *testing.T) {
 			env, _ := mergeGroup(t)
@@ -270,6 +285,7 @@ func TestMergeGroupWithoutAValidPayloadIsRefused(t *testing.T) {
 }
 
 func TestMergeGroupExplicitScopeDoesNotNeedPayload(t *testing.T) {
+	t.Parallel()
 	env, _ := mergeGroup(t)
 	env.Vars["GITHUB_EVENT_PATH"] = filepath.Join(t.TempDir(), "missing.json")
 	results := []check.Result{against(t, env, "origin/main"), change(t, env, "app.py:2\n")}
@@ -284,6 +300,7 @@ func TestMergeGroupExplicitScopeDoesNotNeedPayload(t *testing.T) {
 }
 
 func TestMergeGroupBaseThatWasNotFetchedNamesFetchDepth(t *testing.T) {
+	t.Parallel()
 	env, _ := mergeGroup(t)
 	missing := strings.Repeat("a", 40)
 	write(t, env.Vars["GITHUB_EVENT_PATH"], `{"merge_group":{"base_sha":"`+missing+`"}}`)
@@ -293,6 +310,7 @@ func TestMergeGroupBaseThatWasNotFetchedNamesFetchDepth(t *testing.T) {
 }
 
 func TestPullRequestAtItsBaseIsRefused(t *testing.T) {
+	t.Parallel()
 	for _, event := range []string{"pull_request", "pull_request_target"} {
 		t.Run(event, func(t *testing.T) {
 			env := onGitHub(pullRequest(t), event, "main")
@@ -312,14 +330,17 @@ func TestPullRequestAtItsBaseIsRefused(t *testing.T) {
 // The PR zero-line contract applies to every scope: empty runs refuse at the
 // event base and warn on a feature checkout; supplied nonempty lines still run.
 func TestPullRequestSafeguardsApplyAcrossScopes(t *testing.T) {
+	t.Parallel()
 	for _, event := range []string{"pull_request", "pull_request_target"} {
 		t.Run(event, func(t *testing.T) {
+			t.Parallel()
 			for _, atBase := range []bool{true, false} {
 				state := "feature"
 				if atBase {
 					state = "base"
 				}
 				t.Run(state, func(t *testing.T) {
+					t.Parallel()
 					env := onGitHub(pullRequest(t), event, "main")
 					if atBase {
 						git(t, env.Dir, "checkout", "-q", "--detach", "origin/main")
@@ -365,6 +386,7 @@ func TestPullRequestSafeguardsApplyAcrossScopes(t *testing.T) {
 }
 
 func TestPullRequestExplicitBaseJudgesChanges(t *testing.T) {
+	t.Parallel()
 	for _, event := range []string{"pull_request", "pull_request_target"} {
 		env := onGitHub(pullRequest(t), event, "main")
 		res := against(t, env, "origin/main")
@@ -375,6 +397,7 @@ func TestPullRequestExplicitBaseJudgesChanges(t *testing.T) {
 }
 
 func TestPullRequestExplicitBaseThatJudgesNothingWarns(t *testing.T) {
+	t.Parallel()
 	for _, event := range []string{"pull_request", "pull_request_target"} {
 		t.Run(event, func(t *testing.T) {
 			env := onGitHub(pullRequest(t), event, "main")
@@ -412,6 +435,7 @@ func TestPullRequestExplicitBaseThatJudgesNothingWarns(t *testing.T) {
 }
 
 func TestMergeGroupThatJudgesNothingPassesWithoutWarning(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"at-base", "docs-only"} {
 		t.Run(state, func(t *testing.T) {
 			env, sha := mergeGroup(t)
@@ -439,6 +463,7 @@ func TestMergeGroupThatJudgesNothingPassesWithoutWarning(t *testing.T) {
 }
 
 func TestPullRequestThatJudgesNothingWarns(t *testing.T) {
+	t.Parallel()
 	env := onGitHub(pullRequest(t), "pull_request", "main")
 	// A commit with no Python file leaves HEAD past the base with zero lines to judge.
 	git(t, env.Dir, "reset", "-q", "--hard", "origin/main")
@@ -461,6 +486,7 @@ func TestPullRequestThatJudgesNothingWarns(t *testing.T) {
 }
 
 func TestLocalRunThatJudgesNothingDoesNotWarn(t *testing.T) {
+	t.Parallel()
 	env := pullRequest(t)
 	git(t, env.Dir, "branch", "-q", "--set-upstream-to=origin/main", "feature")
 	git(t, env.Dir, "reset", "-q", "--hard", "origin/main")

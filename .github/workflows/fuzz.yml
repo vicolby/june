@@ -1,0 +1,30 @@
+name: fuzz
+
+# The corpus in each package's testdata/fuzz runs in every `go test`. This explores beyond it once a
+# week, for a minute per parser; a crash shows up here with its input, to add as a regression case.
+on:
+  schedule:
+    - cron: "43 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { pkg: check, name: FuzzParsePatch }
+          - { pkg: check, name: FuzzParseHunk }
+          - { pkg: check, name: FuzzParseEntry }
+          - { pkg: diag, name: FuzzEscapeControls }
+          - { pkg: rules, name: FuzzParseOptOut }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - run: go test ./internal/${{ matrix.target.pkg }} -run '^$' -fuzz '^${{ matrix.target.name }}$' -fuzztime 60s

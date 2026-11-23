@@ -33,6 +33,7 @@ func revParse(t *testing.T, dir, rev string) string {
 }
 
 func TestStagedChangeIsJudgedAgainstHEAD(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": old + "x = 1\n"}) // topic has no upstream, so only the staged diff can give a base
 	write(t, filepath.Join(env.Dir, "app.py"), old+"def g(b={}): pass\n")
 	git(t, env.Dir, "add", "app.py")
@@ -44,6 +45,7 @@ func TestStagedChangeIsJudgedAgainstHEAD(t *testing.T) {
 }
 
 func TestStagedDiffIgnoresEarlierCommitsOnTheBranch(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	git(t, env.Dir, "branch", "-q", "--set-upstream-to=main", "topic")
 	write(t, filepath.Join(env.Dir, "app.py"), "x = 1\n"+old)
@@ -55,6 +57,7 @@ func TestStagedDiffIgnoresEarlierCommitsOnTheBranch(t *testing.T) {
 }
 
 func TestStagedDiffIgnoresUnstagedAndUntrackedFiles(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n", "staged.py": "y = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), "x = 1\n"+old)
 	write(t, filepath.Join(env.Dir, "new.py"), old)
@@ -68,6 +71,7 @@ func TestStagedDiffIgnoresUnstagedAndUntrackedFiles(t *testing.T) {
 }
 
 func TestStagedNewFileTouchesEveryLine(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"keep.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "new.py"), "x = 1\n"+old)
 	git(t, env.Dir, "add", "new.py")
@@ -75,6 +79,7 @@ func TestStagedNewFileTouchesEveryLine(t *testing.T) {
 }
 
 func TestStagedNonPythonAndDeletionsTouchNothing(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"gone.py": old, "notes.txt": "a\n"})
 	git(t, env.Dir, "rm", "-q", "gone.py")
 	write(t, filepath.Join(env.Dir, "notes.txt"), old)
@@ -87,6 +92,7 @@ func TestStagedNonPythonAndDeletionsTouchNothing(t *testing.T) {
 }
 
 func TestStagedFirstCommitIsJudgedAgainstAnEmptyTree(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "x = 1\n" + old})
 	git(t, env.Dir, "init", "-q", "-b", "main")
 	git(t, env.Dir, "add", "-A")
@@ -99,6 +105,7 @@ func TestStagedFirstCommitIsJudgedAgainstAnEmptyTree(t *testing.T) {
 }
 
 func TestStagedFirstCommitOnSHA256UsesThatEmptyTree(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "x = 1\n" + old})
 	cmd := exec.CommandContext(context.Background(), "git", "init", "-q", "--object-format=sha256", "-b", "main")
 	cmd.Dir = env.Dir
@@ -130,6 +137,7 @@ func emptyTreeID(t *testing.T, dir string) string {
 }
 
 func TestStagedDiffFollowsThePartialCommitIndex(t *testing.T) {
+	t.Parallel()
 	// pre-commit points GIT_INDEX_FILE at the index the commit will use, which differs from .git/index for git commit <paths>.
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), "x = 1\n"+old)
@@ -149,6 +157,7 @@ func TestStagedDiffFollowsThePartialCommitIndex(t *testing.T) {
 }
 
 func TestStagedViolationStaysWhenTheWorktreeDropsIt(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), old)
 	git(t, env.Dir, "add", "app.py")
@@ -157,6 +166,7 @@ func TestStagedViolationStaysWhenTheWorktreeDropsIt(t *testing.T) {
 }
 
 func TestStagedFileWithASpaceUsesTheIndexBlob(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "new file.py"), old)
 	git(t, env.Dir, "add", "new file.py")
@@ -165,6 +175,7 @@ func TestStagedFileWithASpaceUsesTheIndexBlob(t *testing.T) {
 }
 
 func TestStagedNULFilterUsesTheIndexBlob(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), old+"\x00")
 	git(t, env.Dir, "add", "app.py")
@@ -175,6 +186,7 @@ func TestStagedNULFilterUsesTheIndexBlob(t *testing.T) {
 }
 
 func TestStagedSymlinkIsNotScannedAsPython(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	path := filepath.Join(env.Dir, "app.py")
 	if err := os.Remove(path); err != nil {
@@ -188,6 +200,7 @@ func TestStagedSymlinkIsNotScannedAsPython(t *testing.T) {
 }
 
 func TestPreCommitRefsJudgeTheRefRange(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": old + "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), old+"def g(b={}): pass\n")
 	commit(t, env)
@@ -202,6 +215,7 @@ func TestPreCommitRefsJudgeTheRefRange(t *testing.T) {
 }
 
 func TestPreCommitRefsAcceptACommitHashFrom(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": old + "x = 1\n"})
 	from := revParse(t, env.Dir, "main")
 	write(t, filepath.Join(env.Dir, "app.py"), old+"def g(b={}): pass\n")
@@ -211,6 +225,7 @@ func TestPreCommitRefsAcceptACommitHashFrom(t *testing.T) {
 }
 
 func TestPreCommitRefsNeedBothVariables(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), "x = 1\n"+old)
 	git(t, env.Dir, "add", "app.py")
@@ -228,6 +243,7 @@ func TestPreCommitRefsNeedBothVariables(t *testing.T) {
 }
 
 func TestPreCommitRefsPassForACleanToRefWhileCheckedOutElsewhere(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), "x = 1\n"+old)
 	commit(t, env) // topic, which is checked out, contains the violation; main does not
@@ -236,6 +252,7 @@ func TestPreCommitRefsPassForACleanToRefWhileCheckedOutElsewhere(t *testing.T) {
 }
 
 func TestPreCommitRefsReportTheToRefWhileCheckedOutElsewhere(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), "x = 1\n"+old)
 	commit(t, env)
@@ -248,6 +265,7 @@ func TestPreCommitRefsReportTheToRefWhileCheckedOutElsewhere(t *testing.T) {
 }
 
 func TestPreCommitRefsScanTheCommittedLineWhenTheIndexShiftsIt(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), "x = 1\n"+old)
 	commit(t, env)
@@ -258,6 +276,7 @@ func TestPreCommitRefsScanTheCommittedLineWhenTheIndexShiftsIt(t *testing.T) {
 }
 
 func TestPreCommitRefsIgnoreAnIndexViolationOnACleanLine(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), "y = 1\n")
 	commit(t, env)
@@ -268,6 +287,7 @@ func TestPreCommitRefsIgnoreAnIndexViolationOnACleanLine(t *testing.T) {
 }
 
 func TestPreCommitRefsSkipANULInTheCommittedBlob(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), old+"\x00")
 	commit(t, env)
@@ -279,6 +299,7 @@ func TestPreCommitRefsSkipANULInTheCommittedBlob(t *testing.T) {
 }
 
 func TestPreCommitRefsWithAnUnknownToRefAreRefused(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	zero := strings.Repeat("0", 40)
 	refs := hook(env, map[string]string{"PRE_COMMIT_FROM_REF": "main", "PRE_COMMIT_TO_REF": zero})
@@ -287,6 +308,7 @@ func TestPreCommitRefsWithAnUnknownToRefAreRefused(t *testing.T) {
 }
 
 func TestPreCommitRefsWithAnUnknownFromRefAreRefused(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	zero := strings.Repeat("0", 40)
 	refs := hook(env, map[string]string{"PRE_COMMIT_FROM_REF": zero, "PRE_COMMIT_TO_REF": revParse(t, env.Dir, "HEAD")})
@@ -295,6 +317,7 @@ func TestPreCommitRefsWithAnUnknownFromRefAreRefused(t *testing.T) {
 }
 
 func TestExplicitInputsWinOverPreCommit(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), "x = 1\n"+old)
 	commit(t, env)
@@ -312,6 +335,7 @@ func TestExplicitInputsWinOverPreCommit(t *testing.T) {
 }
 
 func TestStagedDiffRunsFromASubdirectory(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"pkg/app.py": "x = 1\n", "other.py": "y = 1\n"})
 	write(t, filepath.Join(env.Dir, "pkg", "app.py"), "x = 1\n"+old)
 	write(t, filepath.Join(env.Dir, "other.py"), "y = 1\n"+old)
@@ -322,6 +346,7 @@ func TestStagedDiffRunsFromASubdirectory(t *testing.T) {
 }
 
 func TestWithoutPreCommitTheLocalRunIsUnchanged(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), "x = 1\n"+old)
 	git(t, env.Dir, "add", "app.py")

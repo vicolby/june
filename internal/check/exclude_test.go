@@ -24,6 +24,7 @@ func changeReq(t *testing.T, env check.Env, req check.Request, list string) chec
 }
 
 func TestExcludeGlobs(t *testing.T) {
+	t.Parallel()
 	files := []string{"app.py", "vendor/lib/a.py", "src/gen/x_pb2.py", "src/gen/y.py", "migrations/0001.py", "tests/fixtures/f.py", "a/b/c.py"}
 	tests := []struct {
 		glob string
@@ -81,6 +82,7 @@ func plural(n int, noun string) string {
 }
 
 func TestConfigFileExcludes(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{
 		"app.py":           badDefault,
 		"gen/a_pb2.py":     badDefault,
@@ -94,6 +96,7 @@ func TestConfigFileExcludes(t *testing.T) {
 }
 
 func TestConfigAndFlagExcludesAdd(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{
 		"app.py": badDefault, "a/x.py": badDefault, "b/y.py": badDefault,
 		".june/config.yml": "exclude: [a/**]\n",
@@ -104,6 +107,7 @@ func TestConfigAndFlagExcludesAdd(t *testing.T) {
 
 // An excluded file is never scanned, so a file that cannot be read as text is not even reported as skipped.
 func TestExcludedFileIsNeverScanned(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "x = 1\n", "gen/bin.py": "\x00\x01x = []\n"})
 	res := changeReq(t, env, check.Request{}, "app.py:1\ngen/bin.py:1\n")
 	if !strings.Contains(summaryOf(res), "1 file skipped") {
@@ -118,6 +122,7 @@ func TestExcludedFileIsNeverScanned(t *testing.T) {
 
 // Excluded paths need not exist; included paths still require a current file.
 func TestExcludedMissingChangedLinesPath(t *testing.T) {
+	t.Parallel()
 	for _, config := range []bool{false, true} {
 		env := tree(t, map[string]string{"app.py": badDefault})
 		req := check.Request{Exclude: []string{"vendor/**"}}
@@ -138,6 +143,7 @@ func TestExcludedMissingChangedLinesPath(t *testing.T) {
 }
 
 func TestExcludeEverythingChecksNothing(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": badDefault})
 	res := changeReq(t, env, check.Request{Exclude: []string{"**"}}, "app.py:1\n")
 	expect(t, res, 0, "")
@@ -147,6 +153,7 @@ func TestExcludeEverythingChecksNothing(t *testing.T) {
 }
 
 func TestBadExcludeRefuses(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		files   map[string]string
@@ -178,12 +185,14 @@ func TestBadExcludeRefuses(t *testing.T) {
 }
 
 func TestEmptyConfigFileIsFine(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": badDefault, ".june/config.yml": ""})
 	expect(t, changeReq(t, env, check.Request{}, "app.py:1\n"), 1, "app.py:1:9: "+py012)
 }
 
 // A rule's files and ignores apply to the real paths of the files in the change.
 func TestRuleFilesAndIgnoresApply(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{
 		"src/a.py": "x = [1]\n", "src/legacy/b.py": "x = [1]\n", "tests/c.py": "x = [1]\n", "vendor/src/d.py": "x = [1]\n",
 	})
@@ -196,6 +205,7 @@ func TestRuleFilesAndIgnoresApply(t *testing.T) {
 
 // Whitespace in a glob is literal, so " app.py" names a different file than "app.py".
 func TestExcludeWhitespaceIsLiteral(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": badDefault})
 	expect(t, changeReq(t, env, check.Request{Exclude: []string{" app.py"}}, "app.py:1\n"), 1, "app.py:1:9: "+py012)
 	expect(t, changeReq(t, env, check.Request{Exclude: []string{"app.py "}}, "app.py:1\n"), 1, "app.py:1:9: "+py012)

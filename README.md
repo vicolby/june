@@ -255,6 +255,7 @@ Unexpected internal errors include the issue URL and june version, and ask you t
 - [VISION.md](VISION.md): purpose, scope, and the planned advisory LLM review (not built).
 - [docs/writing-rules.md](docs/writing-rules.md): writing and verifying rules, including with a model in the loop.
 - [ARCHITECTURE.md](ARCHITECTURE.md): module map and invariants.
+- [COMPATIBILITY.md](COMPATIBILITY.md): what is stable, what may change and what 1.0 freezes.
 - [SECURITY.md](SECURITY.md): how to report a vulnerability.
 
 ## License
