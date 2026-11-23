@@ -8,10 +8,29 @@
 june turns the guideline rules a tool can decide into CI failures that an AI agent fixes like a ruff or mypy error.
 
 - **Only touched lines fail.** Old violations never fail a build: no cleanup, no baseline file.
-- **Same verdict everywhere.** No network, no model: the same input gives the same result locally, in GitHub Actions and in GitLab CI.
+- **Same verdict everywhere.** No network, no model: the same input gives the same result locally, in GitHub Actions and in GitLab CI. See [Promises](#promises).
 - **Rules are verified.** A rule whose passing and failing examples misbehave is refused.
 
 Version 1 checks Python only: files ending in `.py`. `.pyi` stubs and scripts with no extension (even with a Python shebang) are not read.
+
+## Promises
+
+- **No telemetry.** june collects and sends no usage data, crash reports or identifiers.
+- **No network on the check path.** `june`, `june verify` and `june new` open no network connection. The binary imports no HTTP or socket package, and runs only `git` and `ast-grep` as local subprocesses. Checked by running a check and `june verify` with network access denied: both gave their normal verdict.
+- Network is used only to install: `install.sh` downloads the release, `JUNE_INSTALL_AST_GREP=1` runs `npm`, and the GitHub Action does both. The promise covers june's own code; it was not audited for `git` or `ast-grep`, though the sandboxed run above included both.
+
+## Why june
+
+june is not a linter with a rule set. It enforces your own team's guidelines as ast-grep rules, on the lines a change touches. Compared with the usual alternatives, as of the versions current when this was written:
+
+| | june | ruff + reviewdog | Semgrep with a baseline |
+| --- | --- | --- | --- |
+| Rules | Yours, in YAML, each verified against examples. | Ruff's built-in rules; ruff has no user-defined rules. | Yours or the registry's, in YAML. |
+| Old violations | Only touched lines can fail; [`--legacy`](#usage) can list untouched findings as information. | reviewdog filters findings to the diff when configured to; ruff itself reports the whole file. | `--baseline-commit` reports findings new since that commit, compared by finding, not by line. |
+| Rule quality | A rule whose examples misbehave is refused. | Not applicable. | Rule tests are optional (`semgrep --test`). |
+| Network | None on the check path. | None for ruff; reviewdog's [default local reporter](https://github.com/reviewdog/reviewdog#reporter-local--reporterlocal-default) filters locally without posting to a forge. Forge API reporters use the network. | Registry rules, metrics and version checks use the network; avoid those requests with local rules and `--metrics=off --disable-version-check` ([CLI reference](https://docs.semgrep.dev/cli-reference)). |
+
+Pick ruff for the standard Python lint rules, and Semgrep for a large shared rule registry or taint analysis. Pick june when the rules are your own guidelines, an AI agent has to fix their failures, and the gate must be the same everywhere. It is Python only in version 1.
 
 ## Install
 
@@ -92,6 +111,25 @@ Every rule has `valid` and `invalid` examples in `rule-tests/`. A normal run ver
 A rule's optional `note` and `url` print under each of its findings and travel into the JSON, SARIF, GitHub and GitLab output. Rules can share utility rules kept in a `utils/` directory beside the rule files. `june verify --rule ID` checks one rule's examples, and `--format json` makes a failing example machine-readable, with the examples file, the rule and the example's number. The rule ID `june-parse-error` is reserved for the built-in syntax-error scan; user rules with that ID, ignoring case, are refused.
 
 A rule can scope itself with ast-grep's `files:` and `ignores:`, matched against the path relative to the working directory. If a file cannot be staged at its original path, a run using path-scoped rules exits 2. `june verify` refuses unsupported rule keys (such as `fix` or `labels`), naming the key, and reports bad globs against the offending rule file.
+
+### From guideline to rule
+
+1. `june new MY001` writes a rule and its examples that already verify.
+2. Edit the pattern, the `message` (say what to do) and the `valid` and `invalid` examples together.
+3. `june verify --rule MY001` until it exits 0, then `june verify` for all rules.
+4. `june --rules .june/rules --base main` to see the rule on a real change.
+
+**Drafting with an LLM.** Give the model one guideline, `june new` as the starting point and the loop below to check the draft against its examples. Prompt:
+
+```text
+Write a june rule MY001 for this guideline: "<guideline>". Run `june new MY001`, then edit
+.june/rules/MY001.yml and .june/rules/rule-tests/MY001-test.yml. Write the examples first,
+including the edge cases the guideline mentions. Run `june verify --rule MY001 --format json`,
+read each diagnostic, fix the rule or the examples, and repeat until it exits 0.
+Then run `june verify`. The message must say what to do. Do not use the keys fix or labels.
+```
+
+A human still reviews the rule and its examples: a verified rule matches its examples, not necessarily the guideline. The loop with real output is in [Writing rules](docs/writing-rules.md#worked-example-a-model-drafts-a-rule).
 
 ### Excluding paths
 
