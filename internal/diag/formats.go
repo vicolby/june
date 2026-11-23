@@ -242,7 +242,11 @@ func StepSummary(ds []Diagnostic, summary string) []byte {
 		}
 		msg := mdText(d.Msg)
 		if d.Note != "" {
-			msg += "<br>" + strings.ReplaceAll(mdText(strings.TrimSpace(d.Note)), "\\n", "<br>")
+			lines := strings.Split(strings.TrimSpace(d.Note), "\n")
+			for i, line := range lines {
+				lines[i] = mdText(line)
+			}
+			msg += "<br>" + strings.Join(lines, "<br>")
 		}
 		if d.URL != "" {
 			msg += "<br>" + mdText(d.URL)

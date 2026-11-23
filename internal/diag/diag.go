@@ -171,7 +171,11 @@ func annotation(d Diagnostic) string {
 	}
 	msg := commandData(d.Msg)
 	if d.Note != "" {
-		msg += "%0Anote: " + strings.ReplaceAll(commandData(strings.TrimSpace(d.Note)), "\\n", "%0A")
+		lines := strings.Split(strings.TrimSpace(d.Note), "\n")
+		for i, line := range lines {
+			lines[i] = commandData(line)
+		}
+		msg += "%0Anote: " + strings.Join(lines, "%0A")
 	}
 	if d.URL != "" {
 		msg += "%0Aurl: " + commandData(d.URL)

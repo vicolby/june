@@ -715,3 +715,53 @@ func TestStepSummaryShowsNoteAndURL(t *testing.T) {
 		t.Errorf("summary = %q", out)
 	}
 }
+
+func TestGitHubNoteLineSeparatorsPreserveLiteralEscapes(t *testing.T) {
+	for _, tt := range []struct{ name, note, annotation, summary string }{
+		{
+			"literal newline escape",
+			`Use "\n" in the string.`,
+			`Use "\n" in the string.`,
+			`Use "\n" in the string.`,
+		},
+		{
+			"mixed literal and actual newlines",
+			"Use \"\\n\" in the string.\nThis is another line with \\n.",
+			`Use "\n" in the string.%0AThis is another line with \n.`,
+			`Use "\n" in the string.<br>This is another line with \n.`,
+		},
+		{
+			"blank lines and surrounding whitespace",
+			" \nFirst\\n\n\nLast\\n\n ",
+			`First\n%0A%0ALast\n`,
+			`First\n<br><br>Last\n`,
+		},
+		{
+			"format delimiters",
+			"Literal \\n, %0A, <br>, | and `code`.\nNext.",
+			"Literal \\n, %250A, <br>, | and `code`.%0ANext.",
+			"Literal \\n, %0A, &lt;br&gt;, \\| and \\`code\\`.<br>Next.",
+		},
+		{
+			"controls alongside literal escapes",
+			"Literal \\n; tab\tand bell\a.\nEscape\x1b[31m and return\rhere.",
+			`Literal \n; tab\tand bell\a.%0AEscape\x1b[31m and return\rhere.`,
+			`Literal \n; tab\tand bell\a.<br>Escape\x1b[31m and return\rhere.`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := withNote
+			d.Note = tt.note
+			out, _ := diag.Render([]diag.Diagnostic{d}, "", diag.GitHub)
+			annotation, _, _ := strings.Cut(string(out), "\n")
+			wantAnnotation := "::error file=a.py,line=3,col=1,title=MY001::No print.%0Anote: " + tt.annotation + "%0Aurl: https://example.com/MY001"
+			if annotation != wantAnnotation {
+				t.Errorf("annotation = %q, want %q", annotation, wantAnnotation)
+			}
+			wantSummary := "## june\n\n| Severity | Location | Rule | Message |\n| --- | --- | --- | --- |\n| error | `a.py:3:1` | MY001 | No print.<br>" + tt.summary + "<br>https://example.com/MY001 |\n"
+			if summary := string(diag.StepSummary([]diag.Diagnostic{d}, "")); summary != wantSummary {
+				t.Errorf("summary = %q, want %q", summary, wantSummary)
+			}
+		})
+	}
+}
