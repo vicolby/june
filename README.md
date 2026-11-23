@@ -225,6 +225,8 @@ june:
 
 The MR widget compares against the latest report on the target branch, so also run the job on the default branch: add `- if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH` to `rules` and use `--base HEAD~1` there, since a branch pipeline has no MR base.
 
+At each release bump, manually run the real GitLab pipeline check in `gimmefear/test-june` using that release. Confirm an MR adding a mutable default argument fails with exit 1 and shows one `PY012` Code Quality finding. This is a manual release check, not an automated june CI job; june CI uses simulated GitLab pipeline variables.
+
 ### Pre-commit
 
 ```yaml

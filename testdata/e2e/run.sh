@@ -41,12 +41,8 @@ github)
 	status=0
 	(cd "$dir" && "$june" --base main) > "$out" || status=$?
 	cat "$out"
-	[ "$status" = 1 ] || { echo "run.sh: exit $status, want 1" >&2; exit 1; }
-	grep -q '^::error file=app.py,line=2,col=9,title=PY012::' "$out" ||
-		{ echo "run.sh: no annotation for app.py:2 PY012" >&2; exit 1; }
-	# The annotation is the verdict: the runner turns it into one on the diff, which the e2e job
-	# reads back through the API. Exit like june so the step fails the way a user's would.
-	exit 1
+	printf 'exit_code=%s\n' "$status" >> "$GITHUB_OUTPUT"
+	exit "$status"
 	;;
 gitlab)
 	status=0

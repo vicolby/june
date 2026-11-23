@@ -56,7 +56,10 @@ jobs:
       - name: The fixture's error fails the step
         env:
           OUTCOME: ${{ steps.june.outcome }}
-        run: test "$OUTCOME" = failure
+          EXIT_CODE: ${{ steps.june.outputs.exit_code }}
+        run: |
+          test "$OUTCOME" = failure
+          test "$EXIT_CODE" = 1
 
   e2e-github-annotations:
     name: e2e github annotations
