@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -820,6 +821,89 @@ func TestNewScaffoldsARuleThatVerifies(t *testing.T) {
 		if code, out, errOut := runArgs(t, env, args...); code != 0 || !strings.Contains(out, "verified") || errOut != "" {
 			t.Errorf("%v: exit = %d, stdout = %q, stderr = %q", args, code, out, errOut)
 		}
+	}
+}
+
+func TestNewSuggestedCommandVerifiesTheChosenDirectory(t *testing.T) {
+	for _, dir := range []string{"", "mine", "author's rules $HOME; $(printf wrong) `printf wrong`"} {
+		for _, flagFirst := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/flagFirst=%t", dir, flagFirst), func(t *testing.T) {
+				env := check.Env{Dir: t.TempDir()}
+				args := []string{"new", "null"}
+				if dir != "" {
+					if flagFirst {
+						args = []string{"new", "--rules", dir, "null"}
+					} else {
+						args = append(args, "--rules", dir)
+					}
+				}
+				code, out, errOut := runArgs(t, env, args...)
+				if code != 0 || errOut != "" {
+					t.Fatalf("new = %d, %q, %q", code, out, errOut)
+				}
+				_, command, ok := strings.Cut(out, "then run ")
+				if !ok {
+					t.Fatalf("no suggested command: %q", out)
+				}
+				cmd := exec.Command("sh", "-c", "june() { printf '%s\\000' \"$@\"; }; "+command)
+				cmd.Dir = env.Dir
+				parsed, err := cmd.Output()
+				if err != nil {
+					t.Fatalf("parse suggested command: %v", err)
+				}
+				verifyArgs := strings.Split(strings.TrimSuffix(string(parsed), "\x00"), "\x00")
+				if code, out, errOut := runArgs(t, env, verifyArgs...); code != 0 || errOut != "" || !strings.Contains(out, "verified 1 rule, 2 examples") {
+					t.Errorf("suggested command = %d, %q, %q", code, out, errOut)
+				}
+			})
+		}
+	}
+}
+
+func TestNewCleansUpAfterWriteFailure(t *testing.T) {
+	const helperDir = "JUNE_TEST_FAILED_WRITE_DIR"
+	if dir := os.Getenv(helperDir); dir != "" {
+		if code, out, errOut := runArgs(t, check.Env{Dir: dir}, "new", "MY001"); code != 2 || !strings.Contains(out, "cannot be written") || errOut != "" {
+			t.Fatalf("new with a file-size limit = %d, %q, %q", code, out, errOut)
+		}
+		return
+	}
+	env := check.Env{Dir: t.TempDir()}
+	cmd := exec.Command("sh", "-c", `ulimit -f 0 && exec "$1" -test.run '^TestNewCleansUpAfterWriteFailure$'`, "sh", os.Args[0])
+	cmd.Env = append(os.Environ(), helperDir+"="+env.Dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("limited child process: %v\n%s", err, out)
+	}
+	for _, rel := range []string{"MY001.yml", "rule-tests/MY001-test.yml"} {
+		if _, err := os.Stat(filepath.Join(env.Dir, ".june", "rules", rel)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("failed new left %s: %v", rel, err)
+		}
+	}
+	if code, out, errOut := runArgs(t, env, "new", "MY001"); code != 0 || errOut != "" {
+		t.Fatalf("retry = %d, %q, %q", code, out, errOut)
+	}
+}
+
+func TestNewRollsBackWhenExamplesCannotBeCreated(t *testing.T) {
+	env := check.Env{Dir: t.TempDir()}
+	blocked := filepath.Join(env.Dir, "rule-tests")
+	if err := os.WriteFile(blocked, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, errOut := runArgs(t, env, "new", "--rules", ".", "MY001"); code != 2 || !strings.Contains(out, "cannot be written") || errOut != "" {
+		t.Fatalf("new with blocked examples = %d, %q, %q", code, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(env.Dir, "MY001.yml")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("failed new left the rule file: %v", err)
+	}
+	if b, err := os.ReadFile(blocked); err != nil || string(b) != "keep" {
+		t.Fatalf("blocking file = %q, %v, want unchanged", b, err)
+	}
+	if err := os.Remove(blocked); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, errOut := runArgs(t, env, "new", "--rules", ".", "MY001"); code != 0 || errOut != "" {
+		t.Fatalf("retry = %d, %q, %q", code, out, errOut)
 	}
 }
 

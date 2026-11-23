@@ -307,7 +307,7 @@ func New(env Env, dirs []string, id string) (Result, error) {
 	for _, m := range made {
 		fmt.Fprintf(&b, "created %s\n", label(env.Dir, dir, m))
 	}
-	fmt.Fprintf(&b, "next: edit the rule and its examples, then run june verify --rule %s\n", id)
+	fmt.Fprintf(&b, "next: edit the rule and its examples, then run june verify --rules %s --rule %s\n", shellQuote(dir), id)
 	return Result{Out: []byte(b.String())}, nil
 }
 

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,11 +162,11 @@ type OptOut struct {
 
 // ruleDoc is the part of an ast-grep rule that june reads.
 type ruleDoc struct {
-	ID       string  `yaml:"id"`
-	Message  string  `yaml:"message"`
-	Language string  `yaml:"language"`
-	Note     *string `yaml:"note"`
-	URL      *string `yaml:"url"`
+	ID       string    `yaml:"id"`
+	Message  string    `yaml:"message"`
+	Language string    `yaml:"language"`
+	Note     yaml.Node `yaml:"note"`
+	URL      yaml.Node `yaml:"url"`
 }
 
 type exampleDoc struct {
@@ -176,19 +175,19 @@ type exampleDoc struct {
 	Invalid []string `yaml:"invalid"`
 }
 
-// ordinal names which example of the given kind has the code ast-grep printed, such as "#2 ", or "" when it cannot tell.
+// ordinal names which example of the given kind after the previous failure has the code ast-grep printed, or zero when it cannot tell.
 // Numbers count from one within the valid or invalid list of the examples file.
-func (ex exampleDoc) ordinal(kind, code string) string {
+func (ex exampleDoc) ordinal(kind, code string, after int) int {
 	list := ex.Valid
 	if kind == "invalid" {
 		list = ex.Invalid
 	}
 	for i, c := range list {
-		if oneLine(c) == code {
-			return fmt.Sprintf("#%d ", i+1)
+		if i >= after && strings.TrimSuffix(strings.ReplaceAll(c, "\r\n", "\n"), "\n") == code {
+			return i + 1
 		}
 	}
-	return ""
+	return 0
 }
 
 // Load verifies every rule in every dir against its sidecar examples and merges them into one set.
@@ -288,6 +287,7 @@ func load(ctx context.Context, only string, dirs []string) (*RuleSet, []Fault) {
 	if len(faults) > 0 {
 		return nil, faults
 	}
+	all := entries
 	if only != "" {
 		var kept []entry
 		for _, e := range entries {
@@ -305,7 +305,7 @@ func load(ctx context.Context, only string, dirs []string) (*RuleSet, []Fault) {
 		}
 		entries = kept
 	}
-	if faults := verify(ctx, bin, dirs, entries, utils); len(faults) > 0 {
+	if faults := verify(ctx, bin, dirs, all, utils, only); len(faults) > 0 {
 		return nil, faults
 	}
 	docs := make([]ruleSource, len(entries))
@@ -579,6 +579,9 @@ func writeNew(path string, data []byte) error {
 	if cerr := f.Close(); werr == nil {
 		werr = cerr
 	}
+	if werr != nil {
+		_ = os.Remove(path)
+	}
 	return werr
 }
 
@@ -783,16 +786,21 @@ func readRule(dir, name string) (entry, []Fault) {
 		return entry{}, []Fault{{Path: name, Rule: doc.ID, Cause: fmt.Sprintf("rule %s has an empty message", doc.ID), Fix: "write the corrective instruction in the message"}}
 	}
 	var meta ruleMeta
-	if doc.Note != nil {
-		if meta.note = strings.TrimSpace(*doc.Note); meta.note == "" {
-			return entry{}, []Fault{{Path: name, Rule: doc.ID, Cause: fmt.Sprintf("rule %s has an empty note", doc.ID), Fix: "write the note or remove it"}}
+	for _, field := range []struct {
+		name string
+		node yaml.Node
+		dst  *string
+	}{{"note", doc.Note, &meta.note}, {"url", doc.URL, &meta.url}} {
+		if field.node.Kind == yaml.AliasNode {
+			field.node = *field.node.Alias
 		}
-	}
-	if doc.URL != nil {
-		if u, err := url.Parse(strings.TrimSpace(*doc.URL)); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || strings.ContainsAny(*doc.URL, " \t\r\n") {
-			return entry{}, []Fault{{Path: name, Rule: doc.ID, Cause: fmt.Sprintf("rule %s has a url that is not an http or https link", doc.ID), Fix: "set url to a link such as https://example.com/rules/" + doc.ID + " or remove it"}}
+		if field.node.Kind == 0 || field.node.Tag == "!!null" {
+			continue
 		}
-		meta.url = strings.TrimSpace(*doc.URL)
+		if field.node.Tag != "!!str" {
+			return entry{}, []Fault{{Path: name, Rule: doc.ID, Cause: fmt.Sprintf("rule %s has a %s that is not a string", doc.ID, field.name), Fix: "write the " + field.name + " as a string or remove it"}}
+		}
+		*field.dst = strings.TrimSpace(field.node.Value)
 	}
 
 	sidecar := filepath.Join(testsDir, doc.ID+"-test.yml")
@@ -902,7 +910,7 @@ var (
 )
 
 // verify runs the examples of every rule through ast-grep in a scratch directory.
-func verify(ctx context.Context, bin string, dirs []string, entries []entry, utils []utilEntry) []Fault {
+func verify(ctx context.Context, bin string, dirs []string, entries []entry, utils []utilEntry, only string) []Fault {
 	scratch, err := os.MkdirTemp("", "june-rules-")
 	if err != nil {
 		return []Fault{general("the examples cannot be run", "make the temporary directory writable")}
@@ -916,7 +924,7 @@ func verify(ctx context.Context, bin string, dirs []string, entries []entry, uti
 	for _, e := range entries {
 		where[e.id] = e
 	}
-	if faults := stage(scratch, dirs, entries, utils); len(faults) > 0 {
+	if faults := stage(scratch, dirs, entries, utils, only); len(faults) > 0 {
 		return faults
 	}
 
@@ -934,13 +942,21 @@ func verify(ctx context.Context, bin string, dirs []string, entries []entry, uti
 
 	text := strings.ReplaceAll(stdout.String()+"\n"+stderr.String(), scratch+string(filepath.Separator), "")
 	var faults []Fault
+	ordinals := make(map[[2]string]int)
 	for _, c := range misbehaving(text) {
 		path := filepath.Join(testsDir, c.rule+"-test.yml")
+		key := [2]string{c.rule, c.kind}
+		n := where[c.rule].ex.ordinal(c.kind, c.code, ordinals[key])
+		ordinals[key] = n
+		ordinal := ""
+		if n > 0 {
+			ordinal = fmt.Sprintf("#%d ", n)
+		}
 		faults = append(faults, Fault{
 			Dir:   where[c.rule].place.Dir,
 			Path:  path,
 			Rule:  c.rule,
-			Cause: fmt.Sprintf("rule %s %s example %s%q %s", c.rule, c.kind, where[c.rule].ex.ordinal(c.kind, c.code), c.code, c.problem),
+			Cause: fmt.Sprintf("rule %s %s example %s%q %s", c.rule, c.kind, ordinal, oneLine(c.code), c.problem),
 			Fix:   fmt.Sprintf(exampleFixHint, path),
 		})
 	}
@@ -997,7 +1013,7 @@ type stagedFile struct {
 
 // stage lays rule files and examples out the way ast-grep test expects them.
 // A destination that already exists is a duplicate rule id and is left untouched.
-func stage(scratch string, dirs []string, entries []entry, utils []utilEntry) []Fault {
+func stage(scratch string, dirs []string, entries []entry, utils []utilEntry, only string) []Fault {
 	if err := writeConfig(scratch); err != nil {
 		return []Fault{general("the examples cannot be run", "make the rules directory readable")}
 	}
@@ -1015,6 +1031,9 @@ func stage(scratch string, dirs []string, entries []entry, utils []utilEntry) []
 		ruleDst := filepath.Join(scratch, "rules", e.id+".yml")
 		if fault, bad := lay(filepath.Join(dir, e.place.Path), ruleDst, e, &laid); bad {
 			return []Fault{fault}
+		}
+		if only != "" && e.id != only {
+			continue
 		}
 		side := filepath.Join(testsDir, e.id+"-test.yml")
 		if fault, bad := lay(filepath.Join(dir, side), filepath.Join(scratch, side), e, &laid); bad {
@@ -1057,16 +1076,7 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return err
-	}
-	_, werr := f.Write(b)
-	cerr := f.Close()
-	if werr != nil {
-		return werr
-	}
-	return cerr
+	return writeNew(dst, b)
 }
 
 // misbehavior is one example that ast-grep test reported.
@@ -1087,7 +1097,7 @@ func misbehaving(text string) []misbehavior {
 	var code []string
 	flush := func() {
 		if cur != nil {
-			cur.code = oneLine(strings.Join(code, "\n"))
+			cur.code = strings.TrimSuffix(strings.TrimPrefix(strings.Join(code, "\n"), "\n"), "\n")
 			out = append(out, *cur)
 		}
 		cur, code = nil, nil
@@ -1106,7 +1116,7 @@ func misbehaving(text string) []misbehavior {
 			continue
 		}
 		if cur != nil {
-			code = append(code, l)
+			code = append(code, strings.TrimPrefix(l, "  "))
 		}
 	}
 	flush()

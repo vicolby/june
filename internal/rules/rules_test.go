@@ -879,9 +879,6 @@ func TestScanAppliesRulePathFilters(t *testing.T) {
 func TestLoadRefusesRuleKeysJuneIgnores(t *testing.T) {
 	tests := []struct{ name, extra, wantCause string }{
 		{"fix", "fix: x = ()\n", `the key "fix", which june does not use`},
-		{"empty note", "note: ' '\n", "an empty note"},
-		{"url that is not a link", "url: not a link\n", "not an http or https link"},
-		{"url with another scheme", "url: javascript:alert(1)\n", "not an http or https link"},
 		{"labels", "labels:\n  x: {style: primary}\n", `the key "labels"`},
 		{"metadata", "metadata:\n  a: 1\n", `the key "metadata"`},
 		{"bad glob", "files: ['[unclosed']\n", "not a valid glob"},
@@ -1011,6 +1008,46 @@ func TestScanLeavesNoteAndURLEmptyWhenTheRuleHasNone(t *testing.T) {
 	}
 }
 
+func TestScanAcceptsOptionalMetadataStrings(t *testing.T) {
+	for _, tt := range []struct{ name, extra, note, url string }{
+		{"empty", "note: ''\nurl: ''\n", "", ""},
+		{"whitespace", "note: '  '\nurl: \" \\t\\n \"\n", "", ""},
+		{"relative url", "note: ' Use a tuple. '\nurl: docs/rules/LST01\n", "Use a tuple.", "docs/rules/LST01"},
+		{"other scheme", "url: file:///docs/LST01\n", "", "file:///docs/LST01"},
+		{"alias", "note: &text 'Use a tuple.'\nurl: *text\n", "Use a tuple.", "Use a tuple."},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			rs, faults := rules.Load(context.Background(), writeRuleSet(t, listRuleFiles("LST01", tt.extra)))
+			if rs == nil {
+				t.Fatalf("Load = %+v", faults)
+			}
+			root := t.TempDir()
+			write(t, filepath.Join(root, "a.py"), "x = [1]\n")
+			got, err := rs.Scan(context.Background(), root, []string{"a.py"})
+			if err != nil || len(got.Matches) != 1 {
+				t.Fatalf("Scan = %+v, %v, want one match", got, err)
+			}
+			if m := got.Matches[0]; m.Note != tt.note || m.URL != tt.url {
+				t.Errorf("Note, URL = %q, %q, want %q, %q", m.Note, m.URL, tt.note, tt.url)
+			}
+		})
+	}
+}
+
+func TestLoadRefusesNonStringMetadata(t *testing.T) {
+	for _, field := range []string{"note", "url"} {
+		for _, value := range []string{"[]", "{}", "123", "true"} {
+			t.Run(field+"/"+value, func(t *testing.T) {
+				dir := writeRuleSet(t, listRuleFiles("LST01", field+": "+value+"\n"))
+				rs, faults := rules.Load(context.Background(), dir)
+				if rs != nil || len(faults) != 1 || faults[0].Path != "LST01.yml" || !strings.Contains(faults[0].Cause, field+" that is not a string") {
+					t.Fatalf("Load = %v, %+v, want a fault naming %s", rs, faults, field)
+				}
+			})
+		}
+	}
+}
+
 // A broken rule elsewhere refuses the run, but a broken example of another rule does not hide the one author is working on.
 func TestLoadRuleVerifiesOnlyTheNamedRule(t *testing.T) {
 	files := listRuleFiles("LST01", "")
@@ -1026,9 +1063,40 @@ func TestLoadRuleVerifiesOnlyTheNamedRule(t *testing.T) {
 	if rs == nil || rs.Rules() != 1 || rs.Examples() != 2 {
 		t.Fatalf("LoadRule = %v, %+v, want a set of the one rule", rs, faults)
 	}
+	root := t.TempDir()
+	write(t, filepath.Join(root, "a.py"), "x = [1]\n")
+	if got, err := rs.Scan(context.Background(), root, []string{"a.py"}); err != nil || len(got.Matches) != 1 || got.Matches[0].Rule != "LST01" {
+		t.Fatalf("Scan = %+v, %v, want only LST01", got, err)
+	}
 	_, faults = rules.LoadRule(context.Background(), "LST02", dir)
 	if len(faults) != 1 || faults[0].Rule != "LST02" || faults[0].Path != "rule-tests/LST02-test.yml" {
 		t.Errorf("faults = %+v, want one for the examples of LST02", faults)
+	}
+}
+
+func TestLoadRuleValidatesUnselectedDefinitions(t *testing.T) {
+	for _, tt := range []struct{ name, matcher, extra, utility, cause, path string }{
+		{"kind", "kind: no_such_python_kind", "", "", "Kind `no_such_python_kind` is invalid.", "LST02.yml"},
+		{"missing utility", "matches: absent", "", "", "not defined", "LST02.yml"},
+		{"files glob", "kind: list", "files: ['[unclosed']\n", "", "not a valid glob", "LST02.yml"},
+		{"ignores glob", "kind: list", "ignores: ['[unclosed']\n", "", "not a valid glob", "LST02.yml"},
+		{"utility", "matches: shared", "", "id: shared\nlanguage: python\nrule:\n  kind: no_such_python_kind\n", "the examples cannot be run", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			selected := writeRuleSet(t, listRuleFiles("LST01", ""))
+			files := listRuleFiles("LST02", tt.extra)
+			files["LST02.yml"] = "id: LST02\nlanguage: python\nmessage: no lists\nrule:\n  " + tt.matcher + "\n" + tt.extra
+			if tt.utility != "" {
+				files["utils/shared.yml"] = tt.utility
+			}
+			rs, faults := rules.LoadRule(context.Background(), "LST01", selected, writeRuleSet(t, files))
+			if rs != nil || len(faults) != 1 || faults[0].Path != tt.path || !strings.Contains(faults[0].Cause, tt.cause) {
+				t.Fatalf("LoadRule = %v, %+v, want fault at %s containing %q", rs, faults, tt.path, tt.cause)
+			}
+			if tt.path != "" && (faults[0].Dir != 1 || faults[0].Rule != "LST02") {
+				t.Errorf("fault = %+v, want the unselected rule in the second directory", faults[0])
+			}
+		})
 	}
 }
 
@@ -1054,6 +1122,57 @@ func TestLoadFaultNamesTheExampleNumber(t *testing.T) {
 	for i, f := range faults {
 		if f.Cause != want[i] || f.Rule != "LST01" {
 			t.Errorf("fault %d = %+v, want cause %q for rule LST01", i, f, want[i])
+		}
+	}
+}
+
+func TestLoadNumbersWhitespaceDistinctAndRepeatedExamples(t *testing.T) {
+	files := listRuleFiles("LST01", "")
+	files["rule-tests/LST01-test.yml"] = `id: LST01
+valid:
+  - "x = (1,)"
+  - "x = [1]"
+  - "x  = [1]"
+  - " x = [1]"
+  - "x = [1] "
+  - "x = [1]\n"
+  - "x = [1]\n\n"
+  - "x = [\n  1]\n"
+  - "x = [\n\t1]\n"
+  - "x = [\r\n  1]\r\n"
+  - "x = [1]"
+invalid:
+  - "x = [1]"
+  - "x = (1,)"
+  - "x  = (1,)"
+  - "x = (1,)\n"
+  - "x = (\n  1,)\n"
+  - "x = (1,)"
+`
+	_, faults := rules.Load(context.Background(), writeRuleSet(t, files))
+	want := []string{
+		`valid example #2 "x = [1]"`,
+		`valid example #3 "x = [1]"`,
+		`valid example #4 "x = [1]"`,
+		`valid example #5 "x = [1]"`,
+		`valid example #6 "x = [1]"`,
+		`valid example #7 "x = [1]"`,
+		`valid example #8 "x = [ 1]"`,
+		`valid example #9 "x = [ 1]"`,
+		`valid example #10 "x = [ 1]"`,
+		`valid example #11 "x = [1]"`,
+		`invalid example #2 "x = (1,)"`,
+		`invalid example #3 "x = (1,)"`,
+		`invalid example #4 "x = (1,)"`,
+		`invalid example #5 "x = ( 1,)"`,
+		`invalid example #6 "x = (1,)"`,
+	}
+	if len(faults) != len(want) {
+		t.Fatalf("faults = %+v, want %d", faults, len(want))
+	}
+	for i, f := range faults {
+		if !strings.Contains(f.Cause, want[i]) {
+			t.Errorf("fault %d = %+v, want %s", i, f, want[i])
 		}
 	}
 }
@@ -1131,19 +1250,23 @@ func TestLoadEnvironmentFaultsConcernNoDirectory(t *testing.T) {
 }
 
 func TestScaffoldWritesARuleThatVerifies(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "new", "rules")
-	made, fault := rules.Scaffold(dir, "MY001")
-	if fault != nil || !slices.Equal(made, []string{"MY001.yml", "rule-tests/MY001-test.yml"}) {
-		t.Fatalf("Scaffold = %v, %+v", made, fault)
-	}
-	rs, faults := rules.Load(context.Background(), dir)
-	if rs == nil || rs.Rules() != 1 || rs.Examples() != 2 {
-		t.Fatalf("the scaffold does not verify: %v, %+v", rs, faults)
-	}
-	root := t.TempDir()
-	write(t, filepath.Join(root, "a.py"), "print(1)\n")
-	if got, err := rs.Scan(context.Background(), root, []string{"a.py"}); err != nil || len(got.Matches) != 1 {
-		t.Errorf("Scan = %+v, %v, want the scaffolded rule to find print", got, err)
+	for _, id := range []string{"MY001", "null", "Null", "NULL", "true", "123"} {
+		t.Run(id, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "new", "rules")
+			made, fault := rules.Scaffold(dir, id)
+			if fault != nil || !slices.Equal(made, []string{id + ".yml", "rule-tests/" + id + "-test.yml"}) {
+				t.Fatalf("Scaffold = %v, %+v", made, fault)
+			}
+			rs, faults := rules.Load(context.Background(), dir)
+			if rs == nil || rs.Rules() != 1 || rs.Examples() != 2 {
+				t.Fatalf("the scaffold does not verify: %v, %+v", rs, faults)
+			}
+			root := t.TempDir()
+			write(t, filepath.Join(root, "a.py"), "print(1)\n")
+			if got, err := rs.Scan(context.Background(), root, []string{"a.py"}); err != nil || len(got.Matches) != 1 {
+				t.Errorf("Scan = %+v, %v, want the scaffolded rule to find print", got, err)
+			}
+		})
 	}
 }
 

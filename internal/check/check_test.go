@@ -1148,6 +1148,27 @@ func TestFindingPrintsNoteAndURLOfItsRule(t *testing.T) {
 	}
 }
 
+func TestFindingOmitsBlankMetadataAndPrintsRelativeURL(t *testing.T) {
+	for _, tt := range []struct{ name, fields, details string }{
+		{"empty", "note: ''\nurl: ''\n", ""},
+		{"whitespace", "note: '  '\nurl: \" \\t\\n \"\n", ""},
+		{"relative URL", "url: docs/rules/LST01\n", "  url: docs/rules/LST01\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := noteEnv(t)
+			write(t, filepath.Join(env.Dir, "notes", "LST01.yml"), "id: LST01\nlanguage: python\nseverity: error\nmessage: No lists.\nrule:\n  kind: list\n"+tt.fields)
+			res := changeWith(t, env, []string{"notes"}, "app.py:1\n")
+			want := "app.py:1:5: LST01 No lists.\n" + tt.details
+			if res.Exit != 1 || !strings.HasPrefix(string(res.Out), want) {
+				t.Errorf("Change = %d, %q, want 1 and prefix %q", res.Exit, res.Out, want)
+			}
+			if tt.details == "" && (strings.Contains(string(res.Out), "  note:") || strings.Contains(string(res.Out), "  url:")) {
+				t.Errorf("blank metadata printed: %s", res.Out)
+			}
+		})
+	}
+}
+
 func TestNoteAndURLTravelIntoEveryFormat(t *testing.T) {
 	env := noteEnv(t)
 	for format, want := range map[diag.Format][]string{
@@ -1246,7 +1267,7 @@ func TestFileAsRulesDirectoryIsSaidSo(t *testing.T) {
 func TestNewWritesRuleThatVerifiesAndNeverOverwrites(t *testing.T) {
 	env := tree(t, nil)
 	res, err := check.New(env, []string{"mine"}, "MY001")
-	want := "created mine/MY001.yml\ncreated mine/rule-tests/MY001-test.yml\nnext: edit the rule and its examples, then run june verify --rule MY001\n"
+	want := "created mine/MY001.yml\ncreated mine/rule-tests/MY001-test.yml\nnext: edit the rule and its examples, then run june verify --rules 'mine' --rule MY001\n"
 	if err != nil || res.Exit != 0 || string(res.Out) != want {
 		t.Fatalf("New = %d %q, %v, want %q", res.Exit, res.Out, err, want)
 	}

@@ -9,10 +9,10 @@ import (
 	"strings"
 )
 
-// ruleIDSyntax is the shape of a rule id june scaffolds: it is safe as a filename and as a bare YAML scalar.
+// ruleIDSyntax is the shape of a rule id june scaffolds: it is safe as a filename.
 var ruleIDSyntax = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 
-const scaffoldRule = `id: %[1]s
+const scaffoldRule = `id: %[1]q
 language: python
 severity: error
 message: "Do not call print. Fix: log with the logging module instead."
@@ -20,7 +20,7 @@ rule:
   pattern: print($$$ARGS)
 `
 
-const scaffoldExamples = `id: %[1]s
+const scaffoldExamples = `id: %[1]q
 valid:
   - |
     logging.info("ready")
