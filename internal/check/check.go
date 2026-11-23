@@ -32,7 +32,8 @@ type Request struct {
 	Base string
 	// Changed is the supplied touched-line list, one "path:7" or "path:7-12" per line.
 	Changed io.Reader
-	// Rules lists the rules directories, merged into one set; empty means ./.june/rules.
+	// Rules lists the rules directories, merged into one set; empty means the rules of .june/config.yml, else .june/rules.
+	// That directory is the working directory's, else the repository root's.
 	// A directory named twice counts once, and a rule id defined in two files is a rule fault.
 	Rules []string
 	// Format is the output format, one of diag's; empty is inferred: GitHub under GitHub Actions, GitLab under GitLab CI, else text.
@@ -40,6 +41,9 @@ type Request struct {
 	// Exclude lists path globs, relative to the working directory, that keep files out of the check.
 	// They add to the exclude list of .june/config.yml.
 	Exclude []string
+	// Paths narrows the check to these files and directories, relative to the working directory; empty means everything.
+	// A path that does not exist, or lies outside the working directory, is a refusal.
+	Paths []string
 	// Legacy also lists rule matches on untouched lines of the checked files, as information only.
 	// They never change Exit; off by default.
 	Legacy bool
@@ -76,11 +80,15 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	req.Format = formatFor(env, req)
 	req.root = repoPrefix(ctx, env, req.Format)
 	req.stepSummary = env.Vars["GITHUB_STEP_SUMMARY"]
-	skip, bad := excludes(env, req)
+	proj, bad := findProject(ctx, env)
 	if bad != nil {
 		return refuse(req, *bad), nil
 	}
-	touched, sc, bad, err := findTouched(ctx, env, req, skip)
+	skip, bad := excludes(env, proj, req)
+	if bad != nil {
+		return refuse(req, *bad), nil
+	}
+	touched, sc, bad, err := findTouched(ctx, env, req, proj.cfg.Base, skip)
 	if sc.scanDir != "" {
 		defer func() { _ = os.RemoveAll(sc.scanDir) }()
 	}
@@ -91,7 +99,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		return refuse(req, *bad), nil
 	}
 
-	rs, refusal, err := load(ctx, env, req.Rules, "", req)
+	rs, refusal, err := load(ctx, env, proj, req.Rules, "", req)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -275,7 +283,11 @@ func Verify(ctx context.Context, env Env, v VerifyRequest) (Result, error) {
 	if req.Format == diag.GitLab {
 		req.Format = diag.Text // verify has no findings, and an empty report would stand for a clean check
 	}
-	rs, refusal, err := load(ctx, env, v.Rules, v.Rule, req)
+	proj, bad := findProject(ctx, env)
+	if bad != nil {
+		return refuse(req, *bad), nil
+	}
+	rs, refusal, err := load(ctx, env, proj, v.Rules, v.Rule, req)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -287,7 +299,7 @@ func Verify(ctx context.Context, env Env, v VerifyRequest) (Result, error) {
 
 // New writes a minimal rule and its examples for id into the one rules directory, which verify accepts as written.
 // An existing rule is never overwritten. Exit 2 reports invalid input or a file-creation failure.
-func New(env Env, dirs []string, id string) (Result, error) {
+func New(ctx context.Context, env Env, dirs []string, id string) (Result, error) {
 	if env.Dir == "" {
 		return Result{}, errors.New("check: Env.Dir is empty")
 	}
@@ -295,7 +307,14 @@ func New(env Env, dirs []string, id string) (Result, error) {
 	if len(dirs) > 1 {
 		return refuse(req, "june new writes into one rules directory, and "+strconv.Itoa(len(dirs))+" were given. Fix: pass --rules once"), nil
 	}
+	proj, bad := findProject(ctx, env)
+	if bad != nil {
+		return refuse(req, *bad), nil
+	}
 	dir := defaultRules
+	if proj.dir != env.Dir {
+		dir = resolve(proj.dir, defaultRules)
+	}
 	if len(dirs) == 1 && dirs[0] != "" {
 		dir = dirs[0]
 	}
@@ -330,12 +349,14 @@ func ASTGrep(ctx context.Context) string {
 // load verifies the rules in dirs, or the examples of only the one rule with that id when it is not empty.
 // A rule fault comes back as a refusal.
 // Cancellation comes back as an error, and wins over a fault that cancellation caused.
-func load(ctx context.Context, env Env, dirs []string, only string, req Request) (*rules.RuleSet, *Result, error) {
+func load(ctx context.Context, env Env, proj project, dirs []string, only string, req Request) (*rules.RuleSet, *Result, error) {
 	if len(dirs) == 0 {
-		dirs = []string{defaultRules}
-		if _, err := os.Stat(resolve(env.Dir, defaultRules)); errors.Is(err, fs.ErrNotExist) {
-			res := refuse(req, "no rules to run: june ships no rules. Fix: supply rules with --rules DIR or put them in "+defaultRules)
-			return nil, &res, nil
+		dirs = proj.rulesDirs(env)
+		if len(proj.cfg.Rules) == 0 {
+			if _, err := os.Stat(resolve(env.Dir, dirs[0])); errors.Is(err, fs.ErrNotExist) {
+				res := refuse(req, "no rules to run: june ships no rules. Fix: supply rules with --rules DIR, list them under rules in "+defaultConfig+", or put them in "+defaultRules)
+				return nil, &res, nil
+			}
 		}
 	}
 	dirs = distinct(env.Dir, dirs)
@@ -423,13 +444,16 @@ func repoPrefix(ctx context.Context, env Env, f diag.Format) string {
 
 // findTouched picks the touched-line adapter: the supplied list, else git against Base or an inferred base.
 // The scope is zero for a supplied list. The touched set is never "every line": what cannot be known is refused.
-func findTouched(ctx context.Context, env Env, req Request, skip *excluder) (touchedSet, scope, *string, error) {
+func findTouched(ctx context.Context, env Env, req Request, configBase string, skip *excluder) (touchedSet, scope, *string, error) {
 	if req.Changed == nil {
 		if req.Base != "" {
 			return gitTouched(ctx, env, req.Base, sourceFlag, req.IgnoreSpace, skip)
 		}
 		if base := mergeRequestBase(ctx, env); base != "" {
 			return gitTouched(ctx, env, base, sourceMR, req.IgnoreSpace, skip)
+		}
+		if configBase != "" {
+			return gitTouched(ctx, env, configBase, sourceConfig, req.IgnoreSpace, skip)
 		}
 		return gitTouched(ctx, env, "", "", req.IgnoreSpace, skip)
 	}

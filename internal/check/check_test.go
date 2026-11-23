@@ -1335,7 +1335,7 @@ func TestFileAsRulesDirectoryIsSaidSo(t *testing.T) {
 func TestNewWritesRuleThatVerifiesAndNeverOverwrites(t *testing.T) {
 	t.Parallel()
 	env := tree(t, nil)
-	res, err := check.New(env, []string{"mine"}, "MY001")
+	res, err := check.New(context.Background(), env, []string{"mine"}, "MY001")
 	want := "created mine/MY001.yml\ncreated mine/rule-tests/MY001-test.yml\nnext: edit the rule and its examples, then run june verify --rules 'mine' --rule MY001\n"
 	if err != nil || res.Exit != 0 || string(res.Out) != want {
 		t.Fatalf("New = %d %q, %v, want %q", res.Exit, res.Out, err, want)
@@ -1343,11 +1343,11 @@ func TestNewWritesRuleThatVerifiesAndNeverOverwrites(t *testing.T) {
 	if v, err := check.Verify(context.Background(), env, check.VerifyRequest{Rules: []string{"mine"}, Rule: "MY001"}); err != nil || v.Exit != 0 {
 		t.Fatalf("the scaffold does not verify: %d %q, %v", v.Exit, v.Out, err)
 	}
-	again, err := check.New(env, []string{"mine"}, "MY001")
+	again, err := check.New(context.Background(), env, []string{"mine"}, "MY001")
 	if err != nil || again.Exit != 2 || !strings.Contains(string(again.Out), "mine/MY001.yml: the file already exists") {
 		t.Errorf("second New = %d %q, %v, want a refusal", again.Exit, again.Out, err)
 	}
-	dir, err := check.New(env, []string{"a", "b"}, "MY002")
+	dir, err := check.New(context.Background(), env, []string{"a", "b"}, "MY002")
 	if err != nil || dir.Exit != 2 || !strings.Contains(string(dir.Out), "one rules directory") {
 		t.Errorf("New with two directories = %d %q, %v, want a refusal", dir.Exit, dir.Out, err)
 	}
@@ -1361,7 +1361,7 @@ func TestNewDefaultsToTheJuneRulesDirectory(t *testing.T) {
 	for _, dirs := range [][]string{nil, {""}, {".june/rules"}} {
 		t.Run(fmt.Sprint(dirs), func(t *testing.T) {
 			env := check.Env{Dir: t.TempDir()}
-			res, err := check.New(env, dirs, "MY001")
+			res, err := check.New(context.Background(), env, dirs, "MY001")
 			want := "created .june/rules/MY001.yml\ncreated .june/rules/rule-tests/MY001-test.yml\nnext: edit the rule and its examples, then run june verify --rules '.june/rules' --rule MY001\n"
 			if err != nil || res.Exit != 0 || string(res.Out) != want {
 				t.Fatalf("New = %d %q, %v, want %q", res.Exit, res.Out, err, want)
@@ -1374,7 +1374,7 @@ func TestNewDefaultsToTheJuneRulesDirectory(t *testing.T) {
 			if v, err := check.Verify(context.Background(), env, check.VerifyRequest{Rules: dirs, Rule: "MY001"}); err != nil || v.Exit != 0 {
 				t.Errorf("verify of the default directory = %d %q, %v", v.Exit, v.Out, err)
 			}
-			if again, err := check.New(env, dirs, "MY001"); err != nil || again.Exit != 2 || !strings.Contains(string(again.Out), ".june/rules/MY001.yml: the file already exists") {
+			if again, err := check.New(context.Background(), env, dirs, "MY001"); err != nil || again.Exit != 2 || !strings.Contains(string(again.Out), ".june/rules/MY001.yml: the file already exists") {
 				t.Errorf("second New = %d %q, %v, want the existing default rule refused", again.Exit, again.Out, err)
 			}
 		})

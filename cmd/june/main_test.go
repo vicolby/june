@@ -194,7 +194,7 @@ func TestRulesFlag(t *testing.T) {
 }
 
 func TestNoRulesSuppliedAsksForRules(t *testing.T) {
-	want := "june: error: no rules to run: june ships no rules. Fix: supply rules with --rules DIR or put them in .june/rules\n"
+	want := "june: error: no rules to run: june ships no rules. Fix: supply rules with --rules DIR, list them under rules in .june/config.yml, or put them in .june/rules\n"
 	for _, args := range [][]string{{"--changed-lines", "-"}, {"verify"}} {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, "app.py"), []byte("x = 1\n"), 0o644); err != nil {
@@ -940,5 +940,43 @@ func TestHelpListsTheAuthoringCommands(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("help lacks %q", want)
 		}
+	}
+}
+
+func TestPathsMayFollowOrPrecedeFlags(t *testing.T) {
+	env := project(t)
+	if err := os.WriteFile(filepath.Join(env.Dir, "other.py"), []byte("def g(b=[]):\n    pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"app.py", "--changed-lines", "-", "--format", "text"},
+		{"--changed-lines", "-", "--format", "text", "app.py"},
+		{"--changed-lines", "-", "--format", "text", "--", "app.py"},
+	} {
+		var out, errOut bytes.Buffer
+		code := run(context.Background(), args, strings.NewReader("app.py:2\nother.py:1\n"), &out, &errOut, env)
+		if code != 1 || !strings.HasPrefix(out.String(), "app.py:2:9: PY012") || strings.Contains(out.String(), "other.py") || !strings.Contains(out.String(), "checked 1 file") {
+			t.Errorf("%v: exit = %d, stdout = %q, stderr = %q", args, code, out.String(), errOut.String())
+		}
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"--changed-lines", "-", "gone.py"}, strings.NewReader("app.py:2\n"), &out, &errOut, env); code != 2 || !strings.Contains(out.String(), `the path "gone.py" does not exist`) {
+		t.Errorf("missing path: exit = %d, stdout = %q", code, out.String())
+	}
+}
+
+func TestInitCommand(t *testing.T) {
+	env := check.Env{Dir: t.TempDir()}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"init"}, strings.NewReader(""), &out, &errOut, env); code != 0 || !strings.Contains(out.String(), "created .june/rules/MY001.yml\n") {
+		t.Fatalf("init: exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+	out.Reset()
+	if code := run(context.Background(), []string{"init"}, strings.NewReader(""), &out, &errOut, env); code != 0 || strings.Contains(out.String(), "created") {
+		t.Errorf("second init: exit = %d, stdout = %q", code, out.String())
+	}
+	out.Reset()
+	if code := run(context.Background(), []string{"init", "extra"}, strings.NewReader(""), &out, &errOut, env); code != 2 || !strings.Contains(errOut.String(), `unexpected argument "extra"`) {
+		t.Errorf("init extra: exit = %d, stderr = %q", code, errOut.String())
 	}
 }

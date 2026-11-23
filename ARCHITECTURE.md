@@ -19,7 +19,7 @@ Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`. Test
 
 ## Invariants
 
-- Path exclusions follow the [exclusion contract](README.md#excluding-paths).
+- Path exclusions follow the [exclusion contract](README.md#excluding-paths). Positional paths narrow through the same filter, uncounted. `.june` is the working directory's, else the repository root's, and its [config](README.md#config-file) is the lowest-priority default.
 - Exit 1 if and only if an error-severity match is anchored on a touched line with no valid opt-out. Warnings, legacy matches and opt-outs never change the exit code.
 - Exit 2 means june could not give a verdict (no base, shallow clone, bad rules, missing ast-grep, bad list, unwritable report). Output reads `june: error: <cause>. Fix: <instruction>`.
 - A touched line is one added or edited in the post-image. With `--ignore-whitespace`, a line whose only change is whitespace (`git diff -w`) is not touched; a line with any other edit still is. Pure deletions, mode changes and pure renames touch nothing. A new file touches every line, including an untracked file in a local run.

@@ -33,6 +33,7 @@ const fullDepth = "clone the full history, with GIT_DEPTH: 0 in the GitLab CI jo
 
 const (
 	sourceFlag     = "--base"
+	sourceConfig   = "base in .june/config.yml"
 	sourceMR       = "merge request diff base"
 	sourceUpstream = "upstream branch"
 	sourceDefault  = "remote default branch"
@@ -263,7 +264,7 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 			return nil, scope{}, bad, err
 		}
 		// Preserve the caller's index unless untracked files, flags or exclusions need a private overlay.
-		if len(fresh) > 0 || len(flagged) > 0 || len(skip.globs) > 0 {
+		if len(fresh) > 0 || len(flagged) > 0 || skip.active() {
 			dir, err := os.MkdirTemp("", "june-git-")
 			if err != nil {
 				return refuse("a temporary git index cannot be created. Fix: check temporary directory permissions and run june again")
@@ -273,7 +274,7 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 			if env, bad, err = overlayIndex(ctx, env, dir, prefix, fresh, flagged); bad != nil || err != nil {
 				return nil, scope{}, bad, err
 			}
-			if len(skip.globs) > 0 {
+			if skip.active() {
 				if err := maskExcluded(ctx, env, skip, excluded); err != nil {
 					if ctx.Err() != nil {
 						return nil, scope{}, nil, ctx.Err()
@@ -339,7 +340,7 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 		}
 		args = append(append(args, strings.TrimSpace(mb)), tip...)
 		got := map[string]string{}
-		if len(skip.globs) == 0 {
+		if !skip.active() {
 			patch, err := git(ctx, env, "", append(args, "--", pythonPathspec)...)
 			if err != nil {
 				if ctx.Err() != nil {
@@ -352,7 +353,7 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 		}
 		var redo []rename
 		for destination, o := range want {
-			if len(skip.globs) == 0 && got[destination] == o.from {
+			if !skip.active() && got[destination] == o.from {
 				continue
 			}
 			delete(parsed, destination)

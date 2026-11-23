@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -58,11 +59,15 @@ func snapshotEnv(getwd func() (string, error)) (check.Env, error) {
 
 // usage is the help text: `june --help` and `june -h` print it to stdout and exit 0.
 const usage = `usage:
-  june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--exclude GLOB]... [--base REF | --changed-lines FILE]
+  june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--exclude GLOB]... [--base REF | --changed-lines FILE] [PATH]...
+  june init [--force]
   june verify [--rules DIR]... [--rule ID] [--format FORMAT]
   june new [--rules DIR] RULE
   june --version
   june --help | -h
+
+PATH narrows the check to those files and directories, relative to the working directory.
+.june/rules and .june/config.yml are found in the working directory, else at the repository root.
 
 flags:
   --base REF            judge lines changed since the merge base of REF and HEAD
@@ -72,7 +77,8 @@ flags:
   --rule ID             with verify: check the examples of one rule only
   --ignore-whitespace   do not count a line whose only change is whitespace as touched (git diff -w)
   --legacy              also list violations on untouched lines, information only
-  --rules DIR           rules directory, repeatable (default ./.june/rules); june new takes one
+  --rules DIR           rules directory, repeatable (default: rules in .june/config.yml, else .june/rules); june new takes one
+  --force               with init: overwrite CI and hook files that exist; rules are never overwritten
   --version             print the june and ast-grep versions
   --help, -h            print this help
 
@@ -86,8 +92,11 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if len(args) > 0 && args[0] == "verify" {
 		return verify(ctx, args[1:], stdout, stderr, env)
 	}
+	if len(args) > 0 && args[0] == "init" {
+		return initProject(ctx, args[1:], stdout, stderr, env)
+	}
 	if len(args) > 0 && args[0] == "new" {
-		return newRule(args[1:], stdout, stderr, env)
+		return newRule(ctx, args[1:], stdout, stderr, env)
 	}
 	fs := flag.NewFlagSet("june", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -100,15 +109,13 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	var rulesDirs, excludes dirList
 	fs.Var(&rulesDirs, "rules", "rules directory, repeatable (default ./.june/rules)")
 	fs.Var(&excludes, "exclude", "path glob to keep out of the check, repeatable")
-	if err := fs.Parse(args); err != nil {
+	paths, err := parseInterleaved(fs, args)
+	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(stdout, usage)
 			return 0
 		}
 		return usageError(stderr, err.Error())
-	}
-	if fs.NArg() > 0 {
-		return usageError(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
 	}
 	if *showVersion {
 		line := check.ASTGrep(ctx)
@@ -119,7 +126,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return 0
 	}
 
-	req := check.Request{Rules: rulesDirs, Exclude: excludes, Base: *base, Legacy: *legacy, IgnoreSpace: *ignoreSpace}
+	req := check.Request{Rules: rulesDirs, Exclude: excludes, Paths: paths, Base: *base, Legacy: *legacy, IgnoreSpace: *ignoreSpace}
 	if *format != "" {
 		f, ok := diag.ParseFormat(*format)
 		if !ok {
@@ -141,6 +148,46 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 
 	res, err := check.Change(ctx, env, req)
+	return finish(env.Dir, stdout, stderr, res, err)
+}
+
+// parseInterleaved parses flags and returns the positional arguments, which may come before, between and after flags.
+// Everything after a bare "--" is positional.
+func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
+	var tail []string
+	if i := slices.Index(args, "--"); i >= 0 {
+		args, tail = args[:i], args[i+1:]
+	}
+	var paths []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		args = fs.Args()
+		if len(args) == 0 {
+			return append(paths, tail...), nil
+		}
+		paths = append(paths, args[0])
+		args = args[1:]
+	}
+}
+
+// initProject is `june init [--force]`: it writes the rules directory with a starter rule, a config, and CI and hook configuration.
+func initProject(ctx context.Context, args []string, stdout, stderr io.Writer, env check.Env) int {
+	fs := flag.NewFlagSet("june init", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	force := fs.Bool("force", false, "overwrite CI and hook files that exist")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprint(stdout, usage)
+			return 0
+		}
+		return usageError(stderr, err.Error())
+	}
+	if fs.NArg() > 0 {
+		return usageError(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
+	}
+	res, err := check.Init(ctx, env, check.InitRequest{Force: *force, Version: version})
 	return finish(env.Dir, stdout, stderr, res, err)
 }
 
@@ -175,7 +222,7 @@ func verify(ctx context.Context, args []string, stdout, stderr io.Writer, env ch
 }
 
 // newRule is `june new [--rules DIR] RULE`: it writes a minimal rule and its examples, which verify accepts as written.
-func newRule(args []string, stdout, stderr io.Writer, env check.Env) int {
+func newRule(ctx context.Context, args []string, stdout, stderr io.Writer, env check.Env) int {
 	fs := flag.NewFlagSet("june new", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var rulesDirs dirList
@@ -190,7 +237,7 @@ func newRule(args []string, stdout, stderr io.Writer, env check.Env) int {
 	if fs.NArg() != 1 {
 		return usageError(stderr, "june new needs exactly one rule id after its flags")
 	}
-	res, err := check.New(env, rulesDirs, fs.Arg(0))
+	res, err := check.New(ctx, env, rulesDirs, fs.Arg(0))
 	return finish(env.Dir, stdout, stderr, res, err)
 }
 
@@ -240,7 +287,7 @@ func appendFile(path string, data []byte) (err error) {
 }
 
 func usageError(stderr io.Writer, cause string) int {
-	return fail(stderr, cause+". Fix: usage is june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--exclude GLOB]... [--base REF | --changed-lines FILE], june verify [--rules DIR]... [--rule ID] [--format FORMAT], june new [--rules DIR] RULE, june --version, or june --help")
+	return fail(stderr, cause+". Fix: usage is june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--exclude GLOB]... [--base REF | --changed-lines FILE] [PATH]..., june init [--force], june verify [--rules DIR]... [--rule ID] [--format FORMAT], june new [--rules DIR] RULE, june --version, or june --help")
 }
 
 func fail(stderr io.Writer, msg string) int {
