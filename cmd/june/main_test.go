@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/vicolby/june/internal/check"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // astGrepVersion is the on-PATH `ast-grep --version` stdout. june --version and verify must print that line.

@@ -35,11 +35,25 @@ curl -fsSL https://github.com/vicolby/june/releases/download/vX.Y.Z/install.sh |
 | `JUNE_INSTALL_DIR` | Binary dir. Default: `/usr/local/bin` as root, else `$HOME/.local/bin`. |
 | `JUNE_OS`, `JUNE_ARCH` | Override platform: `linux`/`darwin`, `amd64`/`arm64`. |
 | `JUNE_INSTALL_AST_GREP` | `1` also installs the tested ast-grep version above with `npm install --global @ast-grep/cli@<version>`. |
+| `JUNE_VERIFY` | `1` also verifies the release signature (see below) and fails if neither `gh` nor `cosign` is installed. Default: sha256 check only. |
+| `JUNE_VERIFY_REPO` | Repository the signature must come from. Default: `vicolby/june`. |
 | `JUNE_RELEASES_URL` | Default: `https://github.com/vicolby/june/releases`. |
 
 The script is plain POSIX [`install.sh`](install.sh); read it before piping to `sh`.
 
 **Release archive.** Each release attaches `june_<version>_<os>_<arch>.tar.gz` (`darwin`/`linux`, `amd64`/`arm64`), `checksums.txt` and `install.sh`. The archive has no top-level directory: it holds `june`, not `ast-grep`.
+
+**Verify a release.** The sha256 check in `install.sh` catches corruption only, because `checksums.txt` comes from the same release as the archive. Releases are also signed by the release workflow: `checksums.txt` carries a keyless cosign signature (`checksums.txt.sigstore.json`), each archive has a build provenance attestation and an SPDX SBOM (`<archive>.sbom.json`). Verify with either tool (replace `X.Y.Z`, platform and arch):
+
+```sh
+gh attestation verify june_X.Y.Z_linux_amd64.tar.gz --repo vicolby/june
+
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github\.com/vicolby/june/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+```
+
+`JUNE_VERIFY=1 sh install.sh` runs the first when `gh` is installed, else the second. Releases before the first signed one have no signature, so verification fails for them.
 
 ## Usage
 

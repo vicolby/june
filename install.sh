@@ -10,10 +10,16 @@
 #   JUNE_OS, JUNE_ARCH     Override the detected platform (linux or darwin, amd64 or arm64).
 #   JUNE_INSTALL_AST_GREP  Set to 1 to also install the tested ast-grep with
 #                          `npm install --global @ast-grep/cli@$ast_grep_version`.
+#   JUNE_VERIFY            Set to 1 to also verify the release is signed by this repository's release
+#                          workflow, with `gh attestation verify` or else cosign. Fails if neither is
+#                          installed or verification fails. Default: sha256 check only.
+#   JUNE_VERIFY_REPO       Repository the signature must come from. Default: vicolby/june.
 #   JUNE_RELEASES_URL      Release base URL. Default: https://github.com/vicolby/june/releases.
 #
 # In CI set JUNE_VERSION and fetch this script from a release tag, not main.
 # The script downloads the archive and checksums.txt, verifies the sha256 and only then installs.
+# The sha256 check catches corruption only: checksums.txt comes from the same place as the archive.
+# JUNE_VERIFY=1 adds a signature check that a compromised release cannot forge.
 
 set -eu
 
@@ -114,6 +120,27 @@ main() {
 		fail "could not download $base/$archive (check that release v$version exists for $os/$arch)"
 	curl -fsSL -o "$tmp/checksums.txt" "$base/checksums.txt" ||
 		fail "could not download $base/checksums.txt"
+
+	if [ "${JUNE_VERIFY:-}" = 1 ]; then
+		verify_repo=${JUNE_VERIFY_REPO:-vicolby/june}
+		if command -v gh >/dev/null 2>&1; then
+			say "Verifying build provenance with gh"
+			gh attestation verify "$tmp/$archive" --repo "$verify_repo" >/dev/null ||
+				fail "gh attestation verify failed for $archive (expected a build from $verify_repo)"
+		elif command -v cosign >/dev/null 2>&1; then
+			say "Verifying checksums.txt signature with cosign"
+			curl -fsSL -o "$tmp/checksums.txt.sigstore.json" "$base/checksums.txt.sigstore.json" ||
+				fail "could not download $base/checksums.txt.sigstore.json"
+			cosign verify-blob \
+				--bundle "$tmp/checksums.txt.sigstore.json" \
+				--certificate-identity-regexp "^https://github\\.com/$verify_repo/\\.github/workflows/release\\.yml@refs/tags/v" \
+				--certificate-oidc-issuer https://token.actions.githubusercontent.com \
+				"$tmp/checksums.txt" >/dev/null 2>&1 ||
+				fail "cosign could not verify the signature of checksums.txt (expected a release from $verify_repo)"
+		else
+			fail "JUNE_VERIFY=1 needs gh or cosign on PATH"
+		fi
+	fi
 
 	want=$(awk -v f="$archive" '$2 == f { print $1; exit }' "$tmp/checksums.txt")
 	[ -n "$want" ] || fail "checksums.txt has no entry for $archive"

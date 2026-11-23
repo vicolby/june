@@ -31,6 +31,20 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# Keyless cosign signature over checksums.txt. checksums.txt lists every archive, so verifying it
+# and then the archive checksum covers all of them. The bundle holds signature and certificate.
+# Keyless signing needs the release job's OIDC identity, so snapshot runs pass --skip=sign.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args: [sign-blob, --yes, "--bundle=${signature}", "${artifact}"]
+    output: true
+
+# One SPDX SBOM per archive, generated with syft (the release workflow installs it).
+sboms:
+  - artifacts: archive
+
 # install.sh is attached to each release so CI can fetch a script pinned to the release it installs.
 release:
   extra_files:
