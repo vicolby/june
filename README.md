@@ -95,7 +95,7 @@ june --help | -h
 
 | Flag | Meaning |
 | --- | --- |
-| `PATH` | Narrow the check to these files and directories, relative to the working directory. Paths left out by narrowing are not counted as excluded. An absolute path, a path that does not exist, or a path that lies outside the working directory exits 2. Flags must precede paths; prefix paths starting with `-` with `./`. |
+| `PATH` | Narrow the check to these files and directories, relative to the working directory. Paths must match the repository spelling; case and symlinks are not normalized. Paths left out by narrowing are not counted as excluded. An absolute path, a path that does not exist, or a path that lies outside the working directory exits 2. Flags must precede paths; prefix paths starting with `-` with `./`. |
 | `--rules DIR` | Rules directory, relative to the working directory; repeatable for checks and `verify`; `new` takes one. Default: `rules` in `.june/config.yml`, else `.june/rules`. |
 | `--ci PROVIDER` | With `june init`: write `github` (default) or `gitlab` CI configuration. |
 | `--base REF` | Judge lines changed since the merge base of `REF` and `HEAD`. |
