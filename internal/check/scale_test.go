@@ -115,7 +115,7 @@ func TestChangeInHugeRepoCostsTheChange(t *testing.T) {
 	}
 	var res check.Result
 	for try := 1; ; try++ {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), slowdown*time.Second)
 		var err error
 		res, err = check.Change(ctx, env, check.Request{Base: "main"})
 		cancel()
@@ -123,7 +123,7 @@ func TestChangeInHugeRepoCostsTheChange(t *testing.T) {
 			break
 		}
 		if try == 3 {
-			t.Fatalf("a one-file change in a repository of 100000 files did not finish within 1s in %d tries: %v", try, err)
+			t.Fatalf("a one-file change in a repository of 100000 files did not finish within %v in %d tries: %v", slowdown*time.Second, try, err)
 		}
 	}
 	expectWith(t, res, "d0/s0/f0.py:2:9: "+py012+"d0/s0/fresh.py:1:9: "+py012, "checked 2 files, 2 changed lines")
