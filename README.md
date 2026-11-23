@@ -54,11 +54,33 @@ curl -fsSL https://github.com/vicolby/june/releases/download/vX.Y.Z/install.sh |
 | `JUNE_INSTALL_DIR` | Binary dir. Default: `/usr/local/bin` as root, else `$HOME/.local/bin`. |
 | `JUNE_OS`, `JUNE_ARCH` | Override platform: `linux`/`darwin`, `amd64`/`arm64`. |
 | `JUNE_INSTALL_AST_GREP` | `1` also installs the tested ast-grep version above with `npm install --global @ast-grep/cli@<version>`. |
+| `JUNE_VERIFY` | `1` enables release authentication as described below. Default: sha256 check only. |
 | `JUNE_RELEASES_URL` | Default: `https://github.com/vicolby/june/releases`. |
 
 The script is plain POSIX [`install.sh`](install.sh); read it before piping to `sh`.
 
 **Release archive.** Each release attaches `june_<version>_<os>_<arch>.tar.gz` (`darwin`/`linux`, `amd64`/`arm64`), `checksums.txt` and `install.sh`. The archive has no top-level directory: it holds `june`, not `ast-grep`.
+
+**Verify a release.** The sha256 check in `install.sh` catches corruption only, because `checksums.txt` comes from the same release as the archive. Releases are also signed by the release workflow: `checksums.txt` carries a keyless cosign signature (`checksums.txt.sigstore.json`), each archive has a build provenance attestation and an SPDX SBOM (`<archive>.sbom.json`). Verify with either tool (replace `X.Y.Z`, platform and arch):
+
+```sh
+version=X.Y.Z
+archive="june_${version}_linux_amd64.tar.gz"
+identity="https://github.com/vicolby/june/.github/workflows/release.yml@refs/tags/v${version}"
+subjects=$(gh attestation verify "$archive" --repo vicolby/june \
+  --cert-identity "$identity" --source-ref "refs/tags/v${version}" \
+  --format json --jq '.[].verificationResult.statement.subject[] | [.name, .digest.sha256] | @tsv') &&
+  printf '%s\n' "$subjects" | awk -v f="$archive" -v d="$(sha256sum "$archive" | cut -d ' ' -f 1)" \
+    '$1 == f && $2 == d { found = 1 } END { exit !found }'
+
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity "$identity" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+```
+
+The gh command requires a signed subject with the requested archive name and digest. For cosign, also compare the archive's sha256 against its exact filename in the verified `checksums.txt`. On macOS, use `shasum -a 256` in place of `sha256sum`.
+
+`JUNE_VERIFY=1 sh install.sh` authenticates the requested version's release workflow and archive using `gh` when installed, otherwise `cosign`. Missing tools, failed verification or a checksum mismatch stop installation; a failed `gh` verification does not fall back to `cosign`. Releases before the first signed one have no signature, so verification fails for them.
 
 ## Usage
 
@@ -162,7 +184,7 @@ An opt-out covers exactly one finding: if a line has several findings of that ru
 
 ### GitHub Actions
 
-The action installs a verified june release and the tested ast-grep, then runs june. Pin it to a release tag (replace `X.Y.Z`); that tag also picks the june version. For any other ref set `version: X.Y.Z`. Fetch full history:
+The action installs june with the [install script](#install) and the tested ast-grep, then runs june. Pin it to a release tag (replace `X.Y.Z`); that tag also picks the june version. For any other ref set `version: X.Y.Z`. Fetch full history:
 
 ```yaml
 on:
