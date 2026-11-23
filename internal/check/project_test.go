@@ -424,3 +424,38 @@ func TestInitRefusesUnavailableRepositoryOrProvider(t *testing.T) {
 		}
 	}
 }
+
+func TestEmptyConfiguredRulesResolveToRootDefaults(t *testing.T) {
+	for _, config := range []string{"rules: ['']\n", "rules: ['', .june/rules]\n"} {
+		t.Run(config, func(t *testing.T) {
+			env := twoPackages(t, config)
+			for _, tc := range []struct {
+				name, dir, path, file, id string
+			}{
+				{"root", env.Dir, "svc", "svc/a.py", "MY002"},
+				{"subdirectory", filepath.Join(env.Dir, "svc"), ".", "a.py", "MY003"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					caller := check.Env{Dir: tc.dir}
+					expect(t, runJune(t, caller, check.Request{Base: "main", Paths: []string{tc.path}}), 1, tc.file+":2:9: "+py012)
+					res, err := check.New(context.Background(), caller, nil, tc.id)
+					if err != nil || res.Exit != 0 {
+						t.Fatalf("New = %d %q, %v", res.Exit, res.Out, err)
+					}
+					for _, rel := range []string{tc.id + ".yml", "rule-tests/" + tc.id + "-test.yml"} {
+						if _, err := os.Stat(filepath.Join(env.Dir, ".june/rules", rel)); err != nil {
+							t.Fatal(err)
+						}
+						if _, err := os.Stat(filepath.Join(env.Dir, rel)); !errors.Is(err, os.ErrNotExist) {
+							t.Fatalf("New wrote outside the rules directory: %s, %v", rel, err)
+						}
+					}
+					v, err := check.Verify(context.Background(), caller, check.VerifyRequest{Rule: tc.id})
+					if err != nil || v.Exit != 0 {
+						t.Fatalf("Verify = %d %q, %v", v.Exit, v.Out, err)
+					}
+				})
+			}
+		})
+	}
+}

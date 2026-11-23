@@ -89,6 +89,9 @@ func (p project) rulesDirs(env Env) []string {
 	}
 	out := make([]string, len(dirs))
 	for i, d := range dirs {
+		if d == "" {
+			d = defaultRules
+		}
 		out[i] = resolve(p.dir, d)
 	}
 	return out
