@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"slices"
@@ -37,20 +38,38 @@ type project struct {
 
 // repoLocation is the repository root above env.Dir and env.Dir's path under it, slash-separated with a trailing slash.
 // Both are "" outside git.
-func repoLocation(ctx context.Context, env Env) (root, prefix string) {
+func repoLocation(ctx context.Context, env Env) (root, prefix string, err error) {
 	out, err := git(ctx, env, "", "rev-parse", "--show-toplevel", "--show-prefix")
+	if ctx.Err() != nil {
+		return "", "", ctx.Err()
+	}
+	said := gitSaid(err)
+	if strings.HasPrefix(said, "fatal: not a git repository") {
+		return "", "", nil
+	}
 	if err != nil {
-		return "", ""
+		if errors.Is(err, exec.ErrNotFound) {
+			return "", "", errors.New("git was not found, so the repository root cannot be found. Fix: install git and put it on PATH")
+		}
+		if root, ok := dubiousRoot(said); ok {
+			return "", "", fmt.Errorf("git refuses to use this repository (%s). Fix: git config --global --add safe.directory %s", said, shellQuote(root))
+		}
+		return "", "", fmt.Errorf("git could not inspect the repository (%s). Fix: run git rev-parse --is-inside-work-tree to see why", gitCause(err))
 	}
 	top, pre, _ := strings.Cut(strings.TrimSuffix(out, "\n"), "\n")
-	return filepath.Clean(top), pre
+	return filepath.Clean(top), pre, nil
 }
 
 // findProject locates the project and reads its config.
 // The returned message is a complete "<cause>. Fix: <instruction>" refusal.
 func findProject(ctx context.Context, env Env) (project, *string) {
 	p := project{dir: env.Dir}
-	if root, prefix := repoLocation(ctx, env); root != "" {
+	root, prefix, err := repoLocation(ctx, env)
+	if err != nil {
+		msg := err.Error()
+		return p, &msg
+	}
+	if root != "" {
 		p.dir, p.prefix = root, prefix
 	}
 	raw, err := os.ReadFile(resolve(p.dir, defaultConfig))

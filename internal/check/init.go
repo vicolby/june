@@ -92,9 +92,12 @@ func Init(ctx context.Context, env Env, req InitRequest) (Result, error) {
 	if provider != "github" && provider != "gitlab" {
 		return refuse(out, fmt.Sprintf("unknown CI provider %q. Fix: use june init --ci github or june init --ci gitlab", provider)), nil
 	}
-	root, prefix := repoLocation(ctx, env)
+	root, prefix, err := repoLocation(ctx, env)
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
+	}
+	if err != nil {
+		return refuse(out, err.Error()), nil
 	}
 	if root == "" {
 		return refuse(out, "june init requires a git repository. Fix: run june init inside a git work tree"), nil
@@ -119,7 +122,11 @@ func Init(ctx context.Context, env Env, req InitRequest) (Result, error) {
 
 	starterCreated := false
 	rulesDir := filepath.Join(root, defaultRules)
-	if entries, err := os.ReadDir(rulesDir); err == nil && len(entries) > 0 {
+	entries, err := rules.RuleFiles(rulesDir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return refuse(out, fmt.Sprintf("%s cannot be read (%v). Fix: make the rules directory readable", show(rulesDir), err)), nil
+	}
+	if len(entries) > 0 {
 		fmt.Fprintf(&b, "kept %s (exists)\n", show(rulesDir))
 	} else {
 		made, fault := rules.Scaffold(rulesDir, starterRuleID)

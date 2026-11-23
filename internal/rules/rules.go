@@ -238,7 +238,7 @@ func load(ctx context.Context, only string, dirs []string) (*RuleSet, []Fault) {
 			faults = append(faults, Fault{Dir: i, Cause: "the rules path is a file, not a directory", Fix: "point --rules at the directory that holds the rule files, not at one rule file"})
 			continue
 		}
-		files, err := ruleFiles(dir)
+		files, err := RuleFiles(dir)
 		if err != nil {
 			faults = append(faults, Fault{Dir: i, Cause: "the rules directory cannot be read", Fix: "make the rules directory readable"})
 			continue
@@ -743,8 +743,8 @@ func (rs *RuleSet) parseOptOut(text string) (rule, reason, problem string) {
 	return rule, strings.TrimSpace(reason), ""
 }
 
-// ruleFiles lists the rule files directly inside dir, sorted.
-func ruleFiles(dir string) ([]string, error) {
+// RuleFiles lists the rule files directly inside dir, sorted.
+func RuleFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -824,7 +824,7 @@ func readRule(dir, name string) (entry, []Fault) {
 // readUtils reads the global utility rules of dir: the rule files directly inside its utils directory.
 // A directory without one has none. june validates utility ids here; ast-grep validates their language and matcher during verification.
 func readUtils(dir string) ([]utilEntry, []Fault) {
-	files, err := ruleFiles(filepath.Join(dir, utilsDir))
+	files, err := RuleFiles(filepath.Join(dir, utilsDir))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}

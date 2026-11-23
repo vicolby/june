@@ -538,3 +538,187 @@ func TestPathsDoNotCountUnselectedSymlinks(t *testing.T) {
 		t.Fatalf("unselected symlink counted: %s", res.Out)
 	}
 }
+
+func TestDiscoveryErrorsDoNotFallBackToTheWorkingDirectory(t *testing.T) {
+	for _, failure := range []string{"dubious ownership", "invalid gitfile", "missing git", "unexplained failure"} {
+		t.Run(failure, func(t *testing.T) {
+			env := tree(t, map[string]string{"svc/app.py": old})
+			vars := map[string]string{}
+			if failure == "invalid gitfile" {
+				write(t, filepath.Join(env.Dir, ".git"), "not a gitfile\n")
+				vars["GIT_CEILING_DIRECTORIES"] = filepath.Dir(env.Dir)
+			} else {
+				git(t, env.Dir, "init", "-q", "-b", "main")
+			}
+			if failure == "dubious ownership" {
+				vars = dubiousOwnershipEnv()
+			}
+			if failure == "missing git" || failure == "unexplained failure" {
+				tools := t.TempDir()
+				if failure == "unexplained failure" {
+					write(t, filepath.Join(tools, "git"), "#!/bin/sh\nexit 128\n")
+					if err := os.Chmod(filepath.Join(tools, "git"), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				t.Setenv("PATH", tools)
+			}
+			root, err := filepath.EvalSymlinks(env.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sub := check.Env{Dir: filepath.Join(env.Dir, "svc"), Vars: vars}
+			for _, command := range []string{"new", "new explicit", "check", "supplied lines", "verify", "verify explicit", "init"} {
+				t.Run(command, func(t *testing.T) {
+					var res check.Result
+					var err error
+					switch command {
+					case "new":
+						res, err = check.New(context.Background(), sub, nil, "MY002")
+					case "new explicit":
+						res, err = check.New(context.Background(), sub, []string{"chosen"}, "MY002")
+					case "check":
+						res, err = check.Change(context.Background(), sub, check.Request{Base: "main"})
+					case "supplied lines":
+						res, err = check.Change(context.Background(), sub, check.Request{Changed: strings.NewReader("app.py:1\n")})
+					case "verify":
+						res, err = check.Verify(context.Background(), sub, check.VerifyRequest{})
+					case "verify explicit":
+						res, err = check.Verify(context.Background(), sub, check.VerifyRequest{Rules: []string{"../.june/rules"}})
+					case "init":
+						res, err = check.Init(context.Background(), sub, check.InitRequest{})
+					}
+					if err != nil || res.Exit != 2 {
+						t.Fatalf("discovery failure = %d %q, %v", res.Exit, res.Out, err)
+					}
+					if failure == "dubious ownership" {
+						assertDubiousOwnershipFix(t, res, root)
+					} else {
+						cause := "git could not inspect the repository"
+						if failure == "missing git" {
+							cause = "git was not found"
+						}
+						if !strings.Contains(string(res.Out), cause) || strings.Contains(string(res.Out), "requires a git repository") {
+							t.Fatalf("misclassified discovery failure: %s", res.Out)
+						}
+					}
+				})
+			}
+			for _, rel := range []string{".june", "chosen", ".github", ".pre-commit-config.yaml"} {
+				if _, err := os.Stat(filepath.Join(sub.Dir, rel)); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("discovery failure created %s: %v", rel, err)
+				}
+			}
+		})
+	}
+}
+
+func TestInitCreatesAStarterAmongNonRuleEntries(t *testing.T) {
+	for _, leftover := range []string{".gitkeep", "rule-tests", "CUSTOM.yml", "CUSTOM.yaml", "nested/CUSTOM.yml"} {
+		t.Run(leftover, func(t *testing.T) {
+			env := check.Env{Dir: t.TempDir()}
+			git(t, env.Dir, "init", "-q", "-b", "main")
+			entry := filepath.Join(env.Dir, ".june/rules", leftover)
+			file := leftover == ".gitkeep" || leftover == "nested/CUSTOM.yml"
+			if file {
+				write(t, entry, "keep\n")
+			} else if err := os.MkdirAll(entry, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			res, err := check.Init(context.Background(), env, check.InitRequest{Version: "1.2.3"})
+			if err != nil || res.Exit != 0 {
+				t.Fatalf("Init = %d %q, %v", res.Exit, res.Out, err)
+			}
+			if file {
+				if data, err := os.ReadFile(entry); err != nil || string(data) != "keep\n" {
+					t.Fatalf("Init changed %s: %q, %v", leftover, data, err)
+				}
+			} else if info, err := os.Stat(entry); err != nil || !info.IsDir() {
+				t.Fatalf("Init changed directory %s: %v", leftover, err)
+			}
+			v, err := check.Verify(context.Background(), env, check.VerifyRequest{Rule: "MY001"})
+			if err != nil || v.Exit != 0 {
+				t.Fatalf("starter verification = %d %q, %v", v.Exit, v.Out, err)
+			}
+		})
+	}
+}
+
+func TestInitPreservesYamlRuleFiles(t *testing.T) {
+	env := check.Env{Dir: t.TempDir()}
+	git(t, env.Dir, "init", "-q", "-b", "main")
+	res, err := check.New(context.Background(), env, nil, "CUSTOM")
+	if err != nil || res.Exit != 0 {
+		t.Fatalf("New = %d %q, %v", res.Exit, res.Out, err)
+	}
+	file := filepath.Join(env.Dir, ".june/rules/CUSTOM.yaml")
+	if err := os.Rename(filepath.Join(env.Dir, ".june/rules/CUSTOM.yml"), file); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err = check.Init(context.Background(), env, check.InitRequest{})
+	if err != nil || res.Exit != 0 {
+		t.Fatalf("Init = %d %q, %v", res.Exit, res.Out, err)
+	}
+	if after, err := os.ReadFile(file); err != nil || string(after) != string(before) {
+		t.Fatalf("Init changed the existing rule: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(env.Dir, ".june/rules/MY001.yml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Init added an unwanted starter: %v", err)
+	}
+	v, err := check.Verify(context.Background(), env, check.VerifyRequest{Rule: "CUSTOM"})
+	if err != nil || v.Exit != 0 {
+		t.Fatalf("preserved rule verification = %d %q, %v", v.Exit, v.Out, err)
+	}
+}
+
+func TestInitRetriesAfterStarterExampleFailure(t *testing.T) {
+	env := check.Env{Dir: t.TempDir()}
+	git(t, env.Dir, "init", "-q", "-b", "main")
+	blocked := filepath.Join(env.Dir, ".june/rules/rule-tests")
+	write(t, blocked, "keep\n")
+	res, err := check.Init(context.Background(), env, check.InitRequest{})
+	if err != nil || res.Exit != 2 {
+		t.Fatalf("blocked Init = %d %q, %v", res.Exit, res.Out, err)
+	}
+	if data, err := os.ReadFile(blocked); err != nil || string(data) != "keep\n" {
+		t.Fatalf("Init changed the blocking file: %q, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(env.Dir, ".june/rules/MY001.yml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed Init left the starter rule: %v", err)
+	}
+	if err := os.Remove(blocked); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(blocked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res, err = check.Init(context.Background(), env, check.InitRequest{})
+	if err != nil || res.Exit != 0 {
+		t.Fatalf("retried Init = %d %q, %v", res.Exit, res.Out, err)
+	}
+	v, err := check.Verify(context.Background(), env, check.VerifyRequest{Rule: "MY001"})
+	if err != nil || v.Exit != 0 {
+		t.Fatalf("retried starter verification = %d %q, %v", v.Exit, v.Out, err)
+	}
+}
+
+func TestInitRefusesAFileAsTheRulesDirectory(t *testing.T) {
+	env := check.Env{Dir: t.TempDir()}
+	git(t, env.Dir, "init", "-q", "-b", "main")
+	file := filepath.Join(env.Dir, ".june/rules")
+	write(t, file, "keep\n")
+	res, err := check.Init(context.Background(), env, check.InitRequest{})
+	if err != nil || res.Exit != 2 {
+		t.Fatalf("Init = %d %q, %v", res.Exit, res.Out, err)
+	}
+	if data, err := os.ReadFile(file); err != nil || string(data) != "keep\n" {
+		t.Fatalf("Init changed the rules file: %q, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(env.Dir, ".june/config.yml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refused Init wrote config: %v", err)
+	}
+}

@@ -81,6 +81,9 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	req.root = repoPrefix(ctx, env, req.Format)
 	req.stepSummary = env.Vars["GITHUB_STEP_SUMMARY"]
 	proj, bad := findProject(ctx, env)
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
 	if bad != nil {
 		return refuse(req, *bad), nil
 	}
@@ -284,6 +287,9 @@ func Verify(ctx context.Context, env Env, v VerifyRequest) (Result, error) {
 		req.Format = diag.Text // verify has no findings, and an empty report would stand for a clean check
 	}
 	proj, bad := findProject(ctx, env)
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
 	if bad != nil {
 		return refuse(req, *bad), nil
 	}

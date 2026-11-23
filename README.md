@@ -34,7 +34,7 @@ Pick ruff for the standard Python lint rules, and Semgrep for a large shared rul
 
 ## Install
 
-june needs `ast-grep` 0.51.1 or newer on `PATH`, reporting a numeric `X.Y.Z` release; prerelease and other suffixes are refused. A check or `june verify` with an older or unreadable version exits 2 with the fix. 0.51.3 is the tested version, and `june --version` and a successful `june verify` print the one in use. See [Rules](#rules) to supply your own rules.
+june needs Git to locate repository defaults, including with `--changed-lines`, `verify` and `new`. It also needs `ast-grep` 0.51.1 or newer on `PATH`, reporting a numeric `X.Y.Z` release; prerelease and other suffixes are refused. A check or `june verify` with an older or unreadable version exits 2 with the fix. 0.51.3 is the tested version, and `june --version` and a successful `june verify` print the one in use. See [Rules](#rules) to supply your own rules.
 
 **Homebrew.** Installs `june` and Homebrew's current `ast-grep`.
 

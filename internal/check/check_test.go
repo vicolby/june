@@ -275,7 +275,7 @@ func TestRefusals(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\n"})
 			if tt.path != "" {
-				t.Setenv("PATH", t.TempDir())
+				t.Setenv("PATH", gitOnlyPath(t))
 			}
 			req := check.Request{}
 			if tt.rules != "" {
@@ -1071,7 +1071,7 @@ func TestLegacyDoesNotMaskRefusals(t *testing.T) {
 // An ast-grep below the floor is refused by verify and by a run, with the same fix, before any scan.
 func TestOldASTGrepIsRefused(t *testing.T) {
 	env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\n"})
-	bin := t.TempDir()
+	bin := gitOnlyPath(t)
 	script := filepath.Join(bin, "ast-grep")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'ast-grep 0.40.0'\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -1312,7 +1312,7 @@ func TestVerifyJSONNamesTheFailingExamplesFileAndRule(t *testing.T) {
 }
 
 func TestMissingAstGrepIsNotAttributedToARulesDirectory(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
+	t.Setenv("PATH", gitOnlyPath(t))
 	env := tree(t, nil)
 	for _, f := range []diag.Format{diag.Text, diag.JSON} {
 		res, err := check.Verify(context.Background(), env, check.VerifyRequest{Format: f})
@@ -1396,4 +1396,17 @@ func TestNewCancelledContextDoesNotWrite(t *testing.T) {
 			}
 		})
 	}
+}
+
+func gitOnlyPath(t *testing.T) string {
+	t.Helper()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.Symlink(git, filepath.Join(dir, "git")); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
