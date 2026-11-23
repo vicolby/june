@@ -841,7 +841,7 @@ func TestNewSuggestedCommandVerifiesTheChosenDirectory(t *testing.T) {
 			if !ok {
 				t.Fatalf("no suggested command: %q", out)
 			}
-			cmd := exec.Command("sh", "-c", "june() { printf '%s\\000' \"$@\"; }; "+command)
+			cmd := exec.CommandContext(context.Background(), "sh", "-c", "june() { printf '%s\\000' \"$@\"; }; "+command)
 			cmd.Dir = env.Dir
 			parsed, err := cmd.Output()
 			if err != nil {
@@ -864,7 +864,7 @@ func TestNewCleansUpAfterWriteFailure(t *testing.T) {
 		return
 	}
 	env := check.Env{Dir: t.TempDir()}
-	cmd := exec.Command("sh", "-c", `ulimit -f 0 && exec "$1" -test.run '^TestNewCleansUpAfterWriteFailure$'`, "sh", os.Args[0])
+	cmd := exec.CommandContext(context.Background(), "sh", "-c", `ulimit -f 0 && exec "$1" -test.run '^TestNewCleansUpAfterWriteFailure$'`, "sh", os.Args[0])
 	cmd.Env = append(os.Environ(), helperDir+"="+env.Dir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("limited child process: %v\n%s", err, out)
