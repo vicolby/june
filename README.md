@@ -45,17 +45,19 @@ The script is plain POSIX [`install.sh`](install.sh); read it before piping to `
 
 ```text
 june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--exclude GLOB]... [--base REF | --changed-lines FILE]
-june verify [--rules DIR]...
+june verify [--rules DIR]... [--rule ID] [--format FORMAT]
+june new [--rules DIR] RULE
 june --version
 june --help | -h
 ```
 
 | Flag | Meaning |
 | --- | --- |
-| `--rules DIR` | Rules directory, repeatable. Default: `./.june/rules`. |
+| `--rules DIR` | Rules directory, repeatable for checks and `verify`; `new` takes one. Default: `./.june/rules`. |
 | `--base REF` | Judge lines changed since the merge base of `REF` and `HEAD`. |
 | `--changed-lines FILE` | Judge lines listed in `FILE`, one `path:7` or `path:7-12` per line; `-` reads stdin. |
-| `--format FORMAT` | `text`, `json`, `sarif`, `github` or `gitlab`. Default: `github` under GitHub Actions, `gitlab` under GitLab CI, else `text`. |
+| `--format FORMAT` | `text`, `json`, `sarif`, `github` or `gitlab`. Default: `github` under GitHub Actions, `gitlab` under GitLab CI, else `text`. `june verify` takes it too. |
+| `--rule ID` | With `june verify`: check the examples of that one rule only. |
 | `--exclude GLOB` | Keep paths out of the check, repeatable. Adds to `exclude` in `.june/config.yml`. |
 | `--legacy` | Also list violations on untouched lines, as information only. |
 | `--ignore-whitespace` | Do not count a line as touched when only its whitespace changed, like `git diff -w`. Strict by default. Not valid with `--changed-lines`. |
@@ -85,9 +87,11 @@ Notes and warnings never change the exit code. Coverage notes appear in the summ
 
 june ships no rules: write your own [ast-grep](https://ast-grep.github.io) rules and keep them in `.june/rules`, or pass `--rules DIR`. A run with neither stops with an error that says to supply rules. Only an error fails the check.
 
-Every rule has `valid` and `invalid` examples in `rule-tests/`. A normal run verifies the rules it loads first; run `june verify --rules DIR` in the CI of a repo that keeps its own rules. The rule ID `june-parse-error` is reserved for the built-in syntax-error scan; user rules with that ID, ignoring case, are refused.
+Every rule has `valid` and `invalid` examples in `rule-tests/`. A normal run verifies the rules it loads first; run `june verify --rules DIR` in the CI of a repo that keeps its own rules. To write one, start from `june new RULE` and see [Writing rules](docs/writing-rules.md).
 
-A rule can scope itself with ast-grep's `files:` and `ignores:`, matched against the path relative to the working directory. If a file cannot be staged at its original path, a run using path-scoped rules exits 2. `june verify` refuses unsupported rule keys (such as `fix`, `note` or `url`), naming the key, and reports bad globs against the offending rule file.
+A rule's optional `note` and `url` print under each of its findings and travel into the JSON, SARIF, GitHub and GitLab output. Rules can share utility rules kept in a `utils/` directory beside the rule files. `june verify --rule ID` checks one rule's examples, and `--format json` makes a failing example machine-readable, with the examples file, the rule and the example's number. The rule ID `june-parse-error` is reserved for the built-in syntax-error scan; user rules with that ID, ignoring case, are refused.
+
+A rule can scope itself with ast-grep's `files:` and `ignores:`, matched against the path relative to the working directory. If a file cannot be staged at its original path, a run using path-scoped rules exits 2. `june verify` refuses unsupported rule keys (such as `fix` or `labels`), naming the key, and reports bad globs against the offending rule file.
 
 ### Excluding paths
 
@@ -211,6 +215,7 @@ Unexpected internal errors include the issue URL and june version, and ask you t
 ## More
 
 - [VISION.md](VISION.md): purpose, scope, and the planned advisory LLM review (not built).
+- [docs/writing-rules.md](docs/writing-rules.md): writing and verifying rules, including with a model in the loop.
 - [ARCHITECTURE.md](ARCHITECTURE.md): module map and invariants.
 - [SECURITY.md](SECURITY.md): how to report a vulnerability.
 

@@ -2,20 +2,19 @@ package rules
 
 import "testing"
 
-// ast-grep test prints an example's source as it is written, so a continuation line may start at column 0.
 const multilineOutput = `Running 2 tests
 
 ----------- Case Details -----------
 [Noisy] Expect ZZZ to report no issue, but some issues found in:
 
   x = [
-1,
-	2]
+  1,
+  	2]
 
 [Missing] Expect rule ZZZ to report issues, but none found in:
 
   y = (
-1,)
+  1,)
 
 PASS AAA  ..
 FAIL ZZZ  NM
@@ -23,11 +22,11 @@ FAIL ZZZ  NM
 Error: test failed. 1 passed; 1 failed;
 `
 
-func TestMisbehavingKeepsUnindentedExampleLines(t *testing.T) {
+func TestMisbehavingPreservesExampleWhitespace(t *testing.T) {
 	got := misbehaving(multilineOutput)
 	want := []misbehavior{
-		{rule: "ZZZ", kind: "valid", code: "x = [ 1, 2]", problem: "is reported by the rule"},
-		{rule: "ZZZ", kind: "invalid", code: "y = ( 1,)", problem: "is not reported by the rule"},
+		{rule: "ZZZ", kind: "valid", code: "x = [\n1,\n\t2]", problem: "is reported by the rule"},
+		{rule: "ZZZ", kind: "invalid", code: "y = (\n1,)", problem: "is not reported by the rule"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("misbehaving = %+v, want %+v", got, want)

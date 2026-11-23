@@ -346,7 +346,11 @@ type sarifLog struct {
 		Tool struct {
 			Driver struct {
 				Name  string
-				Rules []struct{ ID string }
+				Rules []struct {
+					ID      string
+					HelpURI string `json:"helpUri"`
+					Help    *struct{ Text string }
+				}
 			}
 		}
 		Invocations []struct {
@@ -543,5 +547,221 @@ func TestStepSummaryCapsRows(t *testing.T) {
 	got := string(diag.StepSummary(ds, ""))
 	if rows := strings.Count(got, "\n| error |"); rows != 100 || !strings.Contains(got, "30 more not shown") {
 		t.Errorf("rows = %d:\n%s", rows, got[len(got)-80:])
+	}
+}
+
+var withNote = diag.Diagnostic{File: "a.py", Line: 3, Col: 1, Code: "MY001", Sev: diag.Error, Kind: diag.Finding, Msg: "No print.",
+	Note: "Use logging.\nIt keeps output.", URL: "https://example.com/MY001"}
+
+func TestRenderTextPrintsNoteAndURLUnderTheFinding(t *testing.T) {
+	out, _ := diag.Render([]diag.Diagnostic{withNote, {File: "b.py", Line: 1, Col: 1, Code: "MY002", Msg: "plain"}}, "", diag.Text)
+	want := "a.py:3:1: MY001 No print.\n  note: Use logging.\n        It keeps output.\n  url: https://example.com/MY001\nb.py:1:1: MY002 plain\n"
+	if string(out) != want {
+		t.Errorf("out =\n%s\nwant\n%s", out, want)
+	}
+}
+
+func TestRenderTextEscapesControlsInNoteAndURL(t *testing.T) {
+	d := withNote
+	d.Note, d.URL = "bell\a", "https://example.com/\x1b[31m"
+	out, _ := diag.Render([]diag.Diagnostic{d}, "", diag.Text)
+	if strings.ContainsAny(string(out), "\a\x1b") {
+		t.Errorf("out has raw control characters: %q", out)
+	}
+}
+
+// Legacy matches and opt-outs are information, so they stay as short as before.
+func TestRenderLegacyAndOptOutCarryNoNote(t *testing.T) {
+	legacy, optOut := withNote, withNote
+	legacy.Kind, optOut.Kind = diag.Legacy, diag.OptOut
+	out, _ := diag.Render([]diag.Diagnostic{legacy, optOut}, "", diag.Text)
+	if strings.Contains(string(out), "note:") || strings.Contains(string(out), "url:") {
+		t.Errorf("out = %q, want no note or url", out)
+	}
+}
+
+func TestRenderJSONCarriesNoteURLAndAFailuresFileAndRule(t *testing.T) {
+	failure := diag.Diagnostic{Kind: diag.Failure, Sev: diag.Error, File: "rules/rule-tests/X-test.yml", Code: "X", Msg: "bad example"}
+	out, _ := diag.Render([]diag.Diagnostic{withNote, failure}, "", diag.JSON)
+	var doc struct {
+		Diagnostics []map[string]any
+	}
+	if err := json.Unmarshal(out, &doc); err != nil || len(doc.Diagnostics) != 2 {
+		t.Fatalf("out = %s, %v", out, err)
+	}
+	f, finding := doc.Diagnostics[0], doc.Diagnostics[1]
+	if f["file"] != "rules/rule-tests/X-test.yml" || f["rule"] != "X" || f["note"] != nil {
+		t.Errorf("failure = %v", f)
+	}
+	if finding["note"] != withNote.Note || finding["url"] != withNote.URL {
+		t.Errorf("finding = %v", finding)
+	}
+	plain, _ := diag.Render([]diag.Diagnostic{{File: "a.py", Line: 1, Col: 1, Code: "R", Msg: "m"}}, "", diag.JSON)
+	if strings.Contains(string(plain), `"note"`) || strings.Contains(string(plain), `"url"`) {
+		t.Errorf("a finding without a note prints note or url keys: %s", plain)
+	}
+}
+
+func TestRenderSARIFPutsNoteAndURLOnTheRuleEvenWhenAnOptOutNamesItFirst(t *testing.T) {
+	optOut := diag.Diagnostic{File: "a.py", Line: 1, Col: 1, Code: "MY001", Kind: diag.OptOut, Sev: diag.Warning, Msg: "opt-out: reason"}
+	out, _ := diag.Render([]diag.Diagnostic{optOut, withNote}, "", diag.SARIF)
+	var log sarifLog
+	if err := json.Unmarshal(out, &log); err != nil {
+		t.Fatal(err)
+	}
+	rules := log.Runs[0].Tool.Driver.Rules
+	if len(rules) != 1 || rules[0].ID != "MY001" || rules[0].HelpURI != withNote.URL || rules[0].Help == nil || rules[0].Help.Text != withNote.Note {
+		t.Errorf("rules = %+v, want one MY001 with the url and note", rules)
+	}
+}
+
+func TestRenderSARIFUsesRFC3986HelpURIAndKeepsOtherURLsInHelp(t *testing.T) {
+	for _, tt := range []struct {
+		name, url string
+		absolute  bool
+	}{
+		{"absent", "", false},
+		{"https", "https://example.com/rules/MY001#examples", true},
+		{"uppercase scheme", "HTTPS://example.com/MY001", true},
+		{"encoded query", "https://example.com/?rule=MY%20001", true},
+		{"file URI", "file:///docs/MY001", true},
+		{"mailto", "mailto:author@example.com", true},
+		{"urn", "urn:example:MY001", true},
+		{"IPv6", "https://[2001:db8::1]/MY001", true},
+		{"relative path", "docs/rules/MY001", false},
+		{"absolute path", "/docs/rules/MY001", false},
+		{"network path", "//example.com/MY001", false},
+		{"fragment", "#MY001", false},
+		{"text", "not a link", false},
+		{"bad host", "https://[", false},
+		{"bad IPv6", "https://[not-an-address]/MY001", false},
+		{"bad IPvFuture", "https://[vZ.example]/MY001", false},
+		{"unbracketed IPv6", "https://2001:db8::1/MY001", false},
+		{"path space", "https://example.com/my rule", false},
+		{"query space", "https://example.com/?q=my rule", false},
+		{"query brackets", "https://example.com/?q=[rule]", false},
+		{"query unicode", "https://example.com/?q=文", false},
+		{"query escape", "https://example.com/?q=%zz", false},
+		{"opaque space", "urn:my rule", false},
+		{"opaque escape", "urn:rule%zz", false},
+		{"control", "https://example.com/\x1bMY001", false},
+	} {
+		for _, note := range []string{"", "Use logging.\nIt keeps output."} {
+			t.Run(tt.name+"/"+note, func(t *testing.T) {
+				d := withNote
+				d.Note, d.URL = note, tt.url
+				optOut := diag.Diagnostic{File: "a.py", Line: 1, Col: 1, Code: d.Code, Kind: diag.OptOut, Msg: "opt-out: reason"}
+				repeated := d
+				repeated.Line++
+				out, _ := diag.Render([]diag.Diagnostic{repeated, optOut, d}, "", diag.SARIF)
+				var log sarifLog
+				if err := json.Unmarshal(out, &log); err != nil || len(log.Runs) != 1 {
+					t.Fatalf("SARIF = %s, %v", out, err)
+				}
+				rules := log.Runs[0].Tool.Driver.Rules
+				if len(rules) != 1 || rules[0].ID != d.Code {
+					t.Fatalf("rules = %+v, want one %s", rules, d.Code)
+				}
+				wantURI, wantHelp := "", note
+				if tt.absolute {
+					wantURI = tt.url
+				} else if tt.url != "" {
+					if wantHelp != "" {
+						wantHelp += "\n\n"
+					}
+					wantHelp += tt.url
+				}
+				rule := rules[0]
+				if rule.HelpURI != wantURI {
+					t.Errorf("helpUri = %q, want %q", rule.HelpURI, wantURI)
+				}
+				if wantHelp == "" {
+					if rule.Help != nil {
+						t.Errorf("unexpected help: %+v", rule.Help)
+					}
+				} else if rule.Help == nil || rule.Help.Text != wantHelp {
+					t.Errorf("help = %+v, want %q", rule.Help, wantHelp)
+				}
+			})
+		}
+	}
+}
+
+func TestRenderGitHubKeepsNoteInTheAnnotation(t *testing.T) {
+	out, _ := diag.Render([]diag.Diagnostic{withNote}, "", diag.GitHub)
+	want := "::error file=a.py,line=3,col=1,title=MY001::No print.%0Anote: Use logging.%0AIt keeps output.%0Aurl: https://example.com/MY001\n"
+	if !strings.HasPrefix(string(out), want) {
+		t.Errorf("out = %q, want prefix %q", out, want)
+	}
+}
+
+func TestRenderGitLabReportHasContentOnlyWithNoteOrURL(t *testing.T) {
+	_, files := diag.Render([]diag.Diagnostic{withNote, {File: "b.py", Line: 1, Col: 1, Code: "R", Sev: diag.Error, Msg: "m"}}, "", diag.GitLab)
+	var report []struct {
+		CheckName string `json:"check_name"`
+		Content   *struct{ Body string }
+	}
+	if err := json.Unmarshal(files[0].Data, &report); err != nil || len(report) != 2 {
+		t.Fatalf("report = %s, %v", files[0].Data, err)
+	}
+	if report[0].Content == nil || report[0].Content.Body != "Use logging.\nIt keeps output.\n\nhttps://example.com/MY001" || report[1].Content != nil {
+		t.Errorf("report = %+v", report)
+	}
+}
+
+func TestStepSummaryShowsNoteAndURL(t *testing.T) {
+	out := string(diag.StepSummary([]diag.Diagnostic{withNote}, ""))
+	if !strings.Contains(out, "No print.<br>Use logging.<br>It keeps output.<br>https://example.com/MY001 |") {
+		t.Errorf("summary = %q", out)
+	}
+}
+
+func TestGitHubNoteLineSeparatorsPreserveLiteralEscapes(t *testing.T) {
+	for _, tt := range []struct{ name, note, annotation, summary string }{
+		{
+			"literal newline escape",
+			`Use "\n" in the string.`,
+			`Use "\n" in the string.`,
+			`Use "\n" in the string.`,
+		},
+		{
+			"mixed literal and actual newlines",
+			"Use \"\\n\" in the string.\nThis is another line with \\n.",
+			`Use "\n" in the string.%0AThis is another line with \n.`,
+			`Use "\n" in the string.<br>This is another line with \n.`,
+		},
+		{
+			"blank lines and surrounding whitespace",
+			" \nFirst\\n\n\nLast\\n\n ",
+			`First\n%0A%0ALast\n`,
+			`First\n<br><br>Last\n`,
+		},
+		{
+			"format delimiters",
+			"Literal \\n, %0A, <br>, | and `code`.\nNext.",
+			"Literal \\n, %250A, <br>, | and `code`.%0ANext.",
+			"Literal \\n, %0A, &lt;br&gt;, \\| and \\`code\\`.<br>Next.",
+		},
+		{
+			"controls alongside literal escapes",
+			"Literal \\n; tab\tand bell\a.\nEscape\x1b[31m and return\rhere.",
+			`Literal \n; tab\tand bell\a.%0AEscape\x1b[31m and return\rhere.`,
+			`Literal \n; tab\tand bell\a.<br>Escape\x1b[31m and return\rhere.`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := withNote
+			d.Note = tt.note
+			out, _ := diag.Render([]diag.Diagnostic{d}, "", diag.GitHub)
+			annotation, _, _ := strings.Cut(string(out), "\n")
+			wantAnnotation := "::error file=a.py,line=3,col=1,title=MY001::No print.%0Anote: " + tt.annotation + "%0Aurl: https://example.com/MY001"
+			if annotation != wantAnnotation {
+				t.Errorf("annotation = %q, want %q", annotation, wantAnnotation)
+			}
+			wantSummary := "## june\n\n| Severity | Location | Rule | Message |\n| --- | --- | --- | --- |\n| error | `a.py:3:1` | MY001 | No print.<br>" + tt.summary + "<br>https://example.com/MY001 |\n"
+			if summary := string(diag.StepSummary([]diag.Diagnostic{d}, "")); summary != wantSummary {
+				t.Errorf("summary = %q, want %q", summary, wantSummary)
+			}
+		})
 	}
 }

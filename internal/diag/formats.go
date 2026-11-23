@@ -4,6 +4,9 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"net/netip"
+	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -45,12 +48,16 @@ func jsonReport(sorted []Diagnostic, summary string) []byte {
 		Column   int    `json:"column,omitempty"`
 		Rule     string `json:"rule,omitempty"`
 		Message  string `json:"message"`
+		Note     string `json:"note,omitempty"`
+		URL      string `json:"url,omitempty"`
 	}
 	list := []entry{}
 	for _, d := range sorted {
-		e := entry{Kind: d.Kind.String(), Severity: d.Sev.String(), Message: d.Msg}
+		e := entry{Kind: d.Kind.String(), Severity: d.Sev.String(), Message: d.Msg, Note: d.Note, URL: d.URL}
 		if d.Kind != Failure {
 			e.File, e.Line, e.Column, e.Rule = d.File, d.Line, d.Col, d.Code
+		} else {
+			e.File, e.Rule = d.File, d.Code // a failure names its file and rule only when it concerns them, as a failing example does
 		}
 		list = append(list, e)
 	}
@@ -89,7 +96,9 @@ func sarifReport(sorted []Diagnostic, summary string) []byte {
 		PartialFingerprints map[string]string `json:"partialFingerprints"`
 	}
 	type rule struct {
-		ID string `json:"id"`
+		ID      string `json:"id"`
+		HelpURI string `json:"helpUri,omitempty"`
+		Help    *text  `json:"help,omitempty"`
 	}
 	type notification struct {
 		Level   string `json:"level"`
@@ -100,7 +109,7 @@ func sarifReport(sorted []Diagnostic, summary string) []byte {
 	results := []result{}
 	notes := []notification{}
 	rules := []rule{}
-	seen := map[string]bool{}
+	seen := map[string]int{} // rule id to its index in rules
 	successful := true
 	for i, d := range sorted {
 		if d.Kind == Failure {
@@ -120,9 +129,28 @@ func sarifReport(sorted []Diagnostic, summary string) []byte {
 				level = "error"
 			}
 		}
-		if !seen[d.Code] {
-			seen[d.Code] = true
-			rules = append(rules, rule{d.Code})
+		at, known := seen[d.Code]
+		if !known {
+			at = len(rules)
+			seen[d.Code] = at
+			rules = append(rules, rule{ID: d.Code})
+		}
+		// An opt-out can name a rule before its first finding does, so the details are taken from whichever carries them.
+		help := d.Note
+		if d.URL != "" {
+			if absoluteURI(d.URL) {
+				if rules[at].HelpURI == "" {
+					rules[at].HelpURI = d.URL
+				}
+			} else {
+				if help != "" {
+					help += "\n\n"
+				}
+				help += d.URL
+			}
+		}
+		if rules[at].Help == nil && help != "" {
+			rules[at].Help = &text{help}
 		}
 		results = append(results, result{
 			RuleID: d.Code, Level: level, Message: text{d.Msg},
@@ -160,6 +188,23 @@ func sarifReport(sorted []Diagnostic, summary string) []byte {
 	}{"https://json.schemastore.org/sarif-2.1.0.json", "2.1.0", []run{r}})
 }
 
+var uriComponent = regexp.MustCompile(`^(?:[A-Za-z0-9._~!$&'()*+,;=:@/?-]|%[0-9A-Fa-f]{2})*$`)
+
+func absoluteURI(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil || !u.IsAbs() || u.String() != u.Scheme+s[len(u.Scheme):] {
+		return false
+	}
+	if !uriComponent.MatchString(u.Opaque) || !uriComponent.MatchString(u.RawQuery) {
+		return false
+	}
+	if strings.HasPrefix(u.Host, "[") {
+		addr, err := netip.ParseAddr(u.Hostname())
+		return err == nil && addr.Is6() && addr.Zone() == ""
+	}
+	return strings.Count(u.Host, ":") <= 1
+}
+
 // maxSummaryRows keeps the job summary far below GitHub's 1 MiB limit for it.
 const maxSummaryRows = 100
 
@@ -195,7 +240,18 @@ func StepSummary(ds []Diagnostic, summary string) []byte {
 		if d.Kind == OptOut {
 			sev = "opt-out"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", sev, where, rule, mdText(d.Msg))
+		msg := mdText(d.Msg)
+		if d.Note != "" {
+			lines := strings.Split(strings.TrimSpace(d.Note), "\n")
+			for i, line := range lines {
+				lines[i] = mdText(line)
+			}
+			msg += "<br>" + strings.Join(lines, "<br>")
+		}
+		if d.URL != "" {
+			msg += "<br>" + mdText(d.URL)
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", sev, where, rule, msg)
 	}
 	if omitted > 0 {
 		fmt.Fprintf(&b, "\n%d more not shown; see the log.\n", omitted)

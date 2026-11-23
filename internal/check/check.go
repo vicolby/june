@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/vicolby/june/internal/diag"
@@ -90,7 +91,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		return refuse(req, *bad), nil
 	}
 
-	rs, refusal, err := load(ctx, env, req.Rules, req)
+	rs, refusal, err := load(ctx, env, req.Rules, "", req)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -180,7 +181,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		} else {
 			warns++
 		}
-		ds = append(ds, diag.Diagnostic{File: path, Line: m.Line, Col: m.Col, Code: m.Rule, Sev: sev, Kind: diag.Finding, Msg: m.Msg})
+		ds = append(ds, diag.Diagnostic{File: path, Line: m.Line, Col: m.Col, Code: m.Rule, Sev: sev, Kind: diag.Finding, Msg: m.Msg, Note: m.Note, URL: m.URL})
 	}
 	// A touched line inside a syntax error was judged on whatever the parser recovered, so say so once per file.
 	warned := map[string]bool{}
@@ -247,18 +248,34 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	return render(req, exit, ds, sum), nil
 }
 
+// VerifyRequest describes one verification of rule examples.
+type VerifyRequest struct {
+	// Rules lists the rules directories, none meaning ./.june/rules.
+	Rules []string
+	// Rule is the id of the one rule to verify, empty for all of them.
+	Rule string
+	// Format is the output format, as for Request. Verify has no findings, so GitLab renders as text.
+	Format diag.Format
+}
+
 // Rules verifies every example of every rule in dirs, none meaning ./.june/rules.
 // Exit 0 means every example behaved. Any rule fault is Exit 2.
 func Rules(ctx context.Context, env Env, dirs []string) (Result, error) {
+	return Verify(ctx, env, VerifyRequest{Rules: dirs})
+}
+
+// Verify is Rules with a choice of one rule and of output format. A failing example is a failure that names the
+// examples file and the rule, so a machine-readable format tells a rule author what to fix. A rule id that no rule has is a fault.
+func Verify(ctx context.Context, env Env, v VerifyRequest) (Result, error) {
 	if env.Dir == "" {
 		return Result{}, errors.New("check: Env.Dir is empty")
 	}
-	req := Request{}
+	req := Request{Format: v.Format}
 	req.Format = formatFor(env, req)
 	if req.Format == diag.GitLab {
 		req.Format = diag.Text // verify has no findings, and an empty report would stand for a clean check
 	}
-	rs, refusal, err := load(ctx, env, dirs, req)
+	rs, refusal, err := load(ctx, env, v.Rules, v.Rule, req)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -266,6 +283,32 @@ func Rules(ctx context.Context, env Env, dirs []string) (Result, error) {
 		return Result{}, err
 	}
 	return render(req, 0, nil, fmt.Sprintf("june: verified %s, %s with ast-grep %s", count(rs.Rules(), "rule"), count(rs.Examples(), "example"), rs.Version())), nil
+}
+
+// New writes a minimal rule and its examples for id into the one rules directory, which verify accepts as written.
+// An existing rule is never overwritten. Exit 2 reports invalid input or a file-creation failure.
+func New(env Env, dirs []string, id string) (Result, error) {
+	if env.Dir == "" {
+		return Result{}, errors.New("check: Env.Dir is empty")
+	}
+	req := Request{Format: diag.Text}
+	if len(dirs) > 1 {
+		return refuse(req, "june new writes into one rules directory, and "+strconv.Itoa(len(dirs))+" were given. Fix: pass --rules once"), nil
+	}
+	dir := defaultRules
+	if len(dirs) == 1 && dirs[0] != "" {
+		dir = dirs[0]
+	}
+	made, fault := rules.Scaffold(resolve(env.Dir, dir), id)
+	if fault != nil {
+		return refuseWith(req, faultDiagnostics(env.Dir, []string{dir}, []rules.Fault{*fault})...), nil
+	}
+	var b strings.Builder
+	for _, m := range made {
+		fmt.Fprintf(&b, "created %s\n", label(env.Dir, dir, m))
+	}
+	fmt.Fprintf(&b, "next: edit the rule and its examples, then run june verify --rules %s --rule %s\n", shellQuote(dir), id)
+	return Result{Out: []byte(b.String())}, nil
 }
 
 // ASTGrep describes the ast-grep on PATH for june --version: its version, and a note when june would refuse it.
@@ -284,9 +327,10 @@ func ASTGrep(ctx context.Context) string {
 	return "ast-grep " + v
 }
 
-// load verifies the rules in dirs. A rule fault comes back as a refusal.
+// load verifies the rules in dirs, or the examples of only the one rule with that id when it is not empty.
+// A rule fault comes back as a refusal.
 // Cancellation comes back as an error, and wins over a fault that cancellation caused.
-func load(ctx context.Context, env Env, dirs []string, req Request) (*rules.RuleSet, *Result, error) {
+func load(ctx context.Context, env Env, dirs []string, only string, req Request) (*rules.RuleSet, *Result, error) {
 	if len(dirs) == 0 {
 		dirs = []string{defaultRules}
 		if _, err := os.Stat(resolve(env.Dir, defaultRules)); errors.Is(err, fs.ErrNotExist) {
@@ -299,12 +343,18 @@ func load(ctx context.Context, env Env, dirs []string, req Request) (*rules.Rule
 	for i, d := range dirs {
 		abs[i] = resolve(env.Dir, d)
 	}
-	rs, faults := rules.Load(ctx, abs...)
+	var rs *rules.RuleSet
+	var faults []rules.Fault
+	if only != "" {
+		rs, faults = rules.LoadRule(ctx, only, abs...)
+	} else {
+		rs, faults = rules.Load(ctx, abs...)
+	}
 	if err := ctx.Err(); err != nil && len(faults) > 0 {
 		return nil, nil, err
 	}
 	if len(faults) > 0 {
-		res := refuse(req, faultMessages(env.Dir, dirs, faults)...)
+		res := refuseWith(req, faultDiagnostics(env.Dir, dirs, faults)...)
 		return nil, &res, nil
 	}
 	return rs, nil, nil
@@ -434,12 +484,17 @@ func mergeRequestBase(ctx context.Context, env Env) string {
 // refuse explains why there is no verdict. A GitLab refusal is text only, since a report would read as a clean run;
 // GitHub annotates it as an error.
 func refuse(req Request, msgs ...string) Result {
-	if req.Format == diag.GitLab {
-		req.Format = diag.Text
-	}
 	ds := make([]diag.Diagnostic, len(msgs))
 	for i, m := range msgs {
 		ds[i] = diag.Diagnostic{Kind: diag.Failure, Sev: diag.Error, Msg: m}
+	}
+	return refuseWith(req, ds...)
+}
+
+// refuseWith is refuse for failures that already carry the file and rule they concern.
+func refuseWith(req Request, ds ...diag.Diagnostic) Result {
+	if req.Format == diag.GitLab {
+		req.Format = diag.Text
 	}
 	return render(req, 2, ds, "")
 }
@@ -469,34 +524,39 @@ func resolve(dir, path string) string {
 	return filepath.Join(dir, path)
 }
 
-// faultMessages words rule faults as "<cause>. Fix: <instruction>" with a relative rules-directory label.
+// faultDiagnostics words rule faults as failures reading "<cause>. Fix: <instruction>" with a rules-directory label.
+// A fault that concerns no directory, such as a missing ast-grep, has no label.
+// A failure carries the labelled file and the rule id for machine-readable formats.
 // display holds the directories as the caller spelled them, indexed like Fault.Dir.
-// base is the working directory an absolute spelling is made relative to.
-func faultMessages(base string, display []string, faults []rules.Fault) []string {
-	msgs := make([]string, len(faults))
+// base is the working directory used to shorten absolute paths within it.
+func faultDiagnostics(base string, display []string, faults []rules.Fault) []diag.Diagnostic {
+	ds := make([]diag.Diagnostic, len(faults))
 	for i, f := range faults {
 		cause := f.Cause
 		if f.Also != nil {
 			cause += " (also defined in " + label(base, display[f.Also.Dir], f.Also.Path) + ")"
 		}
-		msgs[i] = label(base, display[f.Dir], f.Path) + ": " + cause + ". Fix: " + f.Fix
+		d := diag.Diagnostic{Kind: diag.Failure, Sev: diag.Error, Code: f.Rule}
+		if f.Dir == rules.NoDir {
+			d.Msg = cause + ". Fix: " + f.Fix
+		} else {
+			d.File = label(base, display[f.Dir], f.Path)
+			d.Msg = d.File + ": " + cause + ". Fix: " + f.Fix
+		}
+		ds[i] = d
 	}
-	return msgs
+	return ds
 }
 
-// label names a file under a rules directory without leaking an absolute path.
-// An absolute directory is made relative to base, and falls back to its base name when that fails.
+// label names a file under a rules directory the way the caller spelled it.
+// An absolute directory below base is made relative to it. One outside base stays absolute, since a path
+// that climbs out of base with ".." only names a place relative to a directory the reader may not be in.
 func label(base, display, path string) string {
 	where := filepath.Clean(display)
 	if filepath.IsAbs(where) {
-		rel, err := filepath.Rel(base, where)
-		if err != nil || filepath.IsAbs(rel) {
-			rel = filepath.Base(where)
-			if filepath.IsAbs(rel) {
-				rel = "."
-			}
+		if rel, err := filepath.Rel(base, where); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			where = rel
 		}
-		where = rel
 	}
 	if path != "" {
 		where = filepath.Join(where, path)

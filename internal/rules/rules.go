@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,7 +34,10 @@ const (
 
 	// isolatedConfig is the only ast-grep configuration june ever uses, so a run depends on
 	// the given rules and the touched files and never on an sgconfig.yml found in the working directory.
-	isolatedConfig = "ruleDirs: [rules]\ntestConfigs:\n  - testDir: " + testsDir + "\n"
+	isolatedConfig = "ruleDirs: [rules]\nutilDirs: [utils]\ntestConfigs:\n  - testDir: " + testsDir + "\n"
+
+	// utilsDir is the directory of a rules directory that holds the global utility rules its rules share.
+	utilsDir = "utils"
 )
 
 // Place is a file inside one of the rules directories given to Load.
@@ -43,34 +47,54 @@ type Place struct {
 	Path string
 }
 
+// NoDir is the Fault.Dir of a fault that concerns no rules directory, such as a missing ast-grep.
+const NoDir = -1
+
 // Fault is one reason a rule directory cannot be trusted.
-// Dir is the index of the directory it concerns in the list given to Load.
+// Dir is the index of the directory it concerns in the list given to Load, or NoDir.
 // Path is relative to that directory, empty when the fault concerns the directory itself.
+// Rule is the id of the rule it concerns, when it concerns one.
 // Also is the other file involved when two files conflict, such as a rule id defined twice.
 type Fault struct {
 	Dir   int
 	Path  string
+	Rule  string
 	Cause string
 	Fix   string
 	Also  *Place
 }
 
+// general is a fault that concerns no rules directory.
+func general(cause, fix string) Fault { return Fault{Dir: NoDir, Cause: cause, Fix: fix} }
+
 // entry is one rule file waiting for its examples to be verified.
 type entry struct {
-	place    Place
-	id       string
-	doc      string
-	examples int
+	place Place
+	id    string
+	doc   string
+	ex    exampleDoc
+	meta  ruleMeta
 }
+
+// ruleMeta is what a finding of a rule says beyond its message.
+type ruleMeta struct{ note, url string }
 
 // ruleSource is one verified rule, as the text ast-grep reads from a file named after its id.
 type ruleSource struct{ id, text string }
+
+// utilEntry is one utility rule file, shared by the rules of every directory.
+type utilEntry struct {
+	place Place
+	ruleSource
+}
 
 // RuleSet is a set of rules whose examples all behaved.
 type RuleSet struct {
 	bin      string
 	version  string
 	docs     []ruleSource
+	utils    []ruleSource
+	meta     map[string]ruleMeta
 	ids      map[string]bool
 	rules    int
 	examples int
@@ -94,6 +118,8 @@ type Match struct {
 	Rule      string
 	Severity  string
 	Msg       string
+	// Note and URL are the rule's note and url fields, empty when it has none.
+	Note, URL string
 }
 
 // Scanned is what a scan of files found.
@@ -136,9 +162,11 @@ type OptOut struct {
 
 // ruleDoc is the part of an ast-grep rule that june reads.
 type ruleDoc struct {
-	ID       string `yaml:"id"`
-	Message  string `yaml:"message"`
-	Language string `yaml:"language"`
+	ID       string    `yaml:"id"`
+	Message  string    `yaml:"message"`
+	Language string    `yaml:"language"`
+	Note     yaml.Node `yaml:"note"`
+	URL      yaml.Node `yaml:"url"`
 }
 
 type exampleDoc struct {
@@ -147,32 +175,67 @@ type exampleDoc struct {
 	Invalid []string `yaml:"invalid"`
 }
 
+// ordinal names which example of the given kind after the previous failure has the code ast-grep printed, or zero when it cannot tell.
+// Numbers count from one within the valid or invalid list of the examples file.
+func (ex exampleDoc) ordinal(kind, code string, after int) int {
+	list := ex.Valid
+	if kind == "invalid" {
+		list = ex.Invalid
+	}
+	for i, c := range list {
+		if i >= after && strings.TrimSuffix(strings.ReplaceAll(c, "\r\n", "\n"), "\n") == code {
+			return i + 1
+		}
+	}
+	return 0
+}
+
 // Load verifies every rule in every dir against its sidecar examples and merges them into one set.
 // The same rule id in two files is a fault, wherever the files live. Ids that differ only by case are the same id.
 // Faults non-empty means a nil set, never a partial set.
 func Load(ctx context.Context, dirs ...string) (*RuleSet, []Fault) {
+	return load(ctx, "", dirs)
+}
+
+// LoadRule is Load for the examples of one rule: every rule file is still read, so a fault anywhere still refuses,
+// but only the rule with the given id is verified, and the set holds only that rule.
+func LoadRule(ctx context.Context, id string, dirs ...string) (*RuleSet, []Fault) {
+	return load(ctx, id, dirs)
+}
+
+func load(ctx context.Context, only string, dirs []string) (*RuleSet, []Fault) {
 	bin, err := exec.LookPath(astGrepName)
 	if err != nil {
-		return nil, []Fault{{Cause: "ast-grep was not found", Fix: astGrepFindFix}}
+		return nil, []Fault{general("ast-grep was not found", astGrepFindFix)}
 	}
 	version, fault := versionFault(ctx, bin)
 	if fault != nil {
 		if err := ctx.Err(); err != nil {
-			fault = &Fault{Cause: "the ast-grep version check was cancelled", Fix: "run june again"}
+			f := general("the ast-grep version check was cancelled", "run june again")
+			fault = &f
 		}
 		return nil, []Fault{*fault}
 	}
 	if len(dirs) == 0 {
-		return nil, []Fault{{Cause: "no rules directory was given", Fix: "point --rules at a rules directory"}}
+		return nil, []Fault{general("no rules directory was given", "point --rules at a rules directory")}
 	}
 
 	var faults []Fault
 	var entries []entry
+	var utils []utilEntry
 	places := map[string]Place{}
+	utilPlaces := map[string]Place{}
 	for i, dir := range dirs {
 		info, err := os.Stat(dir)
-		if err != nil || !info.IsDir() {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
 			faults = append(faults, Fault{Dir: i, Cause: "the rules directory does not exist", Fix: "create it or point --rules at an existing rules directory"})
+			continue
+		case err != nil:
+			faults = append(faults, Fault{Dir: i, Cause: "the rules directory cannot be read", Fix: "make the rules directory readable"})
+			continue
+		case !info.IsDir():
+			faults = append(faults, Fault{Dir: i, Cause: "the rules path is a file, not a directory", Fix: "point --rules at the directory that holds the rule files, not at one rule file"})
 			continue
 		}
 		files, err := ruleFiles(dir)
@@ -185,46 +248,85 @@ func Load(ctx context.Context, dirs ...string) (*RuleSet, []Fault) {
 			continue
 		}
 		for _, name := range files {
-			doc, id, n, fs := readRule(dir, name)
-			for _, f := range fs {
+			e, rfs := readRule(dir, name)
+			for _, f := range rfs {
 				f.Dir = i
 				faults = append(faults, f)
 			}
-			if id == "" {
+			if e.id == "" {
 				continue
 			}
-			if first, dup := knownID(places, id); dup {
-				faults = append(faults, Fault{Dir: i, Path: name, Cause: fmt.Sprintf("the rule id %s is duplicated", id), Fix: "give every rule a unique id", Also: &first})
+			if first, dup := knownID(places, e.id); dup {
+				faults = append(faults, Fault{Dir: i, Path: name, Rule: e.id, Cause: fmt.Sprintf("the rule id %s is duplicated", e.id), Fix: "give every rule a unique id", Also: &first})
 				continue
 			}
 			here := Place{Dir: i, Path: name}
-			if strings.EqualFold(id, parseErrorID) {
-				faults = append(faults, Fault{Dir: i, Path: name, Cause: fmt.Sprintf("the rule id %s is reserved", id), Fix: "rename the rule"})
+			if strings.EqualFold(e.id, parseErrorID) {
+				faults = append(faults, Fault{Dir: i, Path: name, Rule: e.id, Cause: fmt.Sprintf("the rule id %s is reserved", e.id), Fix: "rename the rule"})
 				continue
 			}
-			places[id] = here
-			entries = append(entries, entry{place: here, id: id, doc: doc, examples: n})
+			places[e.id] = here
+			e.place = here
+			entries = append(entries, e)
+		}
+		us, ufs := readUtils(dir)
+		for _, f := range ufs {
+			f.Dir = i
+			faults = append(faults, f)
+		}
+		for _, u := range us {
+			u.place.Dir = i
+			if first, dup := knownID(utilPlaces, u.id); dup {
+				faults = append(faults, Fault{Dir: i, Path: u.place.Path, Cause: fmt.Sprintf("the utility rule id %s is duplicated", u.id), Fix: "give every utility rule a unique id", Also: &first})
+				continue
+			}
+			utilPlaces[u.id] = u.place
+			utils = append(utils, u)
 		}
 	}
 	if len(faults) > 0 {
 		return nil, faults
 	}
-	if faults := verify(ctx, bin, dirs, entries); len(faults) > 0 {
+	all := entries
+	if only != "" {
+		var kept []entry
+		for _, e := range entries {
+			if e.id == only {
+				kept = append(kept, e)
+			}
+		}
+		if len(kept) == 0 {
+			known := make([]string, len(entries))
+			for i, e := range entries {
+				known[i] = e.id
+			}
+			sort.Strings(known)
+			return nil, []Fault{general(fmt.Sprintf("no rule has the id %s (rules found: %s)", only, strings.Join(known, ", ")), "pass the id of a rule in the rules directories to --rule")}
+		}
+		entries = kept
+	}
+	if faults := verify(ctx, bin, dirs, all, utils, only); len(faults) > 0 {
 		return nil, faults
 	}
 	docs := make([]ruleSource, len(entries))
 	ids := make(map[string]bool, len(entries))
+	meta := make(map[string]ruleMeta, len(entries))
 	total := 0
 	scoped := false
 	for i, e := range entries {
 		docs[i] = ruleSource{id: e.id, text: e.doc}
 		ids[e.id] = true
-		total += e.examples
+		meta[e.id] = e.meta
+		total += len(e.ex.Valid) + len(e.ex.Invalid)
 		for _, k := range ruleKeys([]byte(e.doc)) {
 			scoped = scoped || k == "files" || k == "ignores"
 		}
 	}
-	return &RuleSet{bin: bin, version: version, docs: docs, ids: ids, rules: len(entries), examples: total, scoped: scoped}, nil
+	us := make([]ruleSource, len(utils))
+	for i, u := range utils {
+		us[i] = u.ruleSource
+	}
+	return &RuleSet{bin: bin, version: version, docs: docs, utils: us, meta: meta, ids: ids, rules: len(entries), examples: total, scoped: scoped}, nil
 }
 
 // knownID reports the file that already owns id. Comparison is case-insensitive because staging uses the id as a filename.
@@ -363,9 +465,10 @@ func (rs *RuleSet) Scan(ctx context.Context, root string, files []string) (Scann
 			out.ParseErrors = append(out.ParseErrors, ParseError{File: py[i], From: m.Range.Start.Line + 1, To: to})
 			continue
 		}
+		meta := rs.meta[m.RuleID]
 		all = append(all, found{i, Match{
 			File: py[i], Line: m.Range.Start.Line + 1, Col: m.Range.Start.Column + 1,
-			Rule: m.RuleID, Severity: m.Severity, Msg: m.Message,
+			Rule: m.RuleID, Severity: m.Severity, Msg: m.Message, Note: meta.note, URL: meta.url,
 		}})
 	}
 	// ast-grep scans files on a thread pool, so its stream has no stable order.
@@ -416,15 +519,17 @@ func scratchDir() (string, error) {
 
 // writeConfig lays out the isolated ast-grep configuration in dir.
 func writeConfig(dir string) error {
-	if err := os.MkdirAll(filepath.Join(dir, "rules"), 0o755); err != nil {
-		return err
+	for _, sub := range []string{"rules", utilsDir} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			return err
+		}
 	}
 	return os.WriteFile(filepath.Join(dir, "sgconfig.yml"), []byte(isolatedConfig), 0o644)
 }
 
 // writeTreeConfig puts the configuration of the scan at the root of the staged tree, with the rules beside the tree.
 func writeTreeConfig(dir string) error {
-	return writeFile(filepath.Join(dir, treeDir, "sgconfig.yml"), []byte("ruleDirs: [../rules]\n"))
+	return writeFile(filepath.Join(dir, treeDir, "sgconfig.yml"), []byte("ruleDirs: [../rules]\nutilDirs: [../utils]\n"))
 }
 
 // writeRules lays out the configuration in dir and every rule once, in the file named after its id.
@@ -437,6 +542,11 @@ func (rs *RuleSet) writeRules(dir string) error {
 	}
 	for _, r := range rs.docs {
 		if err := os.WriteFile(filepath.Join(dir, "rules", r.id+".yml"), []byte(r.text), 0o644); err != nil {
+			return err
+		}
+	}
+	for _, u := range rs.utils {
+		if err := os.WriteFile(filepath.Join(dir, utilsDir, u.id+".yml"), []byte(u.text), 0o644); err != nil {
 			return err
 		}
 	}
@@ -468,6 +578,9 @@ func writeNew(path string, data []byte) error {
 	_, werr := f.Write(data)
 	if cerr := f.Close(); werr == nil {
 		werr = cerr
+	}
+	if werr != nil {
+		_ = os.Remove(path)
 	}
 	return werr
 }
@@ -647,53 +760,103 @@ func ruleFiles(dir string) ([]string, error) {
 	return names, nil
 }
 
-// readRule returns the rule text, its id, its example count and the faults that make it unusable.
-func readRule(dir, name string) (string, string, int, []Fault) {
+// readRule reads one rule file and its examples. The entry has an empty id when the faults make the rule unusable.
+func readRule(dir, name string) (entry, []Fault) {
 	raw, err := os.ReadFile(filepath.Join(dir, name))
 	if err != nil {
-		return "", "", 0, []Fault{{Path: name, Cause: "the rule cannot be read", Fix: "make the rule file readable"}}
+		return entry{}, []Fault{{Path: name, Cause: "the rule cannot be read", Fix: "make the rule file readable"}}
 	}
 	var doc ruleDoc
 	if err := decodeDocument(raw, &doc); err != nil {
-		return "", "", 0, []Fault{{Path: name, Cause: "the rule must be one valid YAML document", Fix: "keep exactly one valid YAML document in the rule file"}}
+		return entry{}, []Fault{{Path: name, Cause: "the rule must be one valid YAML document", Fix: "keep exactly one valid YAML document in the rule file"}}
 	}
 	if doc.ID == "" {
-		return "", "", 0, []Fault{{Path: name, Cause: "the rule has no id", Fix: "add an id such as MY001"}}
+		return entry{}, []Fault{{Path: name, Cause: "the rule has no id", Fix: "add an id such as MY001"}}
 	}
 	if doc.ID == "." || doc.ID == ".." || strings.ContainsAny(doc.ID, "/\\") {
-		return "", "", 0, []Fault{{Path: name, Cause: "the rule id is not a filename", Fix: "use a rule id without path separators"}}
+		return entry{}, []Fault{{Path: name, Cause: "the rule id is not a filename", Fix: "use a rule id without path separators"}}
 	}
 	if !strings.EqualFold(doc.Language, "python") {
-		return "", "", 0, []Fault{{Path: name, Cause: "the rule language is not Python", Fix: "set language to python"}}
+		return entry{}, []Fault{{Path: name, Rule: doc.ID, Cause: "the rule language is not Python", Fix: "set language to python"}}
 	}
 	if unused := unusedKeys(raw); len(unused) > 0 {
-		return "", "", 0, []Fault{{Path: name, Cause: fmt.Sprintf("rule %s has %s, which june does not use", doc.ID, quoteKeys(unused)), Fix: "remove it; june reads only " + strings.Join(usedKeys, ", ") + ", so put the correction in the message"}}
+		return entry{}, []Fault{{Path: name, Rule: doc.ID, Cause: fmt.Sprintf("rule %s has %s, which june does not use", doc.ID, quoteKeys(unused)), Fix: "remove it; june reads only " + strings.Join(usedKeys, ", ") + ", so put the correction in the message"}}
 	}
 	if strings.TrimSpace(doc.Message) == "" {
-		return "", "", 0, []Fault{{Path: name, Cause: fmt.Sprintf("rule %s has an empty message", doc.ID), Fix: "write the corrective instruction in the message"}}
+		return entry{}, []Fault{{Path: name, Rule: doc.ID, Cause: fmt.Sprintf("rule %s has an empty message", doc.ID), Fix: "write the corrective instruction in the message"}}
+	}
+	var meta ruleMeta
+	for _, field := range []struct {
+		name string
+		node yaml.Node
+		dst  *string
+	}{{"note", doc.Note, &meta.note}, {"url", doc.URL, &meta.url}} {
+		if field.node.Kind == yaml.AliasNode {
+			field.node = *field.node.Alias
+		}
+		if field.node.Kind == 0 || field.node.Tag == "!!null" {
+			continue
+		}
+		if field.node.Tag != "!!str" {
+			return entry{}, []Fault{{Path: name, Rule: doc.ID, Cause: fmt.Sprintf("rule %s has a %s that is not a string", doc.ID, field.name), Fix: "write the " + field.name + " as a string or remove it"}}
+		}
+		*field.dst = strings.TrimSpace(field.node.Value)
 	}
 
 	sidecar := filepath.Join(testsDir, doc.ID+"-test.yml")
 	rawEx, err := os.ReadFile(filepath.Join(dir, sidecar))
 	if err != nil {
-		return "", "", 0, []Fault{{Path: name, Cause: fmt.Sprintf("rule %s has no examples", doc.ID), Fix: fmt.Sprintf("add %s with valid and invalid examples", sidecar)}}
+		return entry{}, []Fault{{Path: name, Rule: doc.ID, Cause: fmt.Sprintf("rule %s has no examples", doc.ID), Fix: fmt.Sprintf("add %s with valid and invalid examples", sidecar)}}
 	}
 	var ex exampleDoc
 	if err := decodeDocument(rawEx, &ex); err != nil {
-		return "", "", 0, []Fault{{Path: sidecar, Cause: "the examples must be one valid YAML document", Fix: "keep exactly one valid YAML document in the examples file"}}
+		return entry{}, []Fault{{Path: sidecar, Rule: doc.ID, Cause: "the examples must be one valid YAML document", Fix: "keep exactly one valid YAML document in the examples file"}}
 	}
 	if ex.ID != doc.ID {
-		return "", "", 0, []Fault{{Path: sidecar, Cause: "the examples id does not match the rule id", Fix: "set the examples id to " + doc.ID}}
+		return entry{}, []Fault{{Path: sidecar, Rule: doc.ID, Cause: "the examples id does not match the rule id", Fix: "set the examples id to " + doc.ID}}
 	}
 	if len(ex.Valid) == 0 || len(ex.Invalid) == 0 {
-		return "", "", 0, []Fault{{Path: sidecar, Cause: fmt.Sprintf("rule %s needs both valid and invalid examples", doc.ID), Fix: "add at least one of each"}}
+		return entry{}, []Fault{{Path: sidecar, Rule: doc.ID, Cause: fmt.Sprintf("rule %s needs both valid and invalid examples", doc.ID), Fix: "add at least one of each"}}
 	}
-	return strings.TrimRight(string(raw), "\n"), doc.ID, len(ex.Valid) + len(ex.Invalid), nil
+	return entry{id: doc.ID, doc: strings.TrimRight(string(raw), "\n"), ex: ex, meta: meta}, nil
 }
 
-// usedKeys are the rule keys june reads or lets ast-grep apply to the match, the message or the path.
+// readUtils reads the global utility rules of dir: the rule files directly inside its utils directory.
+// A directory without one has none. june validates utility ids here; ast-grep validates their language and matcher during verification.
+func readUtils(dir string) ([]utilEntry, []Fault) {
+	files, err := ruleFiles(filepath.Join(dir, utilsDir))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, []Fault{{Path: utilsDir, Cause: "the utils directory cannot be read", Fix: "make the utils directory readable"}}
+	}
+	var out []utilEntry
+	var faults []Fault
+	for _, name := range files {
+		path := filepath.Join(utilsDir, name)
+		raw, err := os.ReadFile(filepath.Join(dir, path))
+		if err != nil {
+			faults = append(faults, Fault{Path: path, Cause: "the utility rule cannot be read", Fix: "make the utility rule file readable"})
+			continue
+		}
+		var doc ruleDoc
+		if err := decodeDocument(raw, &doc); err != nil {
+			faults = append(faults, Fault{Path: path, Cause: "the utility rule must be one valid YAML document", Fix: "keep exactly one valid YAML document in the utility rule file"})
+			continue
+		}
+		if doc.ID == "" || doc.ID == "." || doc.ID == ".." || strings.ContainsAny(doc.ID, "/\\") {
+			faults = append(faults, Fault{Path: path, Cause: "the utility rule has no id, or its id is not a filename", Fix: "give it an id such as is-print, without path separators"})
+			continue
+		}
+		out = append(out, utilEntry{place: Place{Path: path}, ruleSource: ruleSource{id: doc.ID, text: strings.TrimRight(string(raw), "\n")}})
+	}
+	return out, faults
+}
+
+// usedKeys are the rule keys june reads, or lets ast-grep apply to the match, the message or the path. note and url travel with each finding.
 // Any other key would be dropped silently, so it is refused.
-var usedKeys = []string{"id", "language", "message", "severity", "rule", "constraints", "utils", "transform", "rewriters", "files", "ignores"}
+var usedKeys = []string{"id", "language", "message", "note", "url", "severity", "rule", "constraints", "utils", "transform", "rewriters", "files", "ignores"}
 
 // ruleKeys lists the top-level keys of a rule document.
 func ruleKeys(raw []byte) []string {
@@ -747,21 +910,21 @@ var (
 )
 
 // verify runs the examples of every rule through ast-grep in a scratch directory.
-func verify(ctx context.Context, bin string, dirs []string, entries []entry) []Fault {
+func verify(ctx context.Context, bin string, dirs []string, entries []entry, utils []utilEntry, only string) []Fault {
 	scratch, err := os.MkdirTemp("", "june-rules-")
 	if err != nil {
-		return []Fault{{Cause: "the examples cannot be run", Fix: "make the temporary directory writable"}}
+		return []Fault{general("the examples cannot be run", "make the temporary directory writable")}
 	}
 	defer func() { _ = os.RemoveAll(scratch) }() // Best-effort scratch cleanup cannot change verification.
 	if real, err := filepath.EvalSymlinks(scratch); err == nil {
 		scratch = real
 	}
 
-	where := make(map[string]Place, len(entries))
+	where := make(map[string]entry, len(entries))
 	for _, e := range entries {
-		where[e.id] = e.place
+		where[e.id] = e
 	}
-	if faults := stage(scratch, dirs, entries); len(faults) > 0 {
+	if faults := stage(scratch, dirs, entries, utils, only); len(faults) > 0 {
 		return faults
 	}
 
@@ -774,17 +937,26 @@ func verify(ctx context.Context, bin string, dirs []string, entries []entry) []F
 		return nil
 	}
 	if ctx.Err() != nil {
-		return []Fault{{Cause: "the examples were cancelled", Fix: "run june again"}}
+		return []Fault{general("the examples were cancelled", "run june again")}
 	}
 
 	text := strings.ReplaceAll(stdout.String()+"\n"+stderr.String(), scratch+string(filepath.Separator), "")
 	var faults []Fault
+	ordinals := make(map[[2]string]int)
 	for _, c := range misbehaving(text) {
 		path := filepath.Join(testsDir, c.rule+"-test.yml")
+		key := [2]string{c.rule, c.kind}
+		n := where[c.rule].ex.ordinal(c.kind, c.code, ordinals[key])
+		ordinals[key] = n
+		ordinal := ""
+		if n > 0 {
+			ordinal = fmt.Sprintf("#%d ", n)
+		}
 		faults = append(faults, Fault{
-			Dir:   where[c.rule].Dir,
+			Dir:   where[c.rule].place.Dir,
 			Path:  path,
-			Cause: fmt.Sprintf("rule %s %s example %q %s", c.rule, c.kind, c.code, c.problem),
+			Rule:  c.rule,
+			Cause: fmt.Sprintf("rule %s %s example %s%q %s", c.rule, c.kind, ordinal, oneLine(c.code), c.problem),
 			Fix:   fmt.Sprintf(exampleFixHint, path),
 		})
 	}
@@ -794,8 +966,9 @@ func verify(ctx context.Context, bin string, dirs []string, entries []entry) []F
 	for _, m := range failLine.FindAllStringSubmatch(text, -1) {
 		path := filepath.Join(testsDir, m[1]+"-test.yml")
 		faults = append(faults, Fault{
-			Dir:   where[m[1]].Dir,
+			Dir:   where[m[1]].place.Dir,
 			Path:  path,
+			Rule:  m[1],
 			Cause: fmt.Sprintf("an example of rule %s misbehaves (%s)", m[1], caseDetails(text)),
 			Fix:   fmt.Sprintf(exampleFixHint, path),
 		})
@@ -810,10 +983,10 @@ func verify(ctx context.Context, bin string, dirs []string, entries []entry) []F
 			filtered.Dir = scratch
 			out, _ := filtered.CombinedOutput()
 			if ctx.Err() != nil {
-				return []Fault{{Cause: "the examples were cancelled", Fix: "run june again"}}
+				return []Fault{general("the examples were cancelled", "run june again")}
 			}
 			if text := string(out); strings.Contains(text, "Cannot parse glob pattern") {
-				faults = append(faults, Fault{Dir: e.place.Dir, Path: e.place.Path, Cause: "a rule has a files or ignores pattern that is not a valid glob (" + oneLine(failureReason(text)) + ")", Fix: "fix the glob in the rule's files or ignores"})
+				faults = append(faults, Fault{Dir: e.place.Dir, Path: e.place.Path, Rule: e.id, Cause: "a rule has a files or ignores pattern that is not a valid glob (" + oneLine(failureReason(text)) + ")", Fix: "fix the glob in the rule's files or ignores"})
 			}
 		}
 		if len(faults) > 0 {
@@ -821,10 +994,15 @@ func verify(ctx context.Context, bin string, dirs []string, entries []entry) []F
 		}
 	}
 	if m := parseLine.FindStringSubmatch(text); m != nil {
-		at := where[strings.TrimSuffix(strings.TrimPrefix(m[1], "rules"+string(filepath.Separator)), ".yml")]
-		return []Fault{{Dir: at.Dir, Path: at.Path, Cause: "ast-grep cannot parse the rule (" + oneLine(failureReason(text)) + ")", Fix: "fix the rule so ast-grep accepts it"}}
+		name := m[1]
+		at := where[strings.TrimSuffix(strings.TrimPrefix(name, "rules"+string(filepath.Separator)), ".yml")]
+		return []Fault{{Dir: at.place.Dir, Path: at.place.Path, Rule: at.id, Cause: "ast-grep cannot parse the rule (" + oneLine(failureReason(text)) + ")", Fix: "fix the rule so ast-grep accepts it"}}
 	}
-	return []Fault{{Cause: "the examples cannot be run", Fix: "run ast-grep test on the rules directory to see why"}}
+	cause := "the examples cannot be run"
+	if reason := reasonLine(strings.TrimPrefix(strings.TrimSpace(text), "Error: "), scratch); reason != "" {
+		cause += " (" + reason + ")" // ast-grep names no file for an error in a utility rule, so its words are all there is
+	}
+	return []Fault{general(cause, "run ast-grep test on the rules directory to see why")}
 }
 
 // stagedFile is one file already written into the scratch tree.
@@ -835,12 +1013,17 @@ type stagedFile struct {
 
 // stage lays rule files and examples out the way ast-grep test expects them.
 // A destination that already exists is a duplicate rule id and is left untouched.
-func stage(scratch string, dirs []string, entries []entry) []Fault {
+func stage(scratch string, dirs []string, entries []entry, utils []utilEntry, only string) []Fault {
 	if err := writeConfig(scratch); err != nil {
-		return []Fault{{Cause: "the examples cannot be run", Fix: "make the rules directory readable"}}
+		return []Fault{general("the examples cannot be run", "make the rules directory readable")}
 	}
 	if err := os.MkdirAll(filepath.Join(scratch, testsDir), 0o755); err != nil {
-		return []Fault{{Cause: "the examples cannot be run", Fix: "make the rules directory readable"}}
+		return []Fault{general("the examples cannot be run", "make the rules directory readable")}
+	}
+	for _, u := range utils {
+		if err := os.WriteFile(filepath.Join(scratch, utilsDir, u.id+".yml"), []byte(u.text), 0o644); err != nil {
+			return []Fault{general("the examples cannot be run", "make the rules directory readable")}
+		}
 	}
 	var laid []stagedFile
 	for _, e := range entries {
@@ -848,6 +1031,9 @@ func stage(scratch string, dirs []string, entries []entry) []Fault {
 		ruleDst := filepath.Join(scratch, "rules", e.id+".yml")
 		if fault, bad := lay(filepath.Join(dir, e.place.Path), ruleDst, e, &laid); bad {
 			return []Fault{fault}
+		}
+		if only != "" && e.id != only {
+			continue
 		}
 		side := filepath.Join(testsDir, e.id+"-test.yml")
 		if fault, bad := lay(filepath.Join(dir, side), filepath.Join(scratch, side), e, &laid); bad {
@@ -861,10 +1047,10 @@ func stage(scratch string, dirs []string, entries []entry) []Fault {
 func lay(src, dst string, e entry, laid *[]stagedFile) (Fault, bool) {
 	if err := copyFile(src, dst); err != nil {
 		if !errors.Is(err, os.ErrExist) {
-			return Fault{Cause: "the examples cannot be run", Fix: "make the rules directory readable"}, true
+			return general("the examples cannot be run", "make the rules directory readable"), true
 		}
 		f := Fault{
-			Dir: e.place.Dir, Path: e.place.Path,
+			Dir: e.place.Dir, Path: e.place.Path, Rule: e.id,
 			Cause: fmt.Sprintf("the rule id %s is duplicated", e.id),
 			Fix:   "give every rule a unique id",
 		}
@@ -890,16 +1076,7 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return err
-	}
-	_, werr := f.Write(b)
-	cerr := f.Close()
-	if werr != nil {
-		return werr
-	}
-	return cerr
+	return writeNew(dst, b)
 }
 
 // misbehavior is one example that ast-grep test reported.
@@ -920,7 +1097,7 @@ func misbehaving(text string) []misbehavior {
 	var code []string
 	flush := func() {
 		if cur != nil {
-			cur.code = oneLine(strings.Join(code, "\n"))
+			cur.code = strings.TrimSuffix(strings.TrimPrefix(strings.Join(code, "\n"), "\n"), "\n")
 			out = append(out, *cur)
 		}
 		cur, code = nil, nil
@@ -939,7 +1116,7 @@ func misbehaving(text string) []misbehavior {
 			continue
 		}
 		if cur != nil {
-			code = append(code, l)
+			code = append(code, strings.TrimPrefix(l, "  "))
 		}
 	}
 	flush()

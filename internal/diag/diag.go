@@ -65,6 +65,7 @@ const GitLabReport = "gl-code-quality-report.json"
 
 type Diagnostic struct {
 	File string
+	// File is the path the plain text prints. A Failure may carry the file it concerns, and its Code the rule, for JSON.
 	// Path is File relative to the repository root, for formats whose consumer reads it that way.
 	// Empty means File already is. Plain text always prints File.
 	Path      string
@@ -73,6 +74,8 @@ type Diagnostic struct {
 	Sev       Severity
 	Kind      Kind
 	Msg       string
+	// Note and URL are the rule's own note and url fields, for a finding. Empty when the rule has none.
+	Note, URL string
 }
 
 // File is an extra artifact rendered beside the plain output.
@@ -101,6 +104,9 @@ func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File
 			fmt.Fprintf(&b, "legacy: %s:%d:%d: %s %s\n", escapeControls(d.File), d.Line, d.Col, escapeControls(d.Code), escapeControls(d.Msg))
 		default:
 			fmt.Fprintf(&b, "%s:%d:%d: %s %s\n", escapeControls(d.File), d.Line, d.Col, escapeControls(d.Code), escapeControls(d.Msg))
+			if d.Kind == Finding {
+				b.WriteString(indentedDetails(d))
+			}
 		}
 	}
 	if summary != "" {
@@ -125,6 +131,26 @@ func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File
 	}
 }
 
+// indentedDetails is the rule's note and url under a finding, one indented line each, so the finding line itself stays machine-readable.
+// A multi-line note continues on indented lines.
+func indentedDetails(d Diagnostic) string {
+	var b strings.Builder
+	if d.Note != "" {
+		lines := strings.Split(strings.TrimSpace(d.Note), "\n")
+		for i, l := range lines {
+			prefix := "        "
+			if i == 0 {
+				prefix = "  note: "
+			}
+			fmt.Fprintf(&b, "%s%s\n", prefix, escapeControls(strings.TrimRight(l, " \t\r")))
+		}
+	}
+	if d.URL != "" {
+		fmt.Fprintf(&b, "  url: %s\n", escapeControls(d.URL))
+	}
+	return b.String()
+}
+
 // annotation is a GitHub Actions workflow command for d, ending in a newline.
 // A failure has no location, so it is annotated without a file.
 // Legacy matches and opt-outs are information, so they are notices.
@@ -143,8 +169,19 @@ func annotation(d Diagnostic) string {
 	if d.Kind == Failure {
 		return fmt.Sprintf("::%s title=june::%s\n", level, commandData(d.Msg))
 	}
+	msg := commandData(d.Msg)
+	if d.Note != "" {
+		lines := strings.Split(strings.TrimSpace(d.Note), "\n")
+		for i, line := range lines {
+			lines[i] = commandData(line)
+		}
+		msg += "%0Anote: " + strings.Join(lines, "%0A")
+	}
+	if d.URL != "" {
+		msg += "%0Aurl: " + commandData(d.URL)
+	}
 	return fmt.Sprintf("::%s file=%s,line=%d,col=%d,title=%s::%s\n", level,
-		commandProperty(cmp.Or(d.Path, d.File)), d.Line, d.Col, commandProperty(d.Code), commandData(d.Msg))
+		commandProperty(cmp.Or(d.Path, d.File)), d.Line, d.Col, commandProperty(d.Code), msg)
 }
 
 // commandData escapes a workflow command message after control characters are made visible.
@@ -169,12 +206,16 @@ func codeQuality(sorted []Diagnostic) []byte {
 		Path  string `json:"path"`
 		Lines lines  `json:"lines"`
 	}
+	type content struct {
+		Body string `json:"body"`
+	}
 	type entry struct {
 		Description string   `json:"description"`
 		CheckName   string   `json:"check_name"`
 		Fingerprint string   `json:"fingerprint"`
 		Severity    string   `json:"severity"`
 		Location    location `json:"location"`
+		Content     *content `json:"content,omitempty"`
 	}
 	prints := fingerprints(sorted)
 	report := []entry{}
@@ -182,13 +223,17 @@ func codeQuality(sorted []Diagnostic) []byte {
 		if d.Kind != Finding && d.Kind != OptOut {
 			continue
 		}
-		report = append(report, entry{
+		e := entry{
 			Description: d.Msg,
 			CheckName:   d.Code,
 			Fingerprint: prints[i],
 			Severity:    codeQualitySeverity(d),
 			Location:    location{Path: d.File, Lines: lines{Begin: d.Line}},
-		})
+		}
+		if body := strings.TrimSpace(strings.TrimSpace(d.Note) + "\n\n" + d.URL); body != "" {
+			e.Content = &content{Body: body}
+		}
+		report = append(report, e)
 	}
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {

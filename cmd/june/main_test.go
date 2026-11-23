@@ -338,7 +338,7 @@ func TestVerifyFaultExitsTwo(t *testing.T) {
 	}
 	var out, errOut bytes.Buffer
 	code := run(context.Background(), []string{"verify"}, strings.NewReader(""), &out, &errOut, env)
-	want := "june: error: .june/rules/rule-tests/PY012-test.yml: rule PY012 valid example \"def f(a=[]): pass\" is reported by the rule. Fix: make the rule and its examples in rule-tests/PY012-test.yml agree\n"
+	want := "june: error: .june/rules/rule-tests/PY012-test.yml: rule PY012 valid example #1 \"def f(a=[]): pass\" is reported by the rule. Fix: make the rule and its examples in rule-tests/PY012-test.yml agree\n"
 	if code != 2 || out.String() != want {
 		t.Errorf("exit = %d, stdout = %q, want 2 and %q", code, out.String(), want)
 	}
@@ -799,5 +799,146 @@ func TestInternalErrorNamesWhereToReportAndTheVersion(t *testing.T) {
 	want := "Fix: report this as a june bug at https://github.com/vicolby/june/issues with june " + version
 	if !strings.Contains(errOut.String(), want) {
 		t.Errorf("stderr = %q, want it to contain %q", errOut.String(), want)
+	}
+}
+
+func runArgs(t *testing.T, env check.Env, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	code = run(context.Background(), args, strings.NewReader(""), &out, &errOut, env)
+	return code, out.String(), errOut.String()
+}
+
+func TestNewScaffoldsARuleThatVerifies(t *testing.T) {
+	env := check.Env{Dir: t.TempDir()}
+	for _, args := range [][]string{{"new", "MY001"}, {"new", "--rules", "other", "MY002"}} {
+		if code, out, errOut := runArgs(t, env, args...); code != 0 || !strings.HasPrefix(out, "created ") || errOut != "" {
+			t.Fatalf("%v: exit = %d, stdout = %q, stderr = %q", args, code, out, errOut)
+		}
+	}
+	for _, args := range [][]string{{"verify"}, {"verify", "--rules", "other", "--rule", "MY002", "--format", "json"}} {
+		if code, out, errOut := runArgs(t, env, args...); code != 0 || !strings.Contains(out, "verified") || errOut != "" {
+			t.Errorf("%v: exit = %d, stdout = %q, stderr = %q", args, code, out, errOut)
+		}
+	}
+}
+
+func TestNewSuggestedCommandVerifiesTheChosenDirectory(t *testing.T) {
+	for _, args := range [][]string{
+		{"new", "null"},
+		{"new", "--rules", "", "null"},
+		{"new", "--rules", ".", "null"},
+		{"new", "--rules", "mine", "null"},
+		{"new", "--rules", "author's rules $HOME; $(printf wrong) `printf wrong`", "null"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			env := check.Env{Dir: t.TempDir()}
+			code, out, errOut := runArgs(t, env, args...)
+			if code != 0 || errOut != "" {
+				t.Fatalf("new = %d, %q, %q", code, out, errOut)
+			}
+			_, command, ok := strings.Cut(out, "then run ")
+			if !ok {
+				t.Fatalf("no suggested command: %q", out)
+			}
+			cmd := exec.CommandContext(context.Background(), "sh", "-c", "june() { printf '%s\\000' \"$@\"; }; "+command)
+			cmd.Dir = env.Dir
+			parsed, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("parse suggested command: %v", err)
+			}
+			verifyArgs := strings.Split(strings.TrimSuffix(string(parsed), "\x00"), "\x00")
+			if code, out, errOut := runArgs(t, env, verifyArgs...); code != 0 || errOut != "" || !strings.Contains(out, "verified 1 rule, 2 examples") {
+				t.Errorf("suggested command = %d, %q, %q", code, out, errOut)
+			}
+		})
+	}
+}
+
+func TestNewCleansUpAfterWriteFailure(t *testing.T) {
+	const helperDir = "JUNE_TEST_FAILED_WRITE_DIR"
+	if dir := os.Getenv(helperDir); dir != "" {
+		if code, out, errOut := runArgs(t, check.Env{Dir: dir}, "new", "MY001"); code != 2 || !strings.Contains(out, "cannot be written") || errOut != "" {
+			t.Fatalf("new with a file-size limit = %d, %q, %q", code, out, errOut)
+		}
+		return
+	}
+	env := check.Env{Dir: t.TempDir()}
+	cmd := exec.CommandContext(context.Background(), "sh", "-c", `ulimit -f 0 && exec "$1" -test.run '^TestNewCleansUpAfterWriteFailure$'`, "sh", os.Args[0])
+	cmd.Env = append(os.Environ(), helperDir+"="+env.Dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("limited child process: %v\n%s", err, out)
+	}
+	for _, rel := range []string{"MY001.yml", "rule-tests/MY001-test.yml"} {
+		if _, err := os.Stat(filepath.Join(env.Dir, ".june", "rules", rel)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("failed new left %s: %v", rel, err)
+		}
+	}
+	if code, out, errOut := runArgs(t, env, "new", "MY001"); code != 0 || errOut != "" {
+		t.Fatalf("retry = %d, %q, %q", code, out, errOut)
+	}
+}
+
+func TestNewRollsBackWhenExamplesCannotBeCreated(t *testing.T) {
+	env := check.Env{Dir: t.TempDir()}
+	blocked := filepath.Join(env.Dir, "rule-tests")
+	if err := os.WriteFile(blocked, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, errOut := runArgs(t, env, "new", "--rules", ".", "MY001"); code != 2 || !strings.Contains(out, "cannot be written") || errOut != "" {
+		t.Fatalf("new with blocked examples = %d, %q, %q", code, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(env.Dir, "MY001.yml")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("failed new left the rule file: %v", err)
+	}
+	if b, err := os.ReadFile(blocked); err != nil || string(b) != "keep" {
+		t.Fatalf("blocking file = %q, %v, want unchanged", b, err)
+	}
+	if err := os.Remove(blocked); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, errOut := runArgs(t, env, "new", "--rules", ".", "MY001"); code != 0 || errOut != "" {
+		t.Fatalf("retry = %d, %q, %q", code, out, errOut)
+	}
+}
+
+func TestNewArguments(t *testing.T) {
+	env := check.Env{Dir: t.TempDir()}
+	for _, args := range [][]string{{"new"}, {"new", "A", "B"}, {"new", "--format", "json", "A"}, {"new", "--bogus"}, {"new", "MY001", "--rules", "other"}} {
+		code, out, errOut := runArgs(t, env, args...)
+		if code != 2 || out != "" || !strings.Contains(errOut, ". Fix: usage is") || !strings.Contains(errOut, "june new [--rules DIR] RULE") {
+			t.Errorf("%v: exit = %d, stdout = %q, stderr = %q, want a usage error", args, code, out, errOut)
+		}
+	}
+	if entries, _ := os.ReadDir(env.Dir); len(entries) != 0 {
+		t.Errorf("a refused new wrote %d entries", len(entries))
+	}
+}
+
+func TestVerifyOneRuleAsJSON(t *testing.T) {
+	env := project(t)
+	code, out, errOut := runArgs(t, env, "verify", "--rule", "PY012", "--format", "json")
+	if code != 0 || errOut != "" || !strings.Contains(out, `"diagnostics": []`) || !strings.Contains(out, "verified 1 rule, 19 examples") {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out, errOut)
+	}
+	code, out, errOut = runArgs(t, env, "verify", "--rule", "NOPE")
+	if code != 2 || !strings.Contains(out, "no rule has the id NOPE (rules found: PY012)") || errOut != "" {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out, errOut)
+	}
+}
+
+func TestVerifyUnknownFormatIsUsageError(t *testing.T) {
+	code, out, errOut := runArgs(t, project(t), "verify", "--format", "xml")
+	if code != 2 || out != "" || !strings.Contains(errOut, `unknown format "xml"`) {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out, errOut)
+	}
+}
+
+func TestHelpListsTheAuthoringCommands(t *testing.T) {
+	_, out, _ := runArgs(t, project(t), "--help")
+	for _, want := range []string{"june verify [--rules DIR]... [--rule ID] [--format FORMAT]", "june new [--rules DIR] RULE", "--rule ID"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help lacks %q", want)
+		}
 	}
 }
