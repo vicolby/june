@@ -13,6 +13,7 @@ import (
 )
 
 func TestCoverageNotesAcrossFormats(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name                     string
 		changed, symlink, sparse bool
@@ -27,6 +28,7 @@ func TestCoverageNotesAcrossFormats(t *testing.T) {
 		{"both", true, true, true, "checked 1 file, 1 changed line; 1 changed .py path skipped, not regular files (symlink or submodule); 1 changed .py path skipped, absent from sparse checkout"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			env := repo(t, map[string]string{"app.py": "x = 1\n", "keep/lib.py": "y = 1\n"})
 			if tc.changed {
 				write(t, filepath.Join(env.Dir, "keep", "lib.py"), "y = 2\n")
@@ -44,6 +46,7 @@ func TestCoverageNotesAcrossFormats(t *testing.T) {
 			}
 			for _, format := range []diag.Format{diag.Text, diag.GitHub, diag.GitLab, diag.JSON, diag.SARIF} {
 				t.Run(string(format), func(t *testing.T) {
+					t.Parallel()
 					res, err := check.Change(context.Background(), env, check.Request{Base: "main", Format: format})
 					if err != nil {
 						t.Fatal(err)

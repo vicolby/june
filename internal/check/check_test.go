@@ -132,17 +132,20 @@ func summaryOf(res check.Result) string {
 }
 
 func TestMatchOnTouchedLineFails(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "import os\n\ndef f(a, b=[]):\n    return a\n"})
 	expect(t, change(t, env, "app.py:3\n"), 1, "app.py:3:12: "+py012)
 }
 
 func TestRangeTouchesEveryLineInIt(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "x = 1\ndef f(a=[]):\n    pass\n"})
 	expect(t, change(t, env, "app.py:1-2\n"), 1, "app.py:2:9: "+py012)
 	expect(t, change(t, env, "app.py:2-2\n"), 1, "app.py:2:9: "+py012)
 }
 
 func TestMatchOnUntouchedLineNeverFails(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "def f(a=[]):\n    pass\n\nx = 1\n"})
 	expect(t, change(t, env, "app.py:3-4\n"), 0, "")
 }
@@ -152,6 +155,7 @@ func TestMatchOnUntouchedLineNeverFails(t *testing.T) {
 // CRLF still shares LF with the scanner, so the violation stays on that line.
 // A bare CR does not, and listing the Python line must name the file instead of passing clean.
 func TestCRLFKeepsPythonLineNumbers(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{
 		"latin.py": "# coding: latin-1\r\nx = '\xe9'\r\ndef f(a=[]): pass\r\n",
 		"utf.py":   "x = 1\r\ndef f(a=[]): pass\r\n",
@@ -161,6 +165,7 @@ func TestCRLFKeepsPythonLineNumbers(t *testing.T) {
 }
 
 func TestBareCarriageReturnIsSkippedNotShifted(t *testing.T) {
+	t.Parallel()
 	const reason = "it uses bare carriage returns as line endings"
 	env := tree(t, map[string]string{
 		"app.py": "# coding: latin-1\r# caf\xe9\r\ndef f(a=[]): pass\n",
@@ -173,6 +178,7 @@ func TestBareCarriageReturnIsSkippedNotShifted(t *testing.T) {
 }
 
 func TestMatchIsJudgedOnItsFirstLineOnly(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "def f(\n    a=\n    [\n        1,\n        2,\n    ],\n):\n    pass\n"})
 	expect(t, change(t, env, "app.py:4-6\n"), 0, "")
 	expect(t, change(t, env, "app.py:2\n"), 0, "")
@@ -180,6 +186,7 @@ func TestMatchIsJudgedOnItsFirstLineOnly(t *testing.T) {
 }
 
 func TestOutputIsSortedAndPortable(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{
 		"z.py":     "def f(a=[]): pass\n",
 		"pkg/a.py": "x = 1\ndef g(b={}): pass\ndef h(c=[]): pass\n",
@@ -197,16 +204,19 @@ func TestOutputIsSortedAndPortable(t *testing.T) {
 }
 
 func TestOnlyPythonFilesAreRead(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"notes.md": "def f(a=[]): pass\n", "gone.txt": ""})
 	expect(t, change(t, env, "notes.md:1\n"), 0, "")
 }
 
 func TestPathSpellingsAgree(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"pkg/app.py": "def f(a=[]): pass\n"})
 	expect(t, change(t, env, "./pkg/../pkg/app.py:1\n"), 1, "pkg/app.py:1:9: "+py012)
 }
 
 func TestRulesFlagOverridesDefault(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\n"})
 	copyDir(t, filepath.Join("..", "..", "testdata", "rules", "python"), filepath.Join(env.Dir, "elsewhere"))
 	res, err := check.Change(context.Background(), env, check.Request{Changed: strings.NewReader("app.py:1\n"), Rules: []string{"elsewhere"}})
@@ -222,6 +232,7 @@ func TestRulesFlagOverridesDefault(t *testing.T) {
 }
 
 func TestRuleSetExistsOnlyIfEveryExampleBehaved(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\n"})
 	// An example that claims a mutable default is valid.
 	write(t, filepath.Join(env.Dir, ".june/rules/rule-tests/PY012-test.yml"),
@@ -289,6 +300,7 @@ const listFix = "write one path:7 or path:7-12 per line, with paths relative to 
 func ptr(s string) *string { return &s }
 
 func TestCancelledContextIsAnError(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\n"})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -298,6 +310,7 @@ func TestCancelledContextIsAnError(t *testing.T) {
 }
 
 func TestCancellationAbandonsOpenChangedLines(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	reader, writer := io.Pipe()
@@ -324,6 +337,7 @@ func TestCancellationAbandonsOpenChangedLines(t *testing.T) {
 }
 
 func TestMutableDefaultForms(t *testing.T) {
+	t.Parallel()
 	values := []string{"[]", "{}", "{1}", "[x for x in ()]", "{x: x for x in ()}", "{x for x in ()}"}
 	for _, parameter := range []string{"def f(a=", "def f(a: object =", "f = (lambda a="} {
 		for _, value := range values {
@@ -344,6 +358,7 @@ func TestMutableDefaultForms(t *testing.T) {
 }
 
 func TestOnlyMutableDefaultValuesMatch(t *testing.T) {
+	t.Parallel()
 	for _, value := range []string{"(None)", "((1))", "([],)", "tuple([])", "([] or None)", "([] if condition else None)", "(lambda: [])"} {
 		env := tree(t, map[string]string{"app.py": "def f(a=" + value + "): pass\n"})
 		expect(t, change(t, env, "app.py:1\n"), 0, "")
@@ -351,6 +366,7 @@ func TestOnlyMutableDefaultValuesMatch(t *testing.T) {
 }
 
 func TestMultilineMutableValueAnchors(t *testing.T) {
+	t.Parallel()
 	for _, parameter := range []string{"a", "a: list"} {
 		env := tree(t, map[string]string{"app.py": "def f(\n    " + parameter + "=\n    ((\n        []\n    )),\n): pass\n"})
 		expect(t, change(t, env, "app.py:2-3\n"), 0, "")
@@ -362,6 +378,7 @@ func TestMultilineMutableValueAnchors(t *testing.T) {
 }
 
 func TestNativeSuppressionsDoNotHideFindings(t *testing.T) {
+	t.Parallel()
 	for _, directive := range []string{"ast-grep-ignore", "ast-grep-ignore: PY012", "ast-grep-ignore: OTHER, PY012"} {
 		for _, tc := range []struct {
 			source string
@@ -379,6 +396,7 @@ func TestNativeSuppressionsDoNotHideFindings(t *testing.T) {
 }
 
 func TestChangedLinesPreservesPathWhitespace(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{" app.py": "def f(a=[]): pass\n", "app.py": "x = 1\n", "\tapp.py": "def f(a=[]): pass\n"})
 	for _, list := range []string{" app.py:1\n", "\n \t\n app.py:1-1\r\n"} {
 		expect(t, change(t, env, list), 1, " app.py:1:9: "+py012)
@@ -456,6 +474,7 @@ func withWarningRule(t *testing.T, env check.Env) check.Env {
 const lst02 = "LST02 Name the variable. Fix: rename it.\n"
 
 func TestWarningOnTouchedLinePrintsAndExitsZero(t *testing.T) {
+	t.Parallel()
 	env := withWarningRule(t, tree(t, map[string]string{"app.py": "x = 1\ntmp = 2\n"}))
 	res := change(t, env, "app.py:2\n")
 	expect(t, res, 0, "app.py:2:1: "+lst02)
@@ -465,6 +484,7 @@ func TestWarningOnTouchedLinePrintsAndExitsZero(t *testing.T) {
 }
 
 func TestSkippedFileCountsAsAWarningAlongsideRuleWarnings(t *testing.T) {
+	t.Parallel()
 	env := withWarningRule(t, tree(t, map[string]string{
 		"app.py": "tmp = 2\n",
 		"bad.py": "x = '\xe9'\n",
@@ -477,6 +497,7 @@ func TestSkippedFileCountsAsAWarningAlongsideRuleWarnings(t *testing.T) {
 }
 
 func TestSeverityComesFromTheRule(t *testing.T) {
+	t.Parallel()
 	env := withWarningRule(t, tree(t, map[string]string{"app.py": "tmp = 1\ndef f(a=[]): pass\n"}))
 	res := change(t, env, "app.py:1-2\n")
 	expect(t, res, 1, "app.py:1:1: "+lst02+"app.py:2:9: "+py012)
@@ -494,6 +515,7 @@ func TestSeverityComesFromTheRule(t *testing.T) {
 }
 
 func TestSummaryCountsCoverage(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"a.py": "x = 1\ny = 2\nz = 3\n", "b.py": "x = 1\n", "notes.md": "text\n"})
 	cases := []struct{ list, want string }{
 		{"", "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines" + noPython},
@@ -510,6 +532,7 @@ func TestSummaryCountsCoverage(t *testing.T) {
 }
 
 func TestSummaryIsTheLastLineAndDoesNotChangeFindings(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"a.py": "def f(a=[]): pass\n", "b.py": "def g(b={}): pass\n"})
 	res := change(t, env, "a.py:1\nb.py:1\n")
 	lines := strings.Split(strings.TrimSuffix(string(res.Out), "\n"), "\n")
@@ -522,6 +545,7 @@ func TestSummaryIsTheLastLineAndDoesNotChangeFindings(t *testing.T) {
 }
 
 func TestRefusalHasNoSummary(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "x = 1\n"})
 	res := change(t, env, "app.py\n")
 	if res.Exit != 2 || strings.Contains(string(res.Out), "checked") {
@@ -530,6 +554,7 @@ func TestRefusalHasNoSummary(t *testing.T) {
 }
 
 func TestOptOuts(t *testing.T) {
+	t.Parallel()
 	const body = `def a(x=[]):  # june: ignore[PY012] shared on purpose
     pass
 def b(x=[]):  # june: ignore[PY012]
@@ -559,11 +584,13 @@ def g(x=[]):  # june: ignore[PY012] untouched line
 }
 
 func TestOptOutHonouredKeepsExitZero(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"a.py": "def a(x=[]):  # june: ignore[PY012] shared on purpose\n    pass\n"})
 	expect(t, change(t, env, "a.py:1\n"), 0, "a.py:1:15: PY012 opt-out: shared on purpose\n")
 }
 
 func TestOptOutControlCharactersAreEscaped(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"a.py": "def a(x=[]): pass # june: ignore[PY012] \x1b[2K\x1b[1Gapproved\n" +
 		"def b(x=1): pass # june: ignore[PY012] café \"quoted\" \\path \x1b[2Kunmatched\n" +
 		"def c(x=[]): pass # june: ignore[NO\x1b[2KPE] typo\n"})
@@ -580,6 +607,7 @@ func TestOptOutControlCharactersAreEscaped(t *testing.T) {
 }
 
 func TestOptOutNearMissesSuppressNothing(t *testing.T) {
+	t.Parallel()
 	const prefixProblem = "the comment must start with `# june: ignore[`"
 	const paddingProblem = "the rule must not have surrounding whitespace"
 	const reasonSpaceProblem = "a space is required before the reason"
@@ -619,11 +647,13 @@ func TestOptOutNearMissesSuppressNothing(t *testing.T) {
 }
 
 func TestOptOutOffTouchedLineIsSilent(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"a.py": "def a(x=[]):  # june: ignore[PY012] why\n    pass\n"})
 	expect(t, change(t, env, "a.py:2\n"), 0, "")
 }
 
 func TestSummaryCountsOptOutsOnTouchedLines(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"a.py": "def a(x=[]):  # june: ignore[PY012] why\n    pass\ndef b(x=1):  # june: ignore[PY012]\n    pass\ndef c(x=1):  # june: ignore[PY012] untouched\n"})
 	res := change(t, env, "a.py:1-4\n")
 	if got, want := summaryOf(res), "june: 0 errors, 0 warnings, 2 opt-outs; checked 1 file, 4 changed lines"; got != want {
@@ -642,6 +672,7 @@ func astGrepVersion(t *testing.T) string {
 }
 
 func TestRulesVerifiesEveryExample(t *testing.T) {
+	t.Parallel()
 	env := tree(t, nil)
 	res, err := check.Rules(context.Background(), env, nil)
 	if err != nil {
@@ -653,6 +684,7 @@ func TestRulesVerifiesEveryExample(t *testing.T) {
 }
 
 func TestRulesFaultsRefuseVerifyAndRunAlike(t *testing.T) {
+	t.Parallel()
 	rule := func(msg string) string {
 		return "id: LST01\nlanguage: python\nseverity: error\nmessage: " + msg + "\nrule:\n  kind: list\n"
 	}
@@ -719,6 +751,7 @@ func TestRulesFaultsRefuseVerifyAndRunAlike(t *testing.T) {
 }
 
 func TestRulesCancelledContextIsAnError(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := check.Rules(ctx, tree(t, nil), nil); !errors.Is(err, context.Canceled) {
@@ -727,6 +760,7 @@ func TestRulesCancelledContextIsAnError(t *testing.T) {
 }
 
 func TestRulesEmptyEnvDirIsAnError(t *testing.T) {
+	t.Parallel()
 	if _, err := check.Rules(context.Background(), check.Env{}, nil); err == nil {
 		t.Error("err = nil, want an error")
 	}
@@ -749,6 +783,7 @@ func changeWith(t *testing.T, env check.Env, rules []string, list string) check.
 }
 
 func TestRepeatedRulesAreMerged(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "def f(a={}): pass\nx = [1]\n"})
 	lst01(t, filepath.Join(env.Dir, "shared"), "LST01.yml", "LST01", "No lists.")
 	res := changeWith(t, env, []string{".june/rules", "shared"}, "app.py:1-2\n")
@@ -760,6 +795,7 @@ func TestRepeatedRulesAreMerged(t *testing.T) {
 
 // The verdict does not depend on which directory comes first.
 func TestRulesDirectoryOrderDoesNotChangeOutput(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "def f(a={}): pass\nx = [1]\n"})
 	lst01(t, filepath.Join(env.Dir, "shared"), "LST01.yml", "LST01", "No lists.")
 	a := changeWith(t, env, []string{".june/rules", "shared"}, "app.py:1-2\n")
@@ -770,6 +806,7 @@ func TestRulesDirectoryOrderDoesNotChangeOutput(t *testing.T) {
 }
 
 func TestRulesAcrossDirectoriesNameBothFilesOnDuplicateID(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "x = [1]\n"})
 	lst01(t, filepath.Join(env.Dir, "one"), "LST01.yml", "LST01", "No lists.")
 	lst01(t, filepath.Join(env.Dir, "two"), "other.yml", "LST01", "Still no lists.")
@@ -788,6 +825,7 @@ func TestRulesAcrossDirectoriesNameBothFilesOnDuplicateID(t *testing.T) {
 }
 
 func TestCaseVariantRuleIDsAreDuplicates(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "x = [1]\n"})
 	// Foo's valid example is a list the rule matches, so skipping its examples would let the rule emit findings.
 	write(t, filepath.Join(env.Dir, "A", "Foo.yml"), "id: Foo\nlanguage: python\nseverity: error\nmessage: No lists.\nrule:\n  kind: list\n")
@@ -815,6 +853,7 @@ func TestCaseVariantRuleIDsAreDuplicates(t *testing.T) {
 }
 
 func TestAbsoluteRulesDirectoriesWithTheSameBaseNameStayDistinct(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	app := filepath.Join(root, "app")
 	if err := os.MkdirAll(app, 0o755); err != nil {
@@ -843,6 +882,7 @@ func TestAbsoluteRulesDirectoriesWithTheSameBaseNameStayDistinct(t *testing.T) {
 
 // Same file names in different directories with different ids must not collide while examples run.
 func TestRulesAcrossDirectoriesMayShareFileNames(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "x = [1]\ny = {1: 2}\n"})
 	lst01(t, filepath.Join(env.Dir, "one"), "rule.yml", "LST01", "No lists.")
 	write(t, filepath.Join(env.Dir, "two", "rule.yml"), "id: DCT01\nlanguage: python\nseverity: error\nmessage: No dicts.\nrule:\n  kind: dictionary\n")
@@ -854,6 +894,7 @@ func TestRulesAcrossDirectoriesMayShareFileNames(t *testing.T) {
 }
 
 func TestRulesRepeatedSameDirectoryCountsOnce(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\n"})
 	res := changeWith(t, env, []string{".june/rules", "./.june/rules", ".june/../.june/rules"}, "app.py:1\n")
 	expect(t, res, 1, "app.py:1:9: "+py012)
@@ -867,6 +908,7 @@ func TestRulesRepeatedSameDirectoryCountsOnce(t *testing.T) {
 }
 
 func TestRulesCountsSumAcrossDirectories(t *testing.T) {
+	t.Parallel()
 	env := tree(t, nil)
 	lst01(t, filepath.Join(env.Dir, "shared"), "LST01.yml", "LST01", "No lists.")
 	res, err := check.Rules(context.Background(), env, []string{".june/rules", "shared"})
@@ -880,6 +922,7 @@ func TestRulesCountsSumAcrossDirectories(t *testing.T) {
 
 // Every bad directory is reported, each under its own spelling, and no partial set runs.
 func TestRulesAcrossDirectoriesReportEveryBadDirectory(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "x = [1]\n"})
 	write(t, filepath.Join(env.Dir, "hollow", "README.md"), "no rules\n")
 	res := changeWith(t, env, []string{".june/rules", "absent", "hollow"}, "app.py:1\n")
@@ -891,6 +934,7 @@ func TestRulesAcrossDirectoriesReportEveryBadDirectory(t *testing.T) {
 }
 
 func TestFailingExampleNamesItsOwnDirectory(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "x = [1]\n"})
 	lst01(t, filepath.Join(env.Dir, "shared"), "LST01.yml", "LST01", "No lists.")
 	write(t, filepath.Join(env.Dir, "shared", "rule-tests", "LST01-test.yml"), "id: LST01\nvalid:\n  - \"x = [1]\"\ninvalid:\n  - \"x = [1]\"\n")
@@ -902,6 +946,7 @@ func TestFailingExampleNamesItsOwnDirectory(t *testing.T) {
 }
 
 func TestUnparseableRuleNamesItsOwnDirectory(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "x = [1]\n"})
 	write(t, filepath.Join(env.Dir, "shared", "rule.yml"), "id: BAD01\nlanguage: python\nmessage: m\nrule:\n  kind: list\n  bogus: 1\n")
 	write(t, filepath.Join(env.Dir, "shared", "rule-tests", "BAD01-test.yml"), "id: BAD01\nvalid:\n  - \"x = (1,)\"\ninvalid:\n  - \"x = [1]\"\n")
@@ -912,11 +957,13 @@ func TestUnparseableRuleNamesItsOwnDirectory(t *testing.T) {
 }
 
 func TestEmptyRulesEntryMeansDefault(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\n"})
 	expect(t, changeWith(t, env, []string{""}, "app.py:1\n"), 1, "app.py:1:9: "+py012)
 }
 
 func TestOptOutNamesRuleFromAnyDirectory(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "x = [1]  # june: ignore[LST01] fixture\n"})
 	lst01(t, filepath.Join(env.Dir, "shared"), "LST01.yml", "LST01", "No lists.")
 	res := changeWith(t, env, []string{".june/rules", "shared"}, "app.py:1\n")
@@ -937,6 +984,7 @@ func changeLegacy(t *testing.T, env check.Env, list string) check.Result {
 const legacyPY012 = "legacy: "
 
 func TestLegacyIsOffByDefault(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "def f(a=[]):\n    pass\n\nx = 1\n"})
 	res := change(t, env, "app.py:4\n")
 	expect(t, res, 0, "")
@@ -946,6 +994,7 @@ func TestLegacyIsOffByDefault(t *testing.T) {
 }
 
 func TestLegacyListsUntouchedViolationsAndNeverFails(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "def f(a=[]):\n    pass\n\nx = 1\n"})
 	res := changeLegacy(t, env, "app.py:4\n")
 	if res.Exit != 0 {
@@ -957,6 +1006,7 @@ func TestLegacyListsUntouchedViolationsAndNeverFails(t *testing.T) {
 }
 
 func TestLegacyFollowsFindingsAndDoesNotRepeatThem(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "def g(b={}): pass\ndef f(a=[]): pass\n"})
 	res := changeLegacy(t, env, "app.py:2\n")
 	want := "app.py:2:9: " + py012 + legacyPY012 + "app.py:1:9: " + py012 +
@@ -967,6 +1017,7 @@ func TestLegacyFollowsFindingsAndDoesNotRepeatThem(t *testing.T) {
 }
 
 func TestLegacyWarningsAndErrorsAreBothInformation(t *testing.T) {
+	t.Parallel()
 	env := withWarningRule(t, tree(t, map[string]string{"app.py": "tmp = 1\ndef f(a=[]): pass\nx = 1\n"}))
 	res := changeLegacy(t, env, "app.py:3\n")
 	want := legacyPY012 + "app.py:1:1: " + lst02 + legacyPY012 + "app.py:2:9: " + py012 +
@@ -977,6 +1028,7 @@ func TestLegacyWarningsAndErrorsAreBothInformation(t *testing.T) {
 }
 
 func TestLegacyOnlyScansFilesInTheChange(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"a.py": "x = 1\n", "other.py": "def f(a=[]): pass\n"})
 	res := changeLegacy(t, env, "a.py:1\n")
 	if res.Exit != 0 || strings.Contains(string(res.Out), "other.py") || strings.Contains(string(res.Out), "legacy") {
@@ -985,18 +1037,21 @@ func TestLegacyOnlyScansFilesInTheChange(t *testing.T) {
 }
 
 func TestLegacyWithNothingToListKeepsSummaryUnchanged(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "x = 1\n"})
 	res := changeLegacy(t, env, "app.py:1\n")
 	expect(t, res, 0, "")
 }
 
 func TestLegacyHonoursValidOptOutOnUntouchedLine(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "def f(a=[]): pass  # june: ignore[PY012] shared on purpose\nx = 1\n"})
 	res := changeLegacy(t, env, "app.py:2\n")
 	expect(t, res, 0, "")
 }
 
 func TestLegacyDiagnosticsAreMarkedLegacy(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\nx = 1\n"})
 	res := changeLegacy(t, env, "app.py:2\n")
 	if len(res.Diags) != 1 || res.Diags[0].Kind != diag.Legacy || res.Diags[0].Sev == diag.Error {
@@ -1005,6 +1060,7 @@ func TestLegacyDiagnosticsAreMarkedLegacy(t *testing.T) {
 }
 
 func TestLegacyDoesNotMaskRefusals(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": "x = 1\n"})
 	res := changeLegacy(t, env, "app.py\n")
 	if res.Exit != 2 {
@@ -1062,6 +1118,7 @@ func TestASTGrepDescription(t *testing.T) {
 }
 
 func TestOptOutFollowsOtherComments(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"a.py": "def a(x=[]):  # noqa: B006  # june: ignore[PY012] shared on purpose\n    pass\n" +
 		"def b(x=[]):  # type: ignore # june: ignore[PY012]\n    pass\n" +
 		"def c(x=[]):  # note june: ignore[PY012] prose, not an opt-out\n    pass\n"})
@@ -1075,6 +1132,7 @@ func TestOptOutFollowsOtherComments(t *testing.T) {
 // The accept-or-warn contract requires misplaced markers to be visible even without a finding.
 // Exact output rejects silently dropping either the marker or the original violation.
 func TestOptOutEmbeddedMarkersWarn(t *testing.T) {
+	t.Parallel()
 	for _, prefix := range []string{"# noqa: B006", "# type: ignore", "# note"} {
 		t.Run(prefix, func(t *testing.T) {
 			env := tree(t, map[string]string{"a.py": "def a(x=[]):  " + prefix + " june: ignore[PY012] shared on purpose\n    pass\n" +
@@ -1088,6 +1146,7 @@ func TestOptOutEmbeddedMarkersWarn(t *testing.T) {
 }
 
 func TestOptOutCoversExactlyOneMatch(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"a.py": "def a(x=[], y=[]):  # june: ignore[PY012] two on one line\n    pass\n"})
 	res := change(t, env, "a.py:1\n")
 	expect(t, res, 1, "a.py:1:21: PY012 opt-out: two on one line (suppresses nothing: 2 PY012 findings on this line, an opt-out covers exactly one. Fix: fix a violation or split the line)\n"+
@@ -1096,6 +1155,7 @@ func TestOptOutCoversExactlyOneMatch(t *testing.T) {
 }
 
 func TestZeroFilesCheckedSaysSo(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"notes.md": "text\n", "stubs.pyi": "def f(a=[]): ...\n"})
 	res := change(t, env, "notes.md:1\nstubs.pyi:1\n")
 	expect(t, res, 0, "")
@@ -1110,6 +1170,7 @@ func TestZeroFilesCheckedSaysSo(t *testing.T) {
 }
 
 func TestTouchedLineInsideSyntaxErrorWarns(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"bad.py": "x = 1\ndef broken(:\n    return (1,\n", "ok.py": "x = 1\n"})
 	res := change(t, env, "bad.py:2\nok.py:1\n")
 	want := "bad.py:2:1: PARSE a touched line is inside a syntax error, so rules may have checked less than they appear to. Fix: fix the syntax error and run june again\n"
@@ -1124,6 +1185,7 @@ func TestTouchedLineInsideSyntaxErrorWarns(t *testing.T) {
 }
 
 func TestSyntaxErrorOnUntouchedLinesIsQuiet(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"bad.py": "x = 1\n\n\n\n\ny = (\n"})
 	res := change(t, env, "bad.py:1\n")
 	expect(t, res, 0, "")
@@ -1140,6 +1202,7 @@ func noteEnv(t *testing.T) check.Env {
 }
 
 func TestFindingPrintsNoteAndURLOfItsRule(t *testing.T) {
+	t.Parallel()
 	env := noteEnv(t)
 	res := changeWith(t, env, []string{"notes"}, "app.py:1\n")
 	want := "app.py:1:5: LST01 No lists.\n  note: Use a tuple.\n  url: https://example.com/LST01\n"
@@ -1149,6 +1212,7 @@ func TestFindingPrintsNoteAndURLOfItsRule(t *testing.T) {
 }
 
 func TestFindingOmitsBlankMetadataAndPrintsRelativeURL(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct{ name, fields, details string }{
 		{"empty", "note: ''\nurl: ''\n", ""},
 		{"whitespace", "note: '  '\nurl: \" \\t\\n \"\n", ""},
@@ -1170,6 +1234,7 @@ func TestFindingOmitsBlankMetadataAndPrintsRelativeURL(t *testing.T) {
 }
 
 func TestNoteAndURLTravelIntoEveryFormat(t *testing.T) {
+	t.Parallel()
 	env := noteEnv(t)
 	for format, want := range map[diag.Format][]string{
 		diag.JSON:   {`"note": "Use a tuple."`, `"url": "https://example.com/LST01"`},
@@ -1196,6 +1261,7 @@ func TestNoteAndURLTravelIntoEveryFormat(t *testing.T) {
 }
 
 func TestVerifyOneRuleIgnoresTheExamplesOfOthers(t *testing.T) {
+	t.Parallel()
 	env := tree(t, nil)
 	lst01(t, filepath.Join(env.Dir, "mine"), "LST01.yml", "LST01", "No lists.")
 	lst01(t, filepath.Join(env.Dir, "mine"), "LST02.yml", "LST02", "No lists either.")
@@ -1221,6 +1287,7 @@ func TestVerifyOneRuleIgnoresTheExamplesOfOthers(t *testing.T) {
 
 // An author's tool reads the JSON, so a failing example names its file and rule without parsing the sentence.
 func TestVerifyJSONNamesTheFailingExamplesFileAndRule(t *testing.T) {
+	t.Parallel()
 	env := tree(t, nil)
 	lst01(t, filepath.Join(env.Dir, "mine"), "LST01.yml", "LST01", "No lists.")
 	write(t, filepath.Join(env.Dir, "mine", "rule-tests", "LST01-test.yml"), "id: LST01\nvalid:\n  - \"x = [1]\"\ninvalid:\n  - \"x = [1]\"\n")
@@ -1256,6 +1323,7 @@ func TestMissingAstGrepIsNotAttributedToARulesDirectory(t *testing.T) {
 }
 
 func TestFileAsRulesDirectoryIsSaidSo(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"x.py": "x = 1\n"})
 	res := changeWith(t, env, []string{".june/rules/PY012.yml"}, "x.py:1\n")
 	want := "june: error: .june/rules/PY012.yml: the rules path is a file, not a directory. Fix: point --rules at the directory that holds the rule files, not at one rule file\n"
@@ -1265,6 +1333,7 @@ func TestFileAsRulesDirectoryIsSaidSo(t *testing.T) {
 }
 
 func TestNewWritesRuleThatVerifiesAndNeverOverwrites(t *testing.T) {
+	t.Parallel()
 	env := tree(t, nil)
 	res, err := check.New(env, []string{"mine"}, "MY001")
 	want := "created mine/MY001.yml\ncreated mine/rule-tests/MY001-test.yml\nnext: edit the rule and its examples, then run june verify --rules 'mine' --rule MY001\n"
@@ -1288,6 +1357,7 @@ func TestNewWritesRuleThatVerifiesAndNeverOverwrites(t *testing.T) {
 }
 
 func TestNewDefaultsToTheJuneRulesDirectory(t *testing.T) {
+	t.Parallel()
 	for _, dirs := range [][]string{nil, {""}, {".june/rules"}} {
 		t.Run(fmt.Sprint(dirs), func(t *testing.T) {
 			env := check.Env{Dir: t.TempDir()}

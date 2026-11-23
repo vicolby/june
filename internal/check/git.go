@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path"
@@ -1006,7 +1007,8 @@ func parseHunk(header string) (span, bool) {
 			return span{}, false
 		}
 	}
-	if n == 0 {
+	// A hunk that adds no lines, or one git could not have written, touches nothing.
+	if n <= 0 || from < 1 || from > math.MaxInt-n {
 		return span{}, false
 	}
 	return span{from, from + n - 1}, true

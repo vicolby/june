@@ -63,6 +63,7 @@ func refused(t *testing.T, res check.Result, out string) {
 const old = "def f(a=[]): pass\n"
 
 func TestGitScopeSparseFilesAreNotRenameSources(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{"legacy.py", "legacy.txt", "tab\tlegacy.py"} {
 		t.Run(source, func(t *testing.T) {
 			env := repo(t, map[string]string{source: old, "keep/app.py": "x = 1\n"})
@@ -98,6 +99,7 @@ func TestGitScopeSparseFilesAreNotRenameSources(t *testing.T) {
 }
 
 func TestGitScopeAbsentSparseEditDoesNotHideCheckedOutFile(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n", "keep/lib.py": "y = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), "x = 2\n")
 	write(t, filepath.Join(env.Dir, "keep", "lib.py"), "def g(b={}): pass\n")
@@ -127,6 +129,7 @@ func TestGitScopeAbsentSparseEditDoesNotHideCheckedOutFile(t *testing.T) {
 }
 
 func TestGitScopeRenameSourceBecomesDirectory(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{"old.txt", "old[1]*?.txt", "旧.txt"} {
 		t.Run(source, func(t *testing.T) {
 			body := "import os\nimport sys\nx = 1\ny = 2\n" + old
@@ -149,6 +152,7 @@ func TestGitScopeRenameSourceBecomesDirectory(t *testing.T) {
 }
 
 func TestGitScopeDoesNotReadUnrelatedBinaryPatchContent(t *testing.T) {
+	t.Parallel()
 	for _, extension := range []string{"bin", "py.bin"} {
 		t.Run(extension, func(t *testing.T) {
 			asset := "model." + extension
@@ -181,6 +185,7 @@ func TestGitScopeDoesNotReadUnrelatedBinaryPatchContent(t *testing.T) {
 }
 
 func TestGitScopeNormalizesIndexFlagsWithoutChangingCallerIndex(t *testing.T) {
+	t.Parallel()
 	for _, flag := range []string{"core.ignorestat", "assume-unchanged", "skip-worktree"} {
 		t.Run(flag, func(t *testing.T) {
 			env := repo(t, map[string]string{"app.py": old + "x = 1\n"})
@@ -217,6 +222,7 @@ func TestGitScopeNormalizesIndexFlagsWithoutChangingCallerIndex(t *testing.T) {
 }
 
 func TestGitScopeReconstructedIndexReadsWorktree(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"empty.txt": "", "app.py": old + "x = 1\n"})
 	git(t, env.Dir, "config", "core.ignorestat", "true")
 	write(t, filepath.Join(env.Dir, "new.py"), old)
@@ -226,6 +232,7 @@ func TestGitScopeReconstructedIndexReadsWorktree(t *testing.T) {
 }
 
 func TestGitScopeBinaryTransitions(t *testing.T) {
+	t.Parallel()
 	lateNUL := strings.Repeat("# padding\n", 900) + "\x00" + old
 	nul := skippedText("app.py", "it contains NUL bytes")
 	for _, tc := range []struct {
@@ -263,6 +270,7 @@ func TestGitScopeBinaryTransitions(t *testing.T) {
 }
 
 func TestGitScopeNewBinaryWithLateNULIsSkipped(t *testing.T) {
+	t.Parallel()
 	env := repo(t, nil)
 	write(t, filepath.Join(env.Dir, "new.py"), strings.Repeat("# padding\n", 900)+"\x00"+old)
 	want := skippedText("new.py", "it contains NUL bytes")
@@ -280,6 +288,7 @@ func TestGitScopeNewBinaryWithLateNULIsSkipped(t *testing.T) {
 }
 
 func TestGitNULFileIsNamedAndOtherFindingsStay(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"ok.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "ok.py"), "x = 1\ndef g(b=[]): pass\n")
 	write(t, filepath.Join(env.Dir, "legacy.py"), "# coding: latin-1\nx = \"\xe9\x00\"\n")
@@ -292,6 +301,7 @@ func TestGitNULFileIsNamedAndOtherFindingsStay(t *testing.T) {
 }
 
 func TestGitScopeBinaryToTextRenameJudgesOnlyEditedLines(t *testing.T) {
+	t.Parallel()
 	body := strings.Repeat("x = 1\n", 10) + old
 	env := repo(t, map[string]string{"old.py": body + "data = '\x00'\n"})
 	if err := os.Rename(filepath.Join(env.Dir, "old.py"), filepath.Join(env.Dir, "new file.py")); err != nil {
@@ -307,6 +317,7 @@ func TestGitScopeBinaryToTextRenameJudgesOnlyEditedLines(t *testing.T) {
 }
 
 func TestGitScopeIgnoresContextSettings(t *testing.T) {
+	t.Parallel()
 	for _, setting := range []string{"inter-hunk", "environment", "both"} {
 		t.Run(setting, func(t *testing.T) {
 			env := repo(t, map[string]string{"app.py": "x = 1\n" + old + "y = 1\n"})
@@ -323,6 +334,7 @@ func TestGitScopeIgnoresContextSettings(t *testing.T) {
 }
 
 func TestGitScopeIgnoresCallerGitEnvironment(t *testing.T) {
+	t.Parallel()
 	for _, v := range []map[string]string{
 		{"GIT_LITERAL_PATHSPECS": "1"},
 		{"GIT_GLOB_PATHSPECS": "0"},
@@ -345,6 +357,7 @@ func TestGitScopeIgnoresCallerGitEnvironment(t *testing.T) {
 }
 
 func TestGitScopePinsPathPrefixes(t *testing.T) {
+	t.Parallel()
 	for _, setting := range [][2]string{{"diff.noprefix", "true"}, {"diff.mnemonicPrefix", "true"}, {"diff.dstPrefix", "custom/"}} {
 		t.Run(setting[0], func(t *testing.T) {
 			env := repo(t, map[string]string{"app.py": "x = 1\n", "b/app.py": "x = 1\n"})
@@ -356,6 +369,7 @@ func TestGitScopePinsPathPrefixes(t *testing.T) {
 }
 
 func TestGitScopeUnstagedRenames(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{"old.py", "old.txt"} {
 		t.Run(source, func(t *testing.T) {
 			body := "import os\nimport sys\nx = 1\ny = 2\n" + old
@@ -393,6 +407,7 @@ func TestGitScopeUnstagedRenames(t *testing.T) {
 }
 
 func TestGitScopeHunkContentCannotChangePaths(t *testing.T) {
+	t.Parallel()
 	for _, content := range []string{"++ x\n", "text = '''\n++ fake.py\n'''\n"} {
 		t.Run(content, func(t *testing.T) {
 			body := "x = 1\ny = 2\nz = 3\n"
@@ -406,6 +421,7 @@ func TestGitScopeHunkContentCannotChangePaths(t *testing.T) {
 }
 
 func TestGitScopeUnreadableUntrackedFileIsRefused(t *testing.T) {
+	t.Parallel()
 	env := repo(t, nil)
 	file := filepath.Join(env.Dir, "new.py")
 	write(t, file, old)
@@ -423,6 +439,7 @@ func TestGitScopeUnreadableUntrackedFileIsRefused(t *testing.T) {
 }
 
 func TestGitScopeEmptyUntrackedFileTouchesNothing(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"legacy.py": old})
 	write(t, filepath.Join(env.Dir, "empty.py"), "")
 	expect(t, against(t, env, "main"), 0, "")
@@ -437,6 +454,7 @@ func TestGitScopeTemporaryIndexFailureIsRefused(t *testing.T) {
 }
 
 func TestGitScopeSymlinksTouchNothing(t *testing.T) {
+	t.Parallel()
 	for _, transition := range []bool{false, true} {
 		t.Run(fmt.Sprint(transition), func(t *testing.T) {
 			files := map[string]string{"legacy.py": old}
@@ -463,6 +481,7 @@ func TestGitScopeSymlinksTouchNothing(t *testing.T) {
 }
 
 func TestSkippedSymlinkIsNamedInTheSummary(t *testing.T) {
+	t.Parallel()
 	for _, target := range []string{"legacy.py", "missing.py"} {
 		t.Run(target, func(t *testing.T) {
 			env := repo(t, map[string]string{"legacy.py": old})
@@ -496,6 +515,7 @@ func TestSkippedSymlinkIsNamedInTheSummary(t *testing.T) {
 }
 
 func TestBaseJudgesCommittedEdits(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": old + "x = 1\n"})
 	expect(t, against(t, env, "main"), 0, "")
 	write(t, filepath.Join(env.Dir, "app.py"), old+"def g(b={}): pass\n")
@@ -504,12 +524,14 @@ func TestBaseJudgesCommittedEdits(t *testing.T) {
 }
 
 func TestBaseNeverFailsUntouchedLines(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": old + "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), old+"x = 2\n")
 	expect(t, against(t, env, "main"), 0, "")
 }
 
 func TestBaseJudgesStagedAndUnstagedChanges(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"a.py": "x = 1\n", "b.py": "y = 1\n"})
 	write(t, filepath.Join(env.Dir, "a.py"), "x = 1\n"+old)
 	git(t, env.Dir, "add", "a.py")
@@ -518,6 +540,7 @@ func TestBaseJudgesStagedAndUnstagedChanges(t *testing.T) {
 }
 
 func TestBaseUsesMergeBase(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	git(t, env.Dir, "checkout", "-q", "main")
 	write(t, filepath.Join(env.Dir, "other.py"), old)
@@ -530,6 +553,7 @@ func TestBaseUsesMergeBase(t *testing.T) {
 }
 
 func TestNewFileTouchesEveryLine(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"keep.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "new.py"), "x = 1\n"+old+"def g(b={}): pass")
 	write(t, filepath.Join(env.Dir, "pkg", "deep.py"), old)
@@ -542,12 +566,14 @@ func TestNewFileTouchesEveryLine(t *testing.T) {
 }
 
 func TestUntrackedIgnoredFilesAreSkipped(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{".gitignore": "ignored.py\n"})
 	write(t, filepath.Join(env.Dir, "ignored.py"), old)
 	expect(t, against(t, env, "main"), 0, "")
 }
 
 func TestDeletionsTouchNothing(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"gone.py": old, "app.py": old + "x = 1\n"})
 	if err := os.Remove(filepath.Join(env.Dir, "gone.py")); err != nil {
 		t.Fatal(err)
@@ -559,6 +585,7 @@ func TestDeletionsTouchNothing(t *testing.T) {
 }
 
 func TestModeChangeTouchesNothing(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": old})
 	if err := os.Chmod(filepath.Join(env.Dir, "app.py"), 0o755); err != nil {
 		t.Fatal(err)
@@ -569,6 +596,7 @@ func TestModeChangeTouchesNothing(t *testing.T) {
 }
 
 func TestPureRenameTouchesNothing(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"old.py": old})
 	git(t, env.Dir, "-c", "diff.renames=false", "mv", "old.py", "new.py")
 	expect(t, against(t, env, "main"), 0, "")
@@ -577,6 +605,7 @@ func TestPureRenameTouchesNothing(t *testing.T) {
 }
 
 func TestRenamedAndEditedFileIsJudgedByItsNewPath(t *testing.T) {
+	t.Parallel()
 	body := "import os\nimport sys\nx = 1\ny = 2\n" + old
 	env := repo(t, map[string]string{"old.py": body})
 	if err := os.Mkdir(filepath.Join(env.Dir, "pkg"), 0o755); err != nil {
@@ -591,6 +620,7 @@ func TestRenamedAndEditedFileIsJudgedByItsNewPath(t *testing.T) {
 }
 
 func TestBinaryPythonFilesWarnAndNonPythonFilesAreSkipped(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"data.py": "\x00\x01", "notes.md": "a\n"})
 	write(t, filepath.Join(env.Dir, "data.py"), "\x00"+old)
 	write(t, filepath.Join(env.Dir, "notes.md"), old)
@@ -611,6 +641,7 @@ func TestBinaryPythonFilesWarnAndNonPythonFilesAreSkipped(t *testing.T) {
 }
 
 func TestPathsWithSpacesAndUnicode(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"keep.py": "x = 1\n"})
 	for _, name := range []string{"my app.py", "é.py", "tab\tname.py"} {
 		write(t, filepath.Join(env.Dir, name), old)
@@ -622,6 +653,7 @@ func TestPathsWithSpacesAndUnicode(t *testing.T) {
 }
 
 func TestRunFromSubdirectoryUsesRelativePaths(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"keep.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "sub", "app.py"), old)
 	write(t, filepath.Join(env.Dir, "top.py"), old)
@@ -633,6 +665,7 @@ func TestRunFromSubdirectoryUsesRelativePaths(t *testing.T) {
 }
 
 func TestChangedWinsOverBase(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": old})
 	res, err := check.Change(context.Background(), env, check.Request{Base: "main", Changed: strings.NewReader("app.py:1\n")})
 	if err != nil {
@@ -642,6 +675,7 @@ func TestChangedWinsOverBase(t *testing.T) {
 }
 
 func TestBaseRefusals(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": old})
 	refused(t, against(t, env, "nope"),
 		"june: error: the base \"nope\" is not a commit in this repository. Fix: fetch it, or pass an existing branch, tag or commit to --base\n")
@@ -666,6 +700,7 @@ func TestBaseRefusals(t *testing.T) {
 }
 
 func TestShallowCloneWithoutMergeBaseIsRefused(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": old})
 	write(t, filepath.Join(env.Dir, "app.py"), old+"x = 1\n")
 	commit(t, env)
@@ -679,6 +714,7 @@ func TestShallowCloneWithoutMergeBaseIsRefused(t *testing.T) {
 }
 
 func TestBaseCancelledContextIsAnError(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": old})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -710,6 +746,7 @@ func clone(t *testing.T, env check.Env, args ...string) check.Env {
 }
 
 func TestBareJuneInfersTheUpstreamBranch(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": old + "x = 1\n"})
 	git(t, env.Dir, "branch", "-q", "--set-upstream-to=main", "topic")
 	write(t, filepath.Join(env.Dir, "app.py"), old+"def g(b={}): pass\n")
@@ -722,6 +759,7 @@ func TestBareJuneInfersTheUpstreamBranch(t *testing.T) {
 }
 
 func TestBareJuneFindsRemoteUpstreamInAClone(t *testing.T) {
+	t.Parallel()
 	origin := repo(t, map[string]string{"app.py": old})
 	env := clone(t, origin)
 	git(t, env.Dir, "checkout", "-q", "-b", "feature", "--track", "origin/main")
@@ -735,6 +773,7 @@ func TestBareJuneFindsRemoteUpstreamInAClone(t *testing.T) {
 }
 
 func TestBareJuneFallsBackToTheRemoteDefaultBranch(t *testing.T) {
+	t.Parallel()
 	origin := repo(t, map[string]string{"app.py": old})
 	env := clone(t, origin)
 	git(t, env.Dir, "checkout", "-q", "-b", "feature", "--no-track", "origin/main")
@@ -748,6 +787,7 @@ func TestBareJuneFallsBackToTheRemoteDefaultBranch(t *testing.T) {
 }
 
 func TestExplicitBaseNamesItsSource(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": old})
 	if got, want := summaryOf(against(t, env, "main")), "june: 0 errors, 0 warnings, 0 opt-outs; checked 0 files, 0 changed lines"+noPython+"; base main (--base)"; got != want {
 		t.Errorf("summary = %q, want %q", got, want)
@@ -755,6 +795,7 @@ func TestExplicitBaseNamesItsSource(t *testing.T) {
 }
 
 func TestUpstreamWinsOverTheRemoteDefaultBranch(t *testing.T) {
+	t.Parallel()
 	origin := repo(t, map[string]string{"app.py": old})
 	git(t, origin.Dir, "branch", "-q", "release", "main")
 	env := clone(t, origin)
@@ -765,6 +806,7 @@ func TestUpstreamWinsOverTheRemoteDefaultBranch(t *testing.T) {
 }
 
 func TestBareJuneWithoutAnyBaseRefusesInsteadOfCheckingEverything(t *testing.T) {
+	t.Parallel()
 	// repo has a violation in a committed file: if the touched set were "every line", this would exit 1.
 	env := repo(t, map[string]string{"app.py": old})
 	refused(t, infer(t, env),
@@ -772,6 +814,7 @@ func TestBareJuneWithoutAnyBaseRefusesInsteadOfCheckingEverything(t *testing.T) 
 }
 
 func TestBareJuneInAShallowCloneIsRefused(t *testing.T) {
+	t.Parallel()
 	origin := repo(t, map[string]string{"app.py": old})
 	write(t, filepath.Join(origin.Dir, "app.py"), old+"x = 1\n")
 	git(t, origin.Dir, "checkout", "-q", "main")
@@ -789,6 +832,7 @@ func TestBareJuneInAShallowCloneIsRefused(t *testing.T) {
 }
 
 func TestBareJuneOutsideAGitRepositoryNamesTheFix(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	env := check.Env{Dir: dir, Vars: map[string]string{"GIT_CEILING_DIRECTORIES": filepath.Dir(dir)}}
 	res := infer(t, env)
@@ -805,6 +849,7 @@ func TestBareJuneWithoutGitNamesTheFix(t *testing.T) {
 }
 
 func TestSuppliedListNeedsNeitherGitNorABase(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": old})
 	expect(t, change(t, env, "app.py:1\n"), 1, "app.py:1:9: "+py012)
 	if got := summaryOf(change(t, env, "app.py:1\n")); strings.Contains(got, "base") {
@@ -813,6 +858,7 @@ func TestSuppliedListNeedsNeitherGitNorABase(t *testing.T) {
 }
 
 func TestDubiousOwnershipNamesGitAndTheSafeDirectoryFix(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "x = 1\n"})
 	env.Vars = dubiousOwnershipEnv()
 	root, err := filepath.EvalSymlinks(env.Dir)
@@ -823,6 +869,7 @@ func TestDubiousOwnershipNamesGitAndTheSafeDirectoryFix(t *testing.T) {
 }
 
 func TestDubiousOwnershipFromASubdirectoryNamesTheRepositoryRoot(t *testing.T) {
+	t.Parallel()
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "it's a repo")
 	if err := os.Mkdir(dir, 0o755); err != nil {
@@ -892,6 +939,7 @@ func assertDubiousOwnershipFix(t *testing.T, res check.Result, root string) {
 }
 
 func TestOtherRevParseFailuresQuoteGitInsteadOfClaimingNoWorkTree(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("not a gitfile\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -906,6 +954,7 @@ func TestOtherRevParseFailuresQuoteGitInsteadOfClaimingNoWorkTree(t *testing.T) 
 }
 
 func TestNonUTF8PythonFilesAreTranscodedOrSkippedLoudly(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"ok.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "ok.py"), "x = 1\ndef f(a=[]): pass\n")
 	write(t, filepath.Join(env.Dir, "pkg", "legacy.py"), "# -*- coding: latin-1 -*-\nx = '\xe9'\ndef g(a=[]): pass\n")
@@ -940,6 +989,7 @@ func ignoringSpace(t *testing.T, env check.Env) check.Result {
 }
 
 func TestIgnoreWhitespaceIndentOnlyEdit(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "def f(a=[]):\n    return a\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), "class C:\n    def f(a=[]):\n        return a\n")
 	commit(t, env)
@@ -955,6 +1005,7 @@ func TestIgnoreWhitespaceIndentOnlyEdit(t *testing.T) {
 }
 
 func TestIgnoreWhitespaceIndentOfContinuedLine(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "def f(x,\n      a=[]):\n    return a\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), "def f(x,\n        a=[]):\n    return a\n")
 	commit(t, env)
@@ -969,6 +1020,7 @@ func TestIgnoreWhitespaceIndentOfContinuedLine(t *testing.T) {
 }
 
 func TestIgnoreWhitespaceWrapAndUnwrapStillBlameTheDefault(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		before string
@@ -1068,6 +1120,7 @@ func lineContaining(t *testing.T, body, fragment string) int {
 }
 
 func TestIgnoreWhitespaceStillFailsARealEditOnTheLine(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "def f(x,\n      a=[]):\n    return a\n"})
 	// The second line changes more than whitespace: a new default value joins the indent change.
 	write(t, filepath.Join(env.Dir, "app.py"), "def f(x,\n        a=[1]):\n    return a\n")
@@ -1080,6 +1133,7 @@ func TestIgnoreWhitespaceStillFailsARealEditOnTheLine(t *testing.T) {
 }
 
 func TestIgnoreWhitespaceCoversUncommittedAndStagedChanges(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"app.py": "def f(x,\n      a=[]):\n    return a\n"})
 	write(t, filepath.Join(env.Dir, "app.py"), "def f(x,\n        a=[]):\n    return a\n")
 	if res := ignoringSpace(t, env); res.Exit != 0 {
@@ -1092,6 +1146,7 @@ func TestIgnoreWhitespaceCoversUncommittedAndStagedChanges(t *testing.T) {
 }
 
 func TestIgnoreWhitespaceDoesNotHideNewFiles(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"keep.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "new.py"), old)
 	if res := ignoringSpace(t, env); res.Exit != 1 {
@@ -1100,6 +1155,7 @@ func TestIgnoreWhitespaceDoesNotHideNewFiles(t *testing.T) {
 }
 
 func TestIgnoreWhitespaceRefusesChangedLines(t *testing.T) {
+	t.Parallel()
 	env := tree(t, map[string]string{"app.py": old})
 	res, err := check.Change(context.Background(), env, check.Request{Changed: strings.NewReader("app.py:1\n"), IgnoreSpace: true})
 	if err != nil {

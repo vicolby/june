@@ -8,8 +8,15 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  # The suite runs with the race detector on Linux and macOS: june shells out to git and
+  # ast-grep, and path and tool behaviour differs between the two.
+  test-matrix:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
@@ -20,7 +27,71 @@ jobs:
       - name: Check ast-grep version
         run: test "$(ast-grep --version)" = "ast-grep $(cat .ast-grep-version)"
       - run: go vet ./...
-      - run: go test ./...
+      - run: go test -race ./...
+      # The binary on a fixture repository, with the variables GitLab sets in a merge request
+      # pipeline. A real GitLab pipeline needs a GitLab runner and project: see COMPATIBILITY.md.
+      - name: Simulated GitLab pipeline on a fixture repository
+        run: |
+          go build -o "$RUNNER_TEMP/june" ./cmd/june
+          JUNE="$RUNNER_TEMP/june" sh testdata/e2e/run.sh gitlab
+
+  # The one check context named "test" that branch protection requires, whatever the matrix is.
+  test:
+    name: test
+    needs: test-matrix
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every matrix leg passed
+        env:
+          RESULT: ${{ needs.test-matrix.result }}
+        run: test "$RESULT" = success
+
+  # june on a real GitHub Actions runner against a fixture repository. The step fails the way a
+  # user's does, and the next job reads the annotations back from the API, so the check covers what
+  # the runner and GitHub do with june's workflow commands and not only what june prints.
+  e2e-github:
+    name: e2e github
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - name: Install pinned ast-grep
+        run: npm install --global "@ast-grep/cli@$(cat .ast-grep-version)"
+      - run: go build -o "$RUNNER_TEMP/june" ./cmd/june
+      - name: june on the fixture repository
+        id: june
+        continue-on-error: true
+        run: JUNE="$RUNNER_TEMP/june" sh testdata/e2e/run.sh github
+      - name: The fixture's error fails the step
+        env:
+          OUTCOME: ${{ steps.june.outcome }}
+          EXIT_CODE: ${{ steps.june.outputs.exit_code }}
+        run: |
+          test "$OUTCOME" = failure
+          test "$EXIT_CODE" = 1
+
+  e2e-github-annotations:
+    name: e2e github annotations
+    needs: e2e-github
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+    steps:
+      - name: The runner turned june's output into an annotation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          job=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
+            --jq '.jobs[] | select(.name == "e2e github") | .id')
+          test -n "$job"
+          gh api "repos/$GITHUB_REPOSITORY/check-runs/$job/annotations" | tee annotations.json
+          jq -e '[.[] | select(.path == "app.py" and .start_line == 2 and .annotation_level == "failure" and .title == "PY012")] | length == 1' annotations.json
 
   lint:
     runs-on: ubuntu-latest

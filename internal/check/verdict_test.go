@@ -92,6 +92,7 @@ func contains(list []string, s string) bool {
 }
 
 func TestEveryVendorReachesTheSameVerdict(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		files map[string]string
@@ -132,6 +133,7 @@ func TestEveryVendorReachesTheSameVerdict(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			clone := scenarioChange(t, tc.files, tc.edit)
 			var first verdictOf
 			for i, v := range vendors {

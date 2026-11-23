@@ -29,6 +29,7 @@ func mv(t *testing.T, env check.Env, from, to string) {
 
 // Exclusion preserves git's original rename pairing.
 func TestExcludedPathsDoNotChangeRenamePairing(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		from, to string
@@ -65,6 +66,7 @@ func TestExcludedPathsDoNotChangeRenamePairing(t *testing.T) {
 }
 
 func TestExcludedEditProducesNoFindingsOnAGitRun(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"vendor/a.py": "x = 1\n", "app.py": "x = 1\n"})
 	write(t, filepath.Join(env.Dir, "vendor", "a.py"), "x = 1\n"+badDefault)
 	write(t, filepath.Join(env.Dir, "app.py"), "x = 1\n"+badDefault)
@@ -79,6 +81,7 @@ func TestExcludedEditProducesNoFindingsOnAGitRun(t *testing.T) {
 
 // Excluded worktree files cannot prevent a verdict, even when git cannot read them.
 func TestExcludedUnreadableGitPath(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"explicit", "inferred", "assume-unchanged", "skip-worktree", "untracked", "subdirectory", "staged", "refs"} {
 		t.Run(mode, func(t *testing.T) {
 			env := repo(t, map[string]string{"app.py": "x = 1\n", "vendor/a.py": "x = 1\n"})
@@ -149,6 +152,7 @@ func TestExcludedUnreadableGitPath(t *testing.T) {
 }
 
 func TestExcludedDeletedPathRemainsARenameSource(t *testing.T) {
+	t.Parallel()
 	env := repo(t, map[string]string{"vendor/old.py": badDefault})
 	if err := os.Rename(filepath.Join(env.Dir, "vendor", "old.py"), filepath.Join(env.Dir, "new.py")); err != nil {
 		t.Fatal(err)
@@ -158,6 +162,7 @@ func TestExcludedDeletedPathRemainsARenameSource(t *testing.T) {
 
 // An excluded exact-match destination must retain its rename source, so fresh.py is all new.
 func TestExcludedDestinationDoesNotHideNewFileViolations(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"local", "staged", "refs"} {
 		t.Run(mode, func(t *testing.T) {
 			env := repo(t, map[string]string{"legacy.py": badDefault})
@@ -180,6 +185,7 @@ func TestExcludedDestinationDoesNotHideNewFileViolations(t *testing.T) {
 
 // Leaf-pattern excludes must not expand into an unbounded list of git arguments.
 func TestExcludedSevenThousandGitPaths(t *testing.T) {
+	t.Parallel()
 	env, _ := manyChanges(t, 7000)
 	write(t, filepath.Join(env.Dir, "app.py"), badDefault)
 	for _, mode := range []string{"local", "staged", "refs"} {
