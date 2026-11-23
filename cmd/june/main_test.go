@@ -1041,3 +1041,117 @@ func TestInitSuggestedCommandVerifiesTheStarterFromASubdirectory(t *testing.T) {
 		t.Fatalf("GitLab flag wrote GitHub config: %v", err)
 	}
 }
+
+func TestNewCancelledDuringDiscoveryWritesNothing(t *testing.T) {
+	root := t.TempDir()
+	init := exec.CommandContext(context.Background(), "git", "init", "-q", "-b", "main", root)
+	if out, err := init.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	sub := filepath.Join(root, "svc")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tools := t.TempDir()
+	marker := filepath.Join(tools, "discovery")
+	if err := os.WriteFile(filepath.Join(tools, "git"), []byte("#!/bin/sh\n: > \"$JUNE_DISCOVERY_MARKER\"\nexec sleep 60\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := tools + string(os.PathListSeparator) + os.Getenv("PATH")
+	t.Setenv("PATH", path)
+	env := check.Env{Dir: sub, Vars: map[string]string{"PATH": path, "JUNE_DISCOVERY_MARKER": marker}}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var out, errOut bytes.Buffer
+	finished := make(chan int, 1)
+	go func() {
+		finished <- run(ctx, []string{"new", "MY001"}, nil, &out, &errOut, env)
+	}()
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		select {
+		case code := <-finished:
+			t.Fatalf("new exited before discovery: %d %q %q", code, out.String(), errOut.String())
+		case <-ctx.Done():
+			t.Fatal("git discovery did not start")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	select {
+	case code := <-finished:
+		if code != 2 || out.Len() != 0 || !strings.Contains(errOut.String(), "june was interrupted") {
+			t.Fatalf("cancelled new = %d %q %q", code, out.String(), errOut.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("new did not stop after cancellation")
+	}
+	for _, dir := range []string{root, sub} {
+		if _, err := os.Stat(filepath.Join(dir, ".june")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("cancelled new wrote under %s: %v", dir, err)
+		}
+	}
+}
+
+func TestInitCleansUpAfterWriteFailure(t *testing.T) {
+	const helperDir = "JUNE_TEST_INIT_FAILED_WRITE_DIR"
+	const helperProvider = "JUNE_TEST_INIT_FAILED_WRITE_PROVIDER"
+	if dir := os.Getenv(helperDir); dir != "" {
+		code, out, errOut := runArgs(t, check.Env{Dir: dir}, "init", "--ci", os.Getenv(helperProvider))
+		if code != 2 || !strings.Contains(out, "cannot be written") || errOut != "" {
+			t.Fatalf("init with a file-size limit = %d %q %q", code, out, errOut)
+		}
+		return
+	}
+	for _, tc := range []struct {
+		name, provider, target string
+		prior                  []string
+	}{
+		{"config", "github", ".june/config.yml", nil},
+		{"github", "github", ".github/workflows/june.yml", []string{".june/config.yml"}},
+		{"gitlab", "gitlab", ".june/gitlab-ci.yml", []string{".june/config.yml"}},
+		{"hook", "github", ".pre-commit-config.yaml", []string{".june/config.yml", ".github/workflows/june.yml"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := check.Env{Dir: t.TempDir()}
+			init := exec.CommandContext(context.Background(), "git", "init", "-q", "-b", "main", env.Dir)
+			if out, err := init.CombinedOutput(); err != nil {
+				t.Fatalf("git init: %v %s", err, out)
+			}
+			if code, out, errOut := runArgs(t, env, "new", "MY001"); code != 0 || errOut != "" {
+				t.Fatalf("new = %d %q %q", code, out, errOut)
+			}
+			for _, rel := range tc.prior {
+				path := filepath.Join(env.Dir, rel)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("keep\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.CommandContext(context.Background(), "sh", "-c", `ulimit -f 0 && exec "$1" -test.run '^TestInitCleansUpAfterWriteFailure$'`, "sh", os.Args[0])
+			cmd.Env = append(os.Environ(), helperDir+"="+env.Dir, helperProvider+"="+tc.provider)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("limited child process: %v %s", err, out)
+			}
+			if _, err := os.Stat(filepath.Join(env.Dir, tc.target)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("failed init left %s: %v", tc.target, err)
+			}
+			for _, rel := range tc.prior {
+				if data, err := os.ReadFile(filepath.Join(env.Dir, rel)); err != nil || string(data) != "keep\n" {
+					t.Fatalf("init changed existing %s: %q, %v", rel, data, err)
+				}
+			}
+			code, out, errOut := runArgs(t, env, "init", "--ci", tc.provider)
+			if code != 0 || errOut != "" || !strings.Contains(out, "created "+tc.target+"\n") {
+				t.Fatalf("retry = %d %q %q", code, out, errOut)
+			}
+			if info, err := os.Stat(filepath.Join(env.Dir, tc.target)); err != nil || info.Size() == 0 {
+				t.Fatalf("retry did not populate %s: %v", tc.target, err)
+			}
+		})
+	}
+}

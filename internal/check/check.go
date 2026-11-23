@@ -305,6 +305,9 @@ func New(ctx context.Context, env Env, dirs []string, id string) (Result, error)
 	}
 	req := Request{Format: diag.Text}
 	proj, bad := findProject(ctx, env)
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
 	if bad != nil {
 		return refuse(req, *bad), nil
 	}
@@ -316,6 +319,9 @@ func New(ctx context.Context, env Env, dirs []string, id string) (Result, error)
 		return refuse(req, "june new writes into one rules directory, and "+strconv.Itoa(len(dirs))+" were given. Fix: pass --rules once"), nil
 	}
 	dir := dirs[0]
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
 	made, fault := rules.Scaffold(resolve(env.Dir, dir), id)
 	if fault != nil {
 		return refuseWith(req, faultDiagnostics(env.Dir, []string{dir}, []rules.Fault{*fault})...), nil

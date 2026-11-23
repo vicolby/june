@@ -1380,3 +1380,20 @@ func TestNewDefaultsToTheJuneRulesDirectory(t *testing.T) {
 		})
 	}
 }
+
+func TestNewCancelledContextDoesNotWrite(t *testing.T) {
+	for _, dirs := range [][]string{nil, {""}, {"explicit"}} {
+		t.Run(fmt.Sprint(dirs), func(t *testing.T) {
+			env := check.Env{Dir: t.TempDir()}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if _, err := check.New(ctx, env, dirs, "MY001"); !errors.Is(err, context.Canceled) {
+				t.Fatalf("New error = %v, want context.Canceled", err)
+			}
+			entries, err := os.ReadDir(env.Dir)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("cancelled New changed the directory: %v, %v", entries, err)
+			}
+		})
+	}
+}

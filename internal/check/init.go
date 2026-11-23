@@ -177,5 +177,8 @@ func writeFile(path string, data []byte) error {
 	if cerr := f.Close(); werr == nil {
 		werr = cerr
 	}
+	if werr != nil {
+		_ = os.Remove(path)
+	}
 	return werr
 }
