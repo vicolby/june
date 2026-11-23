@@ -5,10 +5,34 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// verificationPath exposes installer utilities without any host-provided verifiers.
+func verificationPath(t *testing.T) string {
+	t.Helper()
+	bin := t.TempDir()
+	hash := "shasum"
+	if _, err := exec.LookPath("sha256sum"); err == nil {
+		hash = "sha256sum"
+	}
+	for _, name := range []string{
+		"awk", "chmod", "cp", "curl", "cut", "grep", "gzip", "id",
+		"mkdir", "mktemp", "rm", "sh", "tar", "uname", hash,
+	} {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(path, filepath.Join(bin, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return bin
+}
 
 func TestInstallVerifiedRelease(t *testing.T) {
 	const identity = "https://github.com/vicolby/june/.github/workflows/release.yml@refs/tags/v0.2.0"
@@ -78,7 +102,7 @@ func TestInstallVerifiedRelease(t *testing.T) {
 				mux.HandleFunc("/tag/v0.2.0", func(http.ResponseWriter, *http.Request) {})
 				srv := httptest.NewServer(mux)
 				defer srv.Close()
-				bin, dir := t.TempDir(), t.TempDir()
+				bin, dir := verificationPath(t), t.TempDir()
 				verifier := `#!/bin/sh
 set -eu
 [ "$VERIFY_ERROR" = false ] || exit 1
@@ -106,7 +130,7 @@ printf '%s\n' "$VERIFIED_SUBJECTS"
 					t.Fatal(err)
 				}
 				r := runInstall(t,
-					"PATH="+bin+":/usr/bin:/bin", "JUNE_RELEASES_URL="+srv.URL,
+					"PATH="+bin, "JUNE_RELEASES_URL="+srv.URL,
 					"JUNE_INSTALL_DIR="+dir, "JUNE_VERSION="+tc.version, "JUNE_OS="+tc.os, "JUNE_ARCH="+tc.arch,
 					"JUNE_VERIFY=1", "JUNE_VERIFY_REPO=attacker/june", "SIGNED_REPO="+tc.signedRepo,
 					"SIGNED_IDENTITY="+tc.signedIdentity, "VERIFIED_SUBJECTS="+tc.subjects,
@@ -135,7 +159,7 @@ func TestInstallVerificationNeedsVerifier(t *testing.T) {
 	archive := fixtureArchive(t)
 	srv := releaseServer(t, archive, sum(archive))
 	dir := t.TempDir()
-	r := runInstall(t, "JUNE_RELEASES_URL="+srv.URL, "JUNE_INSTALL_DIR="+dir, "JUNE_VERSION=0.2.0", "JUNE_VERIFY=1")
+	r := runInstall(t, "PATH="+verificationPath(t), "JUNE_RELEASES_URL="+srv.URL, "JUNE_INSTALL_DIR="+dir, "JUNE_VERSION=0.2.0", "JUNE_VERIFY=1")
 	if r.err == nil || !strings.Contains(r.stderr, "JUNE_VERIFY=1 needs gh or cosign on PATH") {
 		t.Fatalf("missing verifier: %v\n%s\n%s", r.err, r.stdout, r.stderr)
 	}
