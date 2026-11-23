@@ -107,10 +107,10 @@ june --help | -h
 | `--ignore-whitespace` | Do not count a line as touched when only its whitespace changed, like `git diff -w`. Strict by default. Not valid with `--changed-lines`. |
 | `--help`, `-h` | Print usage and flags to stdout and exit 0. |
 
-Use a full-history git checkout. With Homebrew, the installed binary is under `brew --prefix june`:
+Use a full-history git checkout.
 
 ```sh
-"$(brew --prefix june)/bin/june" --rules path/to/rules --base main
+june --rules path/to/rules --base main
 june src/api tests/test_api.py   # only those paths
 ```
 
