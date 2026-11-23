@@ -77,7 +77,7 @@ func change(t *testing.T, env check.Env, list string) check.Result {
 	return res
 }
 
-var summaryLine = regexp.MustCompile(`^june: \d+ errors?, \d+ warnings?, \d+ opt-outs?; checked \d+ files?, \d+ changed lines?(; \d+ files? skipped, not readable as text)?(; \d+ changed \.py paths? skipped[^;]*)*(; note: [^;]*)?(; base \S+ \([a-z -]+\))?(; \d+ files? excluded)?\n$`)
+var summaryLine = regexp.MustCompile(`^june: \d+ errors?, \d+ warnings?, \d+ opt-outs?; checked \d+ files?, \d+ changed lines?(; \d+ files? skipped, not readable as text)?(; \d+ changed \.py paths? skipped[^;]*)*(; note: [^;]*)?(; base \S+ \([a-z. /-]+\))?(; \d+ files? excluded)?\n$`)
 
 // skippedText is the warning june prints when a Python file is left out of the scan.
 func skippedText(file, reason string) string {
@@ -275,7 +275,7 @@ func TestRefusals(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\n"})
 			if tt.path != "" {
-				t.Setenv("PATH", t.TempDir())
+				t.Setenv("PATH", gitOnlyPath(t))
 			}
 			req := check.Request{}
 			if tt.rules != "" {
@@ -1071,7 +1071,7 @@ func TestLegacyDoesNotMaskRefusals(t *testing.T) {
 // An ast-grep below the floor is refused by verify and by a run, with the same fix, before any scan.
 func TestOldASTGrepIsRefused(t *testing.T) {
 	env := tree(t, map[string]string{"app.py": "def f(a=[]): pass\n"})
-	bin := t.TempDir()
+	bin := gitOnlyPath(t)
 	script := filepath.Join(bin, "ast-grep")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'ast-grep 0.40.0'\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -1312,7 +1312,7 @@ func TestVerifyJSONNamesTheFailingExamplesFileAndRule(t *testing.T) {
 }
 
 func TestMissingAstGrepIsNotAttributedToARulesDirectory(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
+	t.Setenv("PATH", gitOnlyPath(t))
 	env := tree(t, nil)
 	for _, f := range []diag.Format{diag.Text, diag.JSON} {
 		res, err := check.Verify(context.Background(), env, check.VerifyRequest{Format: f})
@@ -1335,7 +1335,7 @@ func TestFileAsRulesDirectoryIsSaidSo(t *testing.T) {
 func TestNewWritesRuleThatVerifiesAndNeverOverwrites(t *testing.T) {
 	t.Parallel()
 	env := tree(t, nil)
-	res, err := check.New(env, []string{"mine"}, "MY001")
+	res, err := check.New(context.Background(), env, []string{"mine"}, "MY001")
 	want := "created mine/MY001.yml\ncreated mine/rule-tests/MY001-test.yml\nnext: edit the rule and its examples, then run june verify --rules 'mine' --rule MY001\n"
 	if err != nil || res.Exit != 0 || string(res.Out) != want {
 		t.Fatalf("New = %d %q, %v, want %q", res.Exit, res.Out, err, want)
@@ -1343,11 +1343,11 @@ func TestNewWritesRuleThatVerifiesAndNeverOverwrites(t *testing.T) {
 	if v, err := check.Verify(context.Background(), env, check.VerifyRequest{Rules: []string{"mine"}, Rule: "MY001"}); err != nil || v.Exit != 0 {
 		t.Fatalf("the scaffold does not verify: %d %q, %v", v.Exit, v.Out, err)
 	}
-	again, err := check.New(env, []string{"mine"}, "MY001")
+	again, err := check.New(context.Background(), env, []string{"mine"}, "MY001")
 	if err != nil || again.Exit != 2 || !strings.Contains(string(again.Out), "mine/MY001.yml: the file already exists") {
 		t.Errorf("second New = %d %q, %v, want a refusal", again.Exit, again.Out, err)
 	}
-	dir, err := check.New(env, []string{"a", "b"}, "MY002")
+	dir, err := check.New(context.Background(), env, []string{"a", "b"}, "MY002")
 	if err != nil || dir.Exit != 2 || !strings.Contains(string(dir.Out), "one rules directory") {
 		t.Errorf("New with two directories = %d %q, %v, want a refusal", dir.Exit, dir.Out, err)
 	}
@@ -1361,7 +1361,7 @@ func TestNewDefaultsToTheJuneRulesDirectory(t *testing.T) {
 	for _, dirs := range [][]string{nil, {""}, {".june/rules"}} {
 		t.Run(fmt.Sprint(dirs), func(t *testing.T) {
 			env := check.Env{Dir: t.TempDir()}
-			res, err := check.New(env, dirs, "MY001")
+			res, err := check.New(context.Background(), env, dirs, "MY001")
 			want := "created .june/rules/MY001.yml\ncreated .june/rules/rule-tests/MY001-test.yml\nnext: edit the rule and its examples, then run june verify --rules '.june/rules' --rule MY001\n"
 			if err != nil || res.Exit != 0 || string(res.Out) != want {
 				t.Fatalf("New = %d %q, %v, want %q", res.Exit, res.Out, err, want)
@@ -1374,9 +1374,39 @@ func TestNewDefaultsToTheJuneRulesDirectory(t *testing.T) {
 			if v, err := check.Verify(context.Background(), env, check.VerifyRequest{Rules: dirs, Rule: "MY001"}); err != nil || v.Exit != 0 {
 				t.Errorf("verify of the default directory = %d %q, %v", v.Exit, v.Out, err)
 			}
-			if again, err := check.New(env, dirs, "MY001"); err != nil || again.Exit != 2 || !strings.Contains(string(again.Out), ".june/rules/MY001.yml: the file already exists") {
+			if again, err := check.New(context.Background(), env, dirs, "MY001"); err != nil || again.Exit != 2 || !strings.Contains(string(again.Out), ".june/rules/MY001.yml: the file already exists") {
 				t.Errorf("second New = %d %q, %v, want the existing default rule refused", again.Exit, again.Out, err)
 			}
 		})
 	}
+}
+
+func TestNewCancelledContextDoesNotWrite(t *testing.T) {
+	for _, dirs := range [][]string{nil, {""}, {"explicit"}} {
+		t.Run(fmt.Sprint(dirs), func(t *testing.T) {
+			env := check.Env{Dir: t.TempDir()}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if _, err := check.New(ctx, env, dirs, "MY001"); !errors.Is(err, context.Canceled) {
+				t.Fatalf("New error = %v, want context.Canceled", err)
+			}
+			entries, err := os.ReadDir(env.Dir)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("cancelled New changed the directory: %v, %v", entries, err)
+			}
+		})
+	}
+}
+
+func gitOnlyPath(t *testing.T) string {
+	t.Helper()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.Symlink(git, filepath.Join(dir, "git")); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

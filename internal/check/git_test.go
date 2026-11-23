@@ -845,10 +845,10 @@ func TestBareJuneWithoutGitNamesTheFix(t *testing.T) {
 	env := repo(t, map[string]string{"app.py": old})
 	t.Setenv("PATH", t.TempDir())
 	refused(t, infer(t, env),
-		"june: error: git was not found, so the touched lines cannot be found. Fix: install git and put it on PATH, or pass --changed-lines FILE\n")
+		"june: error: git was not found, so the repository root cannot be found. Fix: install git and put it on PATH\n")
 }
 
-func TestSuppliedListNeedsNeitherGitNorABase(t *testing.T) {
+func TestSuppliedListNeedsNeitherARepositoryNorABase(t *testing.T) {
 	t.Parallel()
 	env := tree(t, map[string]string{"app.py": old})
 	expect(t, change(t, env, "app.py:1\n"), 1, "app.py:1:9: "+py012)

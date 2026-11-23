@@ -5,8 +5,8 @@ inputs:
     description: june release to install, X.Y.Z. Default is the release the action is pinned to (uses vicolby/june@vX.Y.Z); required for any other ref.
     default: ""
   rules:
-    description: Rules directory.
-    default: .june/rules
+    description: Rules directory. Omit to use the repository configuration.
+    default: ""
   base:
     description: Git ref to judge changes against. Default is the pull request base, or the merge group base in a merge queue.
     default: ""
@@ -43,8 +43,11 @@ runs:
         INPUT_BASE: ${{ inputs.base }}
       run: |
         set -eu
-        args=(--rules "$INPUT_RULES")
-        if [ -n "$INPUT_BASE" ]; then
-          args+=(--base "$INPUT_BASE")
+        set --
+        if [ -n "$INPUT_RULES" ]; then
+          set -- "$@" --rules "$INPUT_RULES"
         fi
-        june "${args[@]}"
+        if [ -n "$INPUT_BASE" ]; then
+          set -- "$@" --base "$INPUT_BASE"
+        fi
+        june "$@"

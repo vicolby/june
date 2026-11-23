@@ -79,6 +79,50 @@ func TestExcludedEditProducesNoFindingsOnAGitRun(t *testing.T) {
 	}
 }
 
+// A root exclude must cover a sibling of the working directory. Otherwise a
+// repository-wide diff opens that excluded file and refuses.
+func TestConfigExcludeMasksUnreadableSibling(t *testing.T) {
+	t.Parallel()
+	for _, dir := range []string{"svc", "svc/nested"} {
+		t.Run(dir, func(t *testing.T) {
+			env := repo(t, map[string]string{
+				"svc/nested/app.py": "x = 1\n",
+				"vendor/a.py":       "x = 1\n",
+				".june/config.yml":  "exclude: [vendor/**]\n",
+			})
+			file := filepath.Join(env.Dir, "vendor", "a.py")
+			write(t, file, "x = 22\n")
+			write(t, filepath.Join(env.Dir, "svc", "nested", "app.py"), badDefault)
+			if err := os.Chmod(file, 0); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(file, 0o644) })
+			if _, err := os.ReadFile(file); err == nil {
+				t.Skip("permissions do not prevent reads on this platform")
+			}
+			sub := check.Env{Dir: filepath.Join(env.Dir, dir)}
+			index := filepath.Join(env.Dir, ".git", "index")
+			before, err := os.ReadFile(index)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res := against(t, sub, "main")
+			rel := "app.py"
+			if dir == "svc" {
+				rel = "nested/app.py"
+			}
+			expect(t, res, 1, rel+":1:9: "+py012)
+			if !strings.Contains(summaryOf(res), "1 file excluded") {
+				t.Errorf("summary = %q, want the sibling excluded", summaryOf(res))
+			}
+			after, err := os.ReadFile(index)
+			if err != nil || string(after) != string(before) {
+				t.Fatalf("check changed the caller's index: %v", err)
+			}
+		})
+	}
+}
+
 // Excluded worktree files cannot prevent a verdict, even when git cannot read them.
 func TestExcludedUnreadableGitPath(t *testing.T) {
 	t.Parallel()
@@ -147,6 +191,45 @@ func TestExcludedUnreadableGitPath(t *testing.T) {
 			if err != nil || string(after) != string(before) {
 				t.Fatalf("check changed the caller's index: %v", err)
 			}
+		})
+	}
+}
+
+// A deleted excluded sibling stays a rename source when the check runs elsewhere.
+// A path that only shares a leading directory with the working directory is the same case.
+func TestExcludedSiblingDeletionRemainsARenameSource(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, from, to, dir string
+		files               map[string]string
+	}{
+		{
+			name: "no shared directory",
+			files: map[string]string{
+				"vendor/old.py":    badDefault,
+				"svc/keep.py":      "x = 1\n",
+				".june/config.yml": "exclude: [vendor/**]\n",
+			},
+			from: "vendor/old.py", to: "svc/new.py", dir: "svc",
+		},
+		{
+			name: "shared ancestor",
+			files: map[string]string{
+				"svc/legacy/old.py": badDefault,
+				"svc/pkg/keep.py":   "x = 1\n",
+				".june/config.yml":  "exclude: [svc/legacy/**]\n",
+			},
+			from: "svc/legacy/old.py", to: "svc/pkg/new.py", dir: "svc/pkg",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := repo(t, tt.files)
+			if err := os.Rename(filepath.Join(env.Dir, filepath.FromSlash(tt.from)), filepath.Join(env.Dir, filepath.FromSlash(tt.to))); err != nil {
+				t.Fatal(err)
+			}
+			sub := check.Env{Dir: filepath.Join(env.Dir, tt.dir)}
+			expect(t, against(t, sub, "main"), 0, "")
 		})
 	}
 }

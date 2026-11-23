@@ -44,7 +44,7 @@ var vendors = []vendor{
 // baseSource matches the "; base <ref> (<source>)" clause only on a summary line.
 // The base label is the one intentional non-report difference between environments,
 // because each vendor resolves its base differently. Exit code and findings stay compared exactly.
-var baseSource = regexp.MustCompile(`(?m)^(june: \d+ errors?, \d+ warnings?, \d+ opt-outs?; checked \d+ files?, \d+ changed lines?); base \S+ \([a-z -]+\)`)
+var baseSource = regexp.MustCompile(`(?m)^(june: \d+ errors?, \d+ warnings?, \d+ opt-outs?; checked \d+ files?, \d+ changed lines?); base \S+ \([a-z. /-]+\)`)
 
 func scenarioChange(t *testing.T, files map[string]string, edit map[string]string) check.Env {
 	t.Helper()

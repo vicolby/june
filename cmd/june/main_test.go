@@ -194,7 +194,7 @@ func TestRulesFlag(t *testing.T) {
 }
 
 func TestNoRulesSuppliedAsksForRules(t *testing.T) {
-	want := "june: error: no rules to run: june ships no rules. Fix: supply rules with --rules DIR or put them in .june/rules\n"
+	want := "june: error: no rules to run: june ships no rules. Fix: supply rules with --rules DIR, list them under rules in .june/config.yml, or put them in .june/rules\n"
 	for _, args := range [][]string{{"--changed-lines", "-"}, {"verify"}} {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, "app.py"), []byte("x = 1\n"), 0o644); err != nil {
@@ -940,5 +940,218 @@ func TestHelpListsTheAuthoringCommands(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("help lacks %q", want)
 		}
+	}
+}
+
+func TestPathsFollowFlags(t *testing.T) {
+	env := project(t)
+	if err := os.WriteFile(filepath.Join(env.Dir, "other.py"), []byte("def g(b=[]):\n    pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"--changed-lines", "-", "--format", "text", "app.py"},
+		{"--changed-lines", "-", "--format", "text", "--", "app.py"},
+	} {
+		var out, errOut bytes.Buffer
+		code := run(context.Background(), args, strings.NewReader("app.py:2\nother.py:1\n"), &out, &errOut, env)
+		if code != 1 || !strings.HasPrefix(out.String(), "app.py:2:9: PY012") || strings.Contains(out.String(), "other.py") || !strings.Contains(out.String(), "checked 1 file") {
+			t.Errorf("%v: exit = %d, stdout = %q, stderr = %q", args, code, out.String(), errOut.String())
+		}
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"--changed-lines", "-", "gone.py"}, strings.NewReader("app.py:2\n"), &out, &errOut, env); code != 2 || !strings.Contains(out.String(), `the path "gone.py" does not exist`) {
+		t.Errorf("missing path: exit = %d, stdout = %q", code, out.String())
+	}
+}
+
+func TestInitCommand(t *testing.T) {
+	env := check.Env{Dir: t.TempDir()}
+	cmd := exec.CommandContext(context.Background(), "git", "init", "-q", "-b", "main")
+	cmd.Dir = env.Dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, output)
+	}
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"init"}, strings.NewReader(""), &out, &errOut, env); code != 0 || !strings.Contains(out.String(), "created .june/rules/MY001.yml\n") {
+		t.Fatalf("init: exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
+	}
+	out.Reset()
+	if code := run(context.Background(), []string{"init"}, strings.NewReader(""), &out, &errOut, env); code != 0 || strings.Contains(out.String(), "created") {
+		t.Errorf("second init: exit = %d, stdout = %q", code, out.String())
+	}
+	out.Reset()
+	if code := run(context.Background(), []string{"init", "extra"}, strings.NewReader(""), &out, &errOut, env); code != 2 || !strings.Contains(errOut.String(), `unexpected argument "extra"`) {
+		t.Errorf("init extra: exit = %d, stderr = %q", code, errOut.String())
+	}
+}
+
+func TestFlagsAfterPathsAreRefused(t *testing.T) {
+	code, _, errOut := runArgs(t, project(t), "app.py", "--base", "main")
+	if code != 2 || !strings.Contains(errOut, "flags must precede paths. Use: june [flags] [paths]") {
+		t.Fatalf("exit = %d, stderr = %q", code, errOut)
+	}
+}
+
+func TestInitRejectsForce(t *testing.T) {
+	code, _, errOut := runArgs(t, project(t), "init", "--force")
+	if code != 2 || !strings.Contains(errOut, "flag provided but not defined") {
+		t.Fatalf("exit = %d, stderr = %q", code, errOut)
+	}
+}
+
+func TestInitSuggestedCommandVerifiesTheStarterFromASubdirectory(t *testing.T) {
+	root := t.TempDir()
+	cmd := exec.CommandContext(context.Background(), "git", "init", "-q", "-b", "main")
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "svc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".june"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".june/config.yml"), []byte("rules: [ci-rules]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := check.Env{Dir: filepath.Join(root, "svc")}
+	code, out, errOut := runArgs(t, env, "init", "--ci", "gitlab")
+	if code != 0 || errOut != "" {
+		t.Fatalf("init = %d %q %q", code, out, errOut)
+	}
+	_, command, ok := strings.Cut(out, "then run ")
+	if !ok {
+		t.Fatalf("missing suggested command: %s", out)
+	}
+	cmd = exec.CommandContext(context.Background(), "sh", "-c", "june() { printf '%s\\000' \"$@\"; }; "+command)
+	cmd.Dir = env.Dir
+	parsed, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(strings.TrimSuffix(string(parsed), "\x00"), "\x00")
+	if code, out, errOut := runArgs(t, env, args...); code != 0 || errOut != "" || !strings.Contains(out, "verified 1 rule, 2 examples") {
+		t.Fatalf("suggested verification = %d %q %q", code, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".june/gitlab-ci.yml")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".github/workflows/june.yml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("GitLab flag wrote GitHub config: %v", err)
+	}
+}
+
+func TestNewCancelledDuringDiscoveryWritesNothing(t *testing.T) {
+	root := t.TempDir()
+	init := exec.CommandContext(context.Background(), "git", "init", "-q", "-b", "main", root)
+	if out, err := init.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	sub := filepath.Join(root, "svc")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tools := t.TempDir()
+	marker := filepath.Join(tools, "discovery")
+	if err := os.WriteFile(filepath.Join(tools, "git"), []byte("#!/bin/sh\n: > \"$JUNE_DISCOVERY_MARKER\"\nexec sleep 60\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := tools + string(os.PathListSeparator) + os.Getenv("PATH")
+	t.Setenv("PATH", path)
+	env := check.Env{Dir: sub, Vars: map[string]string{"PATH": path, "JUNE_DISCOVERY_MARKER": marker}}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var out, errOut bytes.Buffer
+	finished := make(chan int, 1)
+	go func() {
+		finished <- run(ctx, []string{"new", "MY001"}, nil, &out, &errOut, env)
+	}()
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		select {
+		case code := <-finished:
+			t.Fatalf("new exited before discovery: %d %q %q", code, out.String(), errOut.String())
+		case <-ctx.Done():
+			t.Fatal("git discovery did not start")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	select {
+	case code := <-finished:
+		if code != 2 || out.Len() != 0 || !strings.Contains(errOut.String(), "june was interrupted") {
+			t.Fatalf("cancelled new = %d %q %q", code, out.String(), errOut.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("new did not stop after cancellation")
+	}
+	for _, dir := range []string{root, sub} {
+		if _, err := os.Stat(filepath.Join(dir, ".june")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("cancelled new wrote under %s: %v", dir, err)
+		}
+	}
+}
+
+func TestInitCleansUpAfterWriteFailure(t *testing.T) {
+	const helperDir = "JUNE_TEST_INIT_FAILED_WRITE_DIR"
+	const helperProvider = "JUNE_TEST_INIT_FAILED_WRITE_PROVIDER"
+	if dir := os.Getenv(helperDir); dir != "" {
+		code, out, errOut := runArgs(t, check.Env{Dir: dir}, "init", "--ci", os.Getenv(helperProvider))
+		if code != 2 || !strings.Contains(out, "cannot be written") || errOut != "" {
+			t.Fatalf("init with a file-size limit = %d %q %q", code, out, errOut)
+		}
+		return
+	}
+	for _, tc := range []struct {
+		name, provider, target string
+		prior                  []string
+	}{
+		{"config", "github", ".june/config.yml", nil},
+		{"github", "github", ".github/workflows/june.yml", []string{".june/config.yml"}},
+		{"gitlab", "gitlab", ".june/gitlab-ci.yml", []string{".june/config.yml"}},
+		{"hook", "github", ".pre-commit-config.yaml", []string{".june/config.yml", ".github/workflows/june.yml"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := check.Env{Dir: t.TempDir()}
+			init := exec.CommandContext(context.Background(), "git", "init", "-q", "-b", "main", env.Dir)
+			if out, err := init.CombinedOutput(); err != nil {
+				t.Fatalf("git init: %v %s", err, out)
+			}
+			if code, out, errOut := runArgs(t, env, "new", "MY001"); code != 0 || errOut != "" {
+				t.Fatalf("new = %d %q %q", code, out, errOut)
+			}
+			for _, rel := range tc.prior {
+				path := filepath.Join(env.Dir, rel)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("keep\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.CommandContext(context.Background(), "sh", "-c", `ulimit -f 0 && exec "$1" -test.run '^TestInitCleansUpAfterWriteFailure$'`, "sh", os.Args[0])
+			cmd.Env = append(os.Environ(), helperDir+"="+env.Dir, helperProvider+"="+tc.provider)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("limited child process: %v %s", err, out)
+			}
+			if _, err := os.Stat(filepath.Join(env.Dir, tc.target)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("failed init left %s: %v", tc.target, err)
+			}
+			for _, rel := range tc.prior {
+				if data, err := os.ReadFile(filepath.Join(env.Dir, rel)); err != nil || string(data) != "keep\n" {
+					t.Fatalf("init changed existing %s: %q, %v", rel, data, err)
+				}
+			}
+			code, out, errOut := runArgs(t, env, "init", "--ci", tc.provider)
+			if code != 0 || errOut != "" || !strings.Contains(out, "created "+tc.target+"\n") {
+				t.Fatalf("retry = %d %q %q", code, out, errOut)
+			}
+			if info, err := os.Stat(filepath.Join(env.Dir, tc.target)); err != nil || info.Size() == 0 {
+				t.Fatalf("retry did not populate %s: %v", tc.target, err)
+			}
+		})
 	}
 }

@@ -33,6 +33,7 @@ const fullDepth = "clone the full history, with GIT_DEPTH: 0 in the GitLab CI jo
 
 const (
 	sourceFlag     = "--base"
+	sourceConfig   = "base in .june/config.yml"
 	sourceMR       = "merge request diff base"
 	sourceUpstream = "upstream branch"
 	sourceDefault  = "remote default branch"
@@ -121,7 +122,7 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 		msg := fmt.Sprintf(format, a...)
 		return nil, scope{}, &msg, nil
 	}
-	// A caller-resolved GitLab base must still yield to pre-commit refs or a GitHub event base.
+	// A caller-resolved GitLab or config base must still yield to pre-commit refs or a GitHub event base.
 	if source != sourceFlag {
 		from, to := env.Vars["PRE_COMMIT_FROM_REF"], env.Vars["PRE_COMMIT_TO_REF"]
 		if from != "" && to != "" {
@@ -263,7 +264,8 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 			return nil, scope{}, bad, err
 		}
 		// Preserve the caller's index unless untracked files, flags or exclusions need a private overlay.
-		if len(fresh) > 0 || len(flagged) > 0 || len(skip.globs) > 0 {
+		hasGlobs := len(skip.globs)+len(skip.rootGlobs) > 0
+		if len(fresh) > 0 || len(flagged) > 0 || hasGlobs {
 			dir, err := os.MkdirTemp("", "june-git-")
 			if err != nil {
 				return refuse("a temporary git index cannot be created. Fix: check temporary directory permissions and run june again")
@@ -273,7 +275,7 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 			if env, bad, err = overlayIndex(ctx, env, dir, prefix, fresh, flagged); bad != nil || err != nil {
 				return nil, scope{}, bad, err
 			}
-			if len(skip.globs) > 0 {
+			if hasGlobs {
 				if err := maskExcluded(ctx, env, skip, excluded); err != nil {
 					if ctx.Err() != nil {
 						return nil, scope{}, nil, ctx.Err()
@@ -331,7 +333,7 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 	}
 	parsed := touchedSet{}
 	if len(want) > 0 {
-		// Without exclusions, one Python patch suffices. Exclusions use the bounded pair batches
+		// Without exclusions or positional narrowing, one Python patch suffices. Filtered runs use the bounded pair batches
 		// below so discarded destinations and unrelated deletions never enter a content patch.
 		args := append(append([]string{"-c", "core.quotepath=off", "diff"}, cached...), patchFlags...)
 		if ignoreSpace {
@@ -339,7 +341,7 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 		}
 		args = append(append(args, strings.TrimSpace(mb)), tip...)
 		got := map[string]string{}
-		if len(skip.globs) == 0 {
+		if !skip.active() {
 			patch, err := git(ctx, env, "", append(args, "--", pythonPathspec)...)
 			if err != nil {
 				if ctx.Err() != nil {
@@ -352,7 +354,7 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 		}
 		var redo []rename
 		for destination, o := range want {
-			if len(skip.globs) == 0 && got[destination] == o.from {
+			if !skip.active() && got[destination] == o.from {
 				continue
 			}
 			delete(parsed, destination)
@@ -530,7 +532,7 @@ func untrackedPython(ctx context.Context, env Env, skip *excluder, excluded touc
 		if path.Ext(name) != ".py" {
 			continue
 		}
-		if skip.excluded(name) {
+		if skip.matched(name) {
 			excluded[name] = nil
 			continue
 		}
@@ -540,7 +542,7 @@ func untrackedPython(ctx context.Context, env Env, skip *excluder, excluded touc
 		}
 		if info.Mode().IsRegular() {
 			names = append(names, name)
-		} else {
+		} else if !skip.outside(name) {
 			notRegular++
 		}
 	}
@@ -551,24 +553,27 @@ func untrackedPython(ctx context.Context, env Env, skip *excluder, excluded touc
 // excluded worktree files. env must point at a private index. Plumbing diff-files without rename
 // detection reports stat changes without comparing content; stdin keeps the index update bounded.
 func maskExcluded(ctx context.Context, env Env, skip *excluder, excluded touchedSet) error {
-	changed, err := git(ctx, env, "", "diff-files", "--raw", "--relative", "--no-renames", "-z", "--")
+	changed, err := git(ctx, env, "", "diff-files", "--raw", "--no-renames", "-z", "--")
 	if err != nil {
 		return err
 	}
-	post := parseRaw(changed)
+	post := map[string]postBlob{}
+	for name, blob := range parseRaw(changed) {
+		post[skip.fromRoot(name)] = blob
+	}
 	for name := range post {
-		if path.Ext(name) == ".py" && skip.excluded(name) {
+		if path.Ext(name) == ".py" && skip.matched(name) {
 			excluded[name] = nil
 		}
 	}
-	listing, err := git(ctx, env, "", "ls-files", "-z", "--")
+	listing, err := git(ctx, env, "", "ls-files", "-z", "--", ":/")
 	if err != nil {
 		return err
 	}
 	var names strings.Builder
 	for _, name := range strings.Split(listing, "\x00") {
 		// A deletion has no worktree content to hide, and must remain a rename source.
-		if name != "" && skip.excluded(name) && post[name].mode != "000000" {
+		if name != "" && skip.matched(name) && post[name].mode != "000000" {
 			names.WriteString(name)
 			names.WriteByte(0)
 		}
@@ -607,7 +612,7 @@ func indexFlags(ctx context.Context, env Env, prefix string, skip *excluder) (ab
 			continue
 		}
 		_, name, _ := strings.Cut(entry, "\t")
-		if skip.excluded(name) {
+		if skip.matched(name) {
 			continue
 		}
 		if tag == 'S' || tag == 's' {

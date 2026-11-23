@@ -19,16 +19,16 @@ Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`. Test
 
 ## Invariants
 
-- Path exclusions follow the [exclusion contract](README.md#excluding-paths).
+- Path exclusions follow the [exclusion contract](README.md#excluding-paths); positional narrowing and project defaults follow [Usage](README.md#usage) and [Config file](README.md#config-file).
 - Exit 1 if and only if an error-severity match is anchored on a touched line with no valid opt-out. Warnings, legacy matches and opt-outs never change the exit code.
 - Exit 2 means june could not give a verdict (no base, shallow clone, bad rules, missing ast-grep, bad list, unwritable report). Output reads `june: error: <cause>. Fix: <instruction>`.
 - A touched line is one added or edited in the post-image. With `--ignore-whitespace`, a line whose only change is whitespace (`git diff -w`) is not touched; a line with any other edit still is. Pure deletions, mode changes and pure renames touch nothing. A new file touches every line, including an untracked file in a local run.
 - A match is judged on its first line only, so rules match the smallest wrong node.
 - Source files follow the [source-encoding contract](README.md#source-encoding).
 - Coverage reporting follows the [coverage-notes contract](README.md#coverage-notes).
-- If the touched set is unknowable, the exit is 2, never 0 and never every line. A GitHub push with no base and no changed-lines list is unknowable even when the branch tracks its remote.
+- If the touched set is unknowable, the exit is 2, never 0 and never every line. GitHub push base requirements follow the [CI contract](README.md#github-actions).
 - Opt-out syntax, suppression limits and visibility follow the [opt-out contract](README.md#opt-outs).
-- The same input yields the same exit code and the same findings; CI event context is part of that input (see [GitHub Actions](README.md#github-actions)). Each format renders them differently: text, JSON and GitLab paths stay relative to the working directory, GitHub annotations and SARIF use repository-root paths when that root is known. The summary's base label names the base and where it came from.
+- The same input yields the same exit code and the same findings; CI event context is part of that input (see [GitHub Actions](README.md#github-actions)). Output paths follow [Usage](README.md#usage). The summary's base label names the base and where it came from.
 - Output is sorted, with no clock and no ANSI. The safe.directory fix may name the repository path.
 - A rule fault anywhere refuses the whole run, never a partial rule set. An unsupported or unreadable ast-grep version is a rule fault.
 - Nothing is fetched. The check path uses no network, model or clock.

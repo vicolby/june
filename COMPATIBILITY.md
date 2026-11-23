@@ -59,7 +59,7 @@ The install script reads `JUNE_VERSION`, `JUNE_INSTALL_DIR`, `JUNE_OS`, `JUNE_AR
 - `.june/rules/*.yml` or `*.yaml`: one ast-grep rule per file directly in the directory, `language: python`. The filename need not match the rule id. `--rules DIR` replaces the directory and may repeat.
 - `.june/rules/rule-tests/<id>-test.yml`: one YAML document with the rule's exact `id` and non-empty `valid` and `invalid` lists of source snippets. Examples are checked before any verdict; see [Writing rules](docs/writing-rules.md#anatomy-of-a-rule).
 - `.june/rules/utils/*.yml` or `*.yaml`: shared utility rules, used with `matches`.
-- `.june/config.yml`: path exclusions, following the [exclusion contract](README.md#excluding-paths).
+- `.june/config.yml`: optional `rules`, `base` and `exclude` defaults, resolved from the repository root, following the [config file](README.md#config-file) and the [exclusion contract](README.md#excluding-paths). Unknown keys are refused. `june init [--ci github|gitlab]` writes the starter layout and one CI snippet, create-only; see [Setting up](README.md#setting-up). Positional paths (`june [paths]`) narrow a check to files and directories relative to the working directory, spelled as the repository spells them.
 
 The supported rule keys (`usedKeys`) and example fields (`exampleDoc`) are defined in [internal/rules/rules.go](internal/rules/rules.go). Their names and meanings are stable. Rule keys june does not use are refused by name; support for additional keys can be added in a minor release. With the same ast-grep version, a rule set that verifies keeps verifying within a major version.
 

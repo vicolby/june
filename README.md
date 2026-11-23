@@ -34,7 +34,7 @@ Pick ruff for the standard Python lint rules, and Semgrep for a large shared rul
 
 ## Install
 
-june needs `ast-grep` 0.51.1 or newer on `PATH`, reporting a numeric `X.Y.Z` release; prerelease and other suffixes are refused. A check or `june verify` with an older or unreadable version exits 2 with the fix. 0.51.3 is the tested version, and `june --version` and a successful `june verify` print the one in use. june ships no rules: you supply your own with `--rules DIR` or in `.june/rules`.
+june needs Git to locate repository defaults, including with `--changed-lines`, `verify` and `new`. It also needs `ast-grep` 0.51.1 or newer on `PATH`, reporting a numeric `X.Y.Z` release; prerelease and other suffixes are refused. A check or `june verify` with an older or unreadable version exits 2 with the fix. 0.51.3 is the tested version, and `june --version` and a successful `june verify` print the one in use. See [Rules](#rules) to supply your own rules.
 
 **Homebrew.** Installs `june` and Homebrew's current `ast-grep`.
 
@@ -85,7 +85,8 @@ The gh command requires a signed subject with the requested archive name and dig
 ## Usage
 
 ```text
-june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--exclude GLOB]... [--base REF | --changed-lines FILE]
+june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--exclude GLOB]... [--base REF | --changed-lines FILE] [PATH]...
+june init [--ci github|gitlab]
 june verify [--rules DIR]... [--rule ID] [--format FORMAT]
 june new [--rules DIR] RULE
 june --version
@@ -94,7 +95,9 @@ june --help | -h
 
 | Flag | Meaning |
 | --- | --- |
-| `--rules DIR` | Rules directory, repeatable for checks and `verify`; `new` takes one. Default: `./.june/rules`. |
+| `PATH` | Narrow the check to these files and directories, relative to the working directory. Paths must match the repository spelling; case and symlinks are not normalized. Paths left out by narrowing are not counted as excluded. An absolute path, a path that does not exist, or a path that lies outside the working directory exits 2. Flags must precede paths; prefix paths starting with `-` with `./`. |
+| `--rules DIR` | Rules directory, relative to the working directory; repeatable for checks and `verify`; `new` takes one. Default: `rules` in `.june/config.yml`, else `.june/rules`. |
+| `--ci PROVIDER` | With `june init`: write `github` (default) or `gitlab` CI configuration. |
 | `--base REF` | Judge lines changed since the merge base of `REF` and `HEAD`. |
 | `--changed-lines FILE` | Judge lines listed in `FILE`, one `path:7` or `path:7-12` per line; `-` reads stdin. |
 | `--format FORMAT` | `text`, `json`, `sarif`, `github` or `gitlab`. Default: `github` under GitHub Actions, `gitlab` under GitLab CI, else `text`. `june verify` takes it too. |
@@ -104,11 +107,20 @@ june --help | -h
 | `--ignore-whitespace` | Do not count a line as touched when only its whitespace changed, like `git diff -w`. Strict by default. Not valid with `--changed-lines`. |
 | `--help`, `-h` | Print usage and flags to stdout and exit 0. |
 
+Use a full-history git checkout.
+
 ```sh
 june --rules path/to/rules --base main
+june src/api tests/test_api.py   # only those paths
 ```
 
-Without `--base` or `--changed-lines`, june infers the base, first hit wins: pre-commit refs, CI event base (see [GitHub Actions](#github-actions) and [GitLab CI](#gitlab-ci)), pre-commit staged diff, upstream branch, remote default branch. The summary names the one used. When the touched lines cannot be determined (a shallow clone, say) june exits 2 and names the fix.
+`.june/rules` and `.june/config.yml` are found at the repository root, so a run from `svc/` uses the same rules as one from the root. Outside git they resolve from the working directory. Finding paths stay relative to the working directory, except GitHub annotations and SARIF, which use repository-root paths when the root is known.
+
+### Setting up
+
+`june init` requires a git repository and sets it up at the root: `.june/rules` with a starter rule from `june new` that passes `june verify`, a commented `.june/config.yml`, one CI snippet and `.pre-commit-config.yaml` for [pre-commit](#pre-commit). By default it writes `.github/workflows/june.yml` using the [GitHub Action](#github-actions). Use `june init --ci gitlab` to write `.june/gitlab-ci.yml` instead, then add `include: [{local: .june/gitlab-ci.yml}]` to `.gitlab-ci.yml`. The snippets pin the june release of the binary that wrote them; a build without a release version writes `X.Y.Z`, to replace. Running it again preserves existing files and rules.
+
+Without `--base` or `--changed-lines`, june infers the base, first hit wins: pre-commit refs, CI event base (see [GitHub Actions](#github-actions) and [GitLab CI](#gitlab-ci)), pre-commit staged diff, config base, upstream branch, remote default branch. The summary names the one used. When the touched lines cannot be determined (a shallow clone, say) june exits 2 and names the fix.
 
 ### Source encoding
 
@@ -126,7 +138,7 @@ Notes and warnings never change the exit code. Coverage notes appear in the summ
 
 ## Rules
 
-june ships no rules: write your own [ast-grep](https://ast-grep.github.io) rules and keep them in `.june/rules`, or pass `--rules DIR`. A run with neither stops with an error that says to supply rules. Only an error fails the check.
+june ships no rules: write your own [ast-grep](https://ast-grep.github.io) rules and select their directories through [`--rules` or repository defaults](#usage). A run with no rules stops with an error that says to supply rules. Only an error fails the check.
 
 Every rule has `valid` and `invalid` examples in `rule-tests/`. A normal run verifies the rules it loads first; run `june verify --rules DIR` in the CI of a repo that keeps its own rules. To write one, start from `june new RULE` and see [Writing rules](docs/writing-rules.md).
 
@@ -153,6 +165,20 @@ Then run `june verify`. The message must say what to do. Do not use the keys fix
 
 A human still reviews the rule and its examples: a verified rule matches its examples, not necessarily the guideline. The loop with real output is in [Writing rules](docs/writing-rules.md#worked-example-a-model-drafts-a-rule).
 
+### Config file
+
+`.june/config.yml` holds a run's defaults. Every key is optional; unknown or repeated keys and extra YAML documents are errors:
+
+```yaml
+rules:            # rules directories, default .june/rules; --rules replaces them
+  - .june/rules
+base: origin/main # used when no --base, CI event, merge request or pre-commit scope names a base
+exclude:          # see below
+  - vendor
+```
+
+`rules` directories are relative to the directory that holds `.june`. An empty entry means `.june/rules`; directories that name the same location count once. `june new` requires one effective directory; with multiple configured directories, choose one with `--rules DIR`. A flag wins over the config: `--rules` replaces `rules`, `--base` replaces `base`, and `--changed-lines` makes `base` moot; `--exclude` adds to `exclude` (see [Excluding paths](#excluding-paths)).
+
 ### Excluding paths
 
 Exclude generated code, vendored trees and fixtures by path, in `.june/config.yml` or with `--exclude`:
@@ -164,7 +190,7 @@ exclude:
   - migrations/**
 ```
 
-Globs are relative to the working directory: `*` stays within one path segment, `**` spans directories, a glob that matches a directory excludes everything under it, and whitespace in a glob is literal. The only config key is `exclude`, a list of globs; unknown or repeated keys, extra YAML documents and invalid globs are errors.
+Globs in the config are relative to the directory that holds `.june`, and `--exclude` globs to the working directory: `*` stays within one path segment, `**` spans directories, a glob that matches a directory excludes everything under it, and whitespace in a glob is literal. Invalid globs are errors.
 
 Exclusion applies during discovery, before file-existence checks or reading excluded worktree contents. Excluded files are not scanned or counted as checked, and the summary reports how many were excluded. Unreadable excluded worktree files do not refuse the run. Excluded Python paths in `--changed-lines` need not exist, but list entries must still use valid `path:7` or `path:7-12` syntax.
 
@@ -200,13 +226,13 @@ jobs:
       - uses: vicolby/june@vX.Y.Z
 ```
 
-Inputs: `rules` (default `.june/rules`), `base` (a git ref to judge against), `version`.
+Inputs: `rules` (default: repository config, else `.june/rules`), `base` (a git ref to judge against), `version`.
 
 On a pull request june judges lines changed since the PR base and annotates the diff. In a merge queue (`merge_group`) it judges the group against `merge_group.base_sha`. When inferring that base, an unreadable or invalid event payload exits 2 instead of falling back to another branch; provide a readable `GITHUB_EVENT_PATH` with a valid `merge_group.base_sha`, or set `base` explicitly.
 
 If a pull request event judges 0 changed Python lines, june warns; if HEAD is the base, it exits 2. These safeguards also apply with an explicit base, supplied changed lines or pre-commit scopes. `pull_request_target` checks out the base branch by default, which is that case: use `pull_request`, or check out the pull request head.
 
-Without the action, install june with `brew install vicolby/tap/june` or the install script above, and run `june --rules .june/rules`.
+Without the action, install june with `brew install vicolby/tap/june` or the install script above, and run `june`; `--base origin/main` on a push.
 
 When `GITHUB_STEP_SUMMARY` is set, june appends a Markdown table of findings, opt-outs and run diagnostics to the job summary (at most 100 rows).
 
@@ -222,7 +248,7 @@ For code scanning, write SARIF and upload it; `--format sarif` prints only the l
 
 `--format json` prints one document of every diagnostic, for any other tool. `--format gitlab` writes the Code Quality report outside GitLab CI too (Jenkins, Buildkite, CircleCI, Azure DevOps, Bitbucket).
 
-On `push` there is no PR base, so june exits 2: pass `--base origin/main` with `fetch-depth: 0`, or run on `pull_request`.
+On `push` there is no PR base: supply one with `--base origin/main` or the [config file](#config-file), and keep `fetch-depth: 0`; otherwise june exits 2. Alternatively, run on `pull_request`.
 
 ### GitLab CI
 
@@ -238,7 +264,7 @@ june:
   before_script:
     - curl -fsSL https://github.com/vicolby/june/releases/download/vX.Y.Z/install.sh | JUNE_VERSION=X.Y.Z JUNE_INSTALL_AST_GREP=1 sh
   script:
-    - june --rules .june/rules
+    - june
   artifacts:
     when: always
     reports:
@@ -255,7 +281,7 @@ repos:
     rev: v0.3.0  # latest release tag; v0.3.0 is the first with the hook
     hooks:
       - id: june
-        args: [--rules, path/to/rules]  # omit to use .june/rules
+        args: [--rules, path/to/rules]  # omit to use the configured rules
 ```
 
 Install june with Homebrew. The hook runs without filenames when Python files are involved and judges the staged change against HEAD. Under `--from-ref A --to-ref B`, or a pre-push that sets them, it judges the lines that range adds. A first push of a history with a root commit sets no refs, so pre-push judges nothing; CI covers it.
