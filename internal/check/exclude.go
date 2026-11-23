@@ -166,7 +166,12 @@ func excludes(env Env, p project, req Request) (*excluder, *string) {
 			all = true
 			continue
 		}
-		ex.only = append(ex.only, strings.Split(rel, "/"))
+		segs, err := storedSegments(env.Dir, rel)
+		if err != nil {
+			msg := fmt.Sprintf("the path %q cannot be read. Fix: make each directory on the path listable", arg)
+			return nil, &msg
+		}
+		ex.only = append(ex.only, segs)
 	}
 	if all {
 		ex.only = nil
@@ -186,7 +191,43 @@ type excluder struct {
 	globs     [][]string // from --exclude, relative to the working directory
 	rootGlobs [][]string // from the config, relative to the directory that holds .june, which is prefix above the working directory
 	prefix    []string
-	only      [][]string // the paths a run is narrowed to, relative to the working directory; none means all
+	only      [][]string // paths narrowed to, relative to the working directory, spelled as the directory entries name them; none means all
+}
+
+// storedSegments spells each component of rel as its directory entry does. A symlink keeps its own name.
+func storedSegments(dir, rel string) ([]string, error) {
+	segs := strings.Split(rel, "/")
+	parent := dir
+	for i, seg := range segs {
+		name, err := dirEntryName(parent, seg)
+		if errors.Is(err, fs.ErrNotExist) {
+			name = seg
+		} else if err != nil {
+			return nil, err
+		}
+		segs[i] = name
+		parent = filepath.Join(parent, name)
+	}
+	return segs, nil
+}
+
+// dirEntryName is the directory entry in parent that names name, or fs.ErrNotExist when none does.
+func dirEntryName(parent, name string) (string, error) {
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range entries {
+		if entry.Name() == name {
+			return name, nil
+		}
+	}
+	for _, entry := range entries {
+		if strings.EqualFold(entry.Name(), name) {
+			return entry.Name(), nil
+		}
+	}
+	return "", fs.ErrNotExist
 }
 
 // active reports whether anything can keep a file out.

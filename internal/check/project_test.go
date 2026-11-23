@@ -133,6 +133,47 @@ func TestPathsNarrowTheCheck(t *testing.T) {
 	}
 }
 
+func TestCaseEquivalentPathsNarrowToTheSameFile(t *testing.T) {
+	env := twoPackages(t, "")
+	probe := filepath.Join(env.Dir, "CaseProbe")
+	write(t, probe, "x")
+	_, foldErr := os.Stat(filepath.Join(env.Dir, "caseprobe"))
+	if err := os.Remove(probe); err != nil {
+		t.Fatal(err)
+	}
+	if foldErr != nil {
+		t.Skip("volume preserves case, so a different spelling is a different path")
+	}
+	if err := os.Symlink("svc", filepath.Join(env.Dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"SVC", "svc/A.py"} {
+		t.Run(path, func(t *testing.T) {
+			res := runJune(t, env, check.Request{Base: "main", Paths: []string{path}})
+			expect(t, res, 1, "svc/a.py:2:9: "+py012)
+			if strings.Contains(summaryOf(res), "excluded") {
+				t.Errorf("narrowing counted as exclusion:\n%s", res.Out)
+			}
+		})
+	}
+	sub := check.Env{Dir: filepath.Join(env.Dir, "svc")}
+	expect(t, runJune(t, sub, check.Request{Base: "main", Paths: []string{"A.py"}}), 1, "a.py:2:9: "+py012)
+	expect(t, runJune(t, env, check.Request{Base: "main", Paths: []string{"LINK"}}), 0, "")
+}
+
+func TestSymlinkComponentDoesNotSelectItsTarget(t *testing.T) {
+	env := twoPackages(t, "")
+	if err := os.Symlink("svc", filepath.Join(env.Dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"link", "link/a.py"} {
+		t.Run(path, func(t *testing.T) {
+			expect(t, runJune(t, env, check.Request{Base: "main", Paths: []string{path}}), 0, "")
+		})
+	}
+	expect(t, runJune(t, env, check.Request{Base: "main", Paths: []string{"svc"}}), 1, "svc/a.py:2:9: "+py012)
+}
+
 func TestPathsNarrowASuppliedList(t *testing.T) {
 	env := tree(t, map[string]string{"svc/a.py": old, "lib/b.py": old})
 	res := changeWith(t, env, nil, "svc/a.py:1\nlib/b.py:1\n")
