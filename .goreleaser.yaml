@@ -31,8 +31,7 @@ archives:
 checksum:
   name_template: checksums.txt
 
-# Keyless cosign signature over checksums.txt. checksums.txt lists every archive, so verifying it
-# and then the archive checksum covers all of them. The bundle holds signature and certificate.
+# Keyless checksum signing; see README.md (Install) for verification.
 # Keyless signing needs the release job's OIDC identity, so snapshot runs pass --skip=sign.
 signs:
   - cmd: cosign
