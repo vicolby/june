@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -190,11 +191,19 @@ func TestActionHonorsConfiguredAndExplicitRules(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := exec.CommandContext(context.Background(), "bash", "-e", "-c", script)
 			cmd.Dir = repo
-			cmd.Env = []string{"PATH=" + tools + string(os.PathListSeparator) + os.Getenv("PATH"), "INPUT_RULES=" + tc.rules, "INPUT_BASE="}
+			var path string
+			for _, entry := range cmd.Environ() {
+				if value, ok := strings.CutPrefix(entry, "PATH="); ok {
+					path = value
+					break
+				}
+			}
+			cmd.Env = []string{"PATH=" + tools + string(os.PathListSeparator) + path, "INPUT_RULES=" + tc.rules, "INPUT_BASE="}
 			out, err := cmd.CombinedOutput()
 			code := 0
 			if err != nil {
-				if exit, ok := err.(*exec.ExitError); ok {
+				var exit *exec.ExitError
+				if errors.As(err, &exit) {
 					code = exit.ExitCode()
 				} else {
 					t.Fatal(err)
