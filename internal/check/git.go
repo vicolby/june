@@ -553,17 +553,20 @@ func untrackedPython(ctx context.Context, env Env, skip *excluder, excluded touc
 // excluded worktree files. env must point at a private index. Plumbing diff-files without rename
 // detection reports stat changes without comparing content; stdin keeps the index update bounded.
 func maskExcluded(ctx context.Context, env Env, skip *excluder, excluded touchedSet) error {
-	changed, err := git(ctx, env, "", "diff-files", "--raw", "--relative", "--no-renames", "-z", "--")
+	changed, err := git(ctx, env, "", "diff-files", "--raw", "--no-renames", "-z", "--")
 	if err != nil {
 		return err
 	}
-	post := parseRaw(changed)
+	post := map[string]postBlob{}
+	for name, blob := range parseRaw(changed) {
+		post[skip.fromRoot(name)] = blob
+	}
 	for name := range post {
 		if path.Ext(name) == ".py" && skip.matched(name) {
 			excluded[name] = nil
 		}
 	}
-	listing, err := git(ctx, env, "", "ls-files", "-z", "--")
+	listing, err := git(ctx, env, "", "ls-files", "-z", "--", ":/")
 	if err != nil {
 		return err
 	}

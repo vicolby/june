@@ -201,16 +201,20 @@ func (e *excluder) outside(file string) bool {
 }
 
 // matched reports whether an exclude glob keeps file out.
+// file is slash-separated and relative to the working directory, so a sibling is spelled with "..".
 func (e *excluder) matched(file string) bool {
 	segs := strings.Split(file, "/")
-	for n := 1; n <= len(segs); n++ {
-		for _, g := range e.globs {
-			if matchSegments(g, segs[:n]) {
-				return true
+	// A glob from --exclude is relative to the working directory, so it cannot name a path that leaves it.
+	if !outsideWorkDir(file) {
+		for n := 1; n <= len(segs); n++ {
+			for _, g := range e.globs {
+				if matchSegments(g, segs[:n]) {
+					return true
+				}
 			}
 		}
 	}
-	full := append(slices.Clone(e.prefix), segs...)
+	full := rootSegments(e.prefix, segs)
 	for n := 1; n <= len(full); n++ {
 		for _, g := range e.rootGlobs {
 			if matchSegments(g, full[:n]) {
@@ -219,6 +223,37 @@ func (e *excluder) matched(file string) bool {
 		}
 	}
 	return false
+}
+
+// outsideWorkDir reports whether file, relative to the working directory, leaves that directory.
+func outsideWorkDir(file string) bool {
+	cleaned := path.Clean(file)
+	return cleaned == ".." || strings.HasPrefix(cleaned, "../")
+}
+
+// rootSegments is file, relative to the working directory, resolved against the repository root.
+func rootSegments(prefix, segs []string) []string {
+	parts := append(slices.Clone(prefix), segs...)
+	if len(parts) == 0 {
+		return nil
+	}
+	cleaned := path.Clean(strings.Join(parts, "/"))
+	if cleaned == "." {
+		return nil
+	}
+	return strings.Split(cleaned, "/")
+}
+
+// fromRoot is a repository-root path relative to the working directory.
+func (e *excluder) fromRoot(root string) string {
+	if len(e.prefix) == 0 {
+		return root
+	}
+	prefix := strings.Join(e.prefix, "/") + "/"
+	if strings.HasPrefix(root, prefix) {
+		return strings.TrimPrefix(root, prefix)
+	}
+	return strings.Repeat("../", len(e.prefix)) + root
 }
 
 // parseGlob splits a glob into slash-separated segments. A leading "./" and a trailing "/" mean nothing.
