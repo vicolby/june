@@ -264,7 +264,8 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 			return nil, scope{}, bad, err
 		}
 		// Preserve the caller's index unless untracked files, flags or exclusions need a private overlay.
-		if len(fresh) > 0 || len(flagged) > 0 || skip.active() {
+		hasGlobs := len(skip.globs)+len(skip.rootGlobs) > 0
+		if len(fresh) > 0 || len(flagged) > 0 || hasGlobs {
 			dir, err := os.MkdirTemp("", "june-git-")
 			if err != nil {
 				return refuse("a temporary git index cannot be created. Fix: check temporary directory permissions and run june again")
@@ -274,7 +275,7 @@ func gitTouched(ctx context.Context, env Env, base, source string, ignoreSpace b
 			if env, bad, err = overlayIndex(ctx, env, dir, prefix, fresh, flagged); bad != nil || err != nil {
 				return nil, scope{}, bad, err
 			}
-			if skip.active() {
+			if hasGlobs {
 				if err := maskExcluded(ctx, env, skip, excluded); err != nil {
 					if ctx.Err() != nil {
 						return nil, scope{}, nil, ctx.Err()
@@ -531,7 +532,7 @@ func untrackedPython(ctx context.Context, env Env, skip *excluder, excluded touc
 		if path.Ext(name) != ".py" {
 			continue
 		}
-		if skip.excluded(name) {
+		if skip.matched(name) {
 			excluded[name] = nil
 			continue
 		}
@@ -541,7 +542,7 @@ func untrackedPython(ctx context.Context, env Env, skip *excluder, excluded touc
 		}
 		if info.Mode().IsRegular() {
 			names = append(names, name)
-		} else {
+		} else if !skip.outside(name) {
 			notRegular++
 		}
 	}
@@ -558,7 +559,7 @@ func maskExcluded(ctx context.Context, env Env, skip *excluder, excluded touched
 	}
 	post := parseRaw(changed)
 	for name := range post {
-		if path.Ext(name) == ".py" && skip.excluded(name) {
+		if path.Ext(name) == ".py" && skip.matched(name) {
 			excluded[name] = nil
 		}
 	}
@@ -569,7 +570,7 @@ func maskExcluded(ctx context.Context, env Env, skip *excluder, excluded touched
 	var names strings.Builder
 	for _, name := range strings.Split(listing, "\x00") {
 		// A deletion has no worktree content to hide, and must remain a rename source.
-		if name != "" && skip.excluded(name) && post[name].mode != "000000" {
+		if name != "" && skip.matched(name) && post[name].mode != "000000" {
 			names.WriteString(name)
 			names.WriteByte(0)
 		}
@@ -608,7 +609,7 @@ func indexFlags(ctx context.Context, env Env, prefix string, skip *excluder) (ab
 			continue
 		}
 		_, name, _ := strings.Cut(entry, "\t")
-		if skip.excluded(name) {
+		if skip.matched(name) {
 			continue
 		}
 		if tag == 'S' || tag == 's' {

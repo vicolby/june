@@ -459,3 +459,82 @@ func TestEmptyConfiguredRulesResolveToRootDefaults(t *testing.T) {
 		})
 	}
 }
+
+func TestPathsPreserveRenameCandidates(t *testing.T) {
+	for _, mode := range []string{"untracked", "tracked", "assume-unchanged", "skip-worktree", "staged", "refs"} {
+		t.Run(mode, func(t *testing.T) {
+			body := strings.Repeat("x = 1\n", 50) + old
+			env := repo(t, map[string]string{"old.py": body})
+			if mode == "tracked" || mode == "assume-unchanged" || mode == "skip-worktree" {
+				write(t, filepath.Join(env.Dir, "archive.py"), "y = 0\n")
+				commit(t, env)
+				if mode != "tracked" {
+					git(t, env.Dir, "update-index", "--"+mode, "archive.py")
+				}
+			}
+			if err := os.Rename(filepath.Join(env.Dir, "old.py"), filepath.Join(env.Dir, "archive.py")); err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join(env.Dir, "selected/fresh.py"), body+"z = 2\n")
+			base := "main"
+			if mode == "staged" || mode == "refs" {
+				git(t, env.Dir, "add", "-A")
+				base = ""
+				env.Vars = map[string]string{"PRE_COMMIT": "1"}
+				if mode == "refs" {
+					git(t, env.Dir, "commit", "-qm", "change")
+					env.Vars = map[string]string{"PRE_COMMIT_FROM_REF": "main", "PRE_COMMIT_TO_REF": "HEAD"}
+				}
+			}
+			index := filepath.Join(env.Dir, ".git/index")
+			before, err := os.ReadFile(index)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tc := range []struct {
+				name           string
+				paths, exclude []string
+				clean          bool
+			}{
+				{"unrestricted", nil, nil, false},
+				{"file", []string{"selected/fresh.py"}, nil, false},
+				{"directory", []string{"selected"}, nil, false},
+				{"absolute file", []string{filepath.Join(env.Dir, "selected/fresh.py")}, nil, false},
+				{"unrelated exclusion", []string{"selected/fresh.py"}, []string{"ignored"}, false},
+				{"renamed file", []string{"archive.py"}, nil, true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					res := runJune(t, env, check.Request{Base: base, Paths: tc.paths, Exclude: tc.exclude})
+					if tc.clean {
+						expect(t, res, 0, "")
+					} else {
+						expect(t, res, 1, "selected/fresh.py:51:9: "+py012)
+						if !strings.Contains(summaryOf(res), "checked 1 file, 52 changed lines") {
+							t.Fatalf("fresh file was not wholly new: %s", res.Out)
+						}
+					}
+					if strings.Contains(summaryOf(res), "excluded") {
+						t.Fatalf("narrowing counted as exclusion: %s", res.Out)
+					}
+				})
+			}
+			after, err := os.ReadFile(index)
+			if err != nil || string(after) != string(before) {
+				t.Fatalf("check changed the caller's index: %v", err)
+			}
+		})
+	}
+}
+
+func TestPathsDoNotCountUnselectedSymlinks(t *testing.T) {
+	env := repo(t, map[string]string{"app.py": "x = 1\n"})
+	write(t, filepath.Join(env.Dir, "app.py"), old)
+	if err := os.Symlink("app.py", filepath.Join(env.Dir, "other.py")); err != nil {
+		t.Fatal(err)
+	}
+	res := runJune(t, env, check.Request{Base: "main", Paths: []string{"app.py"}})
+	expect(t, res, 1, "app.py:1:9: "+py012)
+	if strings.Contains(summaryOf(res), "skipped") {
+		t.Fatalf("unselected symlink counted: %s", res.Out)
+	}
+}
