@@ -10,7 +10,7 @@ permissions:
 jobs:
   # The suite runs with the race detector on Linux and macOS: june shells out to git and
   # ast-grep, and path and tool behaviour differs between the two.
-  test:
+  test-matrix:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -34,6 +34,18 @@ jobs:
         run: |
           go build -o "$RUNNER_TEMP/june" ./cmd/june
           JUNE="$RUNNER_TEMP/june" sh testdata/e2e/run.sh gitlab
+
+  # The one check context named "test" that branch protection requires, whatever the matrix is.
+  test:
+    name: test
+    needs: test-matrix
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every matrix leg passed
+        env:
+          RESULT: ${{ needs.test-matrix.result }}
+        run: test "$RESULT" = success
 
   # june on a real GitHub Actions runner against a fixture repository. The step fails the way a
   # user's does, and the next job reads the annotations back from the API, so the check covers what
