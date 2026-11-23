@@ -109,6 +109,17 @@ jobs:
       - name: Format check
         run: golangci-lint fmt --diff
 
+  vulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - name: Install pinned govulncheck
+        run: go install "golang.org/x/vuln/cmd/govulncheck@$(cat .govulncheck-version)"
+      - run: govulncheck ./...
+
   # Builds the release archives without publishing and installs from them with install.sh, so a
   # broken goreleaser config or installer fails here instead of on the first tag push.
   release-smoke:
@@ -120,11 +131,12 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --snapshot --clean
+          args: release --snapshot --clean --skip=sign
       - name: Install from the snapshot archive with install.sh
         id: snapshot
         run: |

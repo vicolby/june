@@ -10,6 +10,7 @@
 #   JUNE_OS, JUNE_ARCH     Override the detected platform (linux or darwin, amd64 or arm64).
 #   JUNE_INSTALL_AST_GREP  Set to 1 to also install the tested ast-grep with
 #                          `npm install --global @ast-grep/cli@$ast_grep_version`.
+#   JUNE_VERIFY            See README.md (Install) for release authentication.
 #   JUNE_RELEASES_URL      Release base URL. Default: https://github.com/vicolby/june/releases.
 #
 # In CI set JUNE_VERSION and fetch this script from a release tag, not main.
@@ -114,10 +115,36 @@ main() {
 		fail "could not download $base/$archive (check that release v$version exists for $os/$arch)"
 	curl -fsSL -o "$tmp/checksums.txt" "$base/checksums.txt" ||
 		fail "could not download $base/checksums.txt"
+	got=$(sha256 "$tmp/$archive")
+
+	if [ "${JUNE_VERIFY:-}" = 1 ]; then
+		release_identity="https://github.com/vicolby/june/.github/workflows/release.yml@refs/tags/v${version}"
+		if command -v gh >/dev/null 2>&1; then
+			say "Verifying build provenance with gh"
+			subjects=$(gh attestation verify "$tmp/$archive" --repo vicolby/june \
+				--cert-identity "$release_identity" --source-ref "refs/tags/v${version}" \
+				--format json --jq '.[].verificationResult.statement.subject[] | [.name, .digest.sha256] | @tsv') ||
+				fail "gh attestation verify failed for $archive (expected $release_identity)"
+			printf '%s\n' "$subjects" | awk -v f="$archive" -v d="$got" \
+				'$1 == f && $2 == d { found = 1 } END { exit !found }' ||
+				fail "verified provenance has no matching name and digest for $archive"
+		elif command -v cosign >/dev/null 2>&1; then
+			say "Verifying checksums.txt signature with cosign"
+			curl -fsSL -o "$tmp/checksums.txt.sigstore.json" "$base/checksums.txt.sigstore.json" ||
+				fail "could not download $base/checksums.txt.sigstore.json"
+			cosign verify-blob \
+				--bundle "$tmp/checksums.txt.sigstore.json" \
+				--certificate-identity "$release_identity" \
+				--certificate-oidc-issuer https://token.actions.githubusercontent.com \
+				"$tmp/checksums.txt" >/dev/null 2>&1 ||
+				fail "cosign could not verify the signature of checksums.txt (expected $release_identity)"
+		else
+			fail "JUNE_VERIFY=1 needs gh or cosign on PATH"
+		fi
+	fi
 
 	want=$(awk -v f="$archive" '$2 == f { print $1; exit }' "$tmp/checksums.txt")
 	[ -n "$want" ] || fail "checksums.txt has no entry for $archive"
-	got=$(sha256 "$tmp/$archive")
 	[ "$got" = "$want" ] || fail "checksum mismatch for $archive: expected $want, got $got"
 
 	mkdir "$tmp/extract"
