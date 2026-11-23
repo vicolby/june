@@ -103,7 +103,7 @@ func (p project) rulesDirs(env Env) []string {
 	if len(dirs) == 0 {
 		dirs = []string{defaultRules}
 	}
-	if p.dir == env.Dir {
+	if sameDir(p.dir, env.Dir) {
 		return dirs
 	}
 	out := make([]string, len(dirs))
@@ -114,6 +114,16 @@ func (p project) rulesDirs(env Env) []string {
 		out[i] = resolve(p.dir, d)
 	}
 	return out
+}
+
+// sameDir reports whether a and b are the same directory, including when one spelling follows a symlink.
+func sameDir(a, b string) bool {
+	if a == b {
+		return true
+	}
+	left, err1 := filepath.EvalSymlinks(a)
+	right, err2 := filepath.EvalSymlinks(b)
+	return err1 == nil && err2 == nil && left == right
 }
 
 // excludes builds the filter that keeps paths out of the check: the config's globs, the request's own, and the narrowing to its paths.
@@ -139,15 +149,11 @@ func excludes(env Env, p project, req Request) (*excluder, *string) {
 	}
 	all := false
 	for _, arg := range req.Paths {
-		rel := filepath.ToSlash(arg)
 		if filepath.IsAbs(arg) {
-			r, err := filepath.Rel(env.Dir, arg)
-			if err != nil {
-				r = ".."
-			}
-			rel = filepath.ToSlash(r)
+			msg := fmt.Sprintf("the path %q is not relative to the working directory. Fix: pass a path relative to the working directory", arg)
+			return nil, &msg
 		}
-		rel = path.Clean(rel)
+		rel := path.Clean(filepath.ToSlash(arg))
 		if rel == ".." || strings.HasPrefix(rel, "../") {
 			msg := fmt.Sprintf("the path %q is outside the working directory. Fix: pass files or directories under the working directory, or run june from a directory that holds them", arg)
 			return nil, &msg

@@ -60,6 +60,25 @@ func TestNestedJuneDoesNotOverrideTheRepositoryRoot(t *testing.T) {
 	}
 }
 
+func TestNewNamesRulesRelativeToASymlinkedWorkingDirectory(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init", "-q", "-b", "main")
+	link := filepath.Join(t.TempDir(), "repo")
+	if err := os.Symlink(root, link); err != nil {
+		t.Fatal(err)
+	}
+	res, err := check.New(context.Background(), check.Env{Dir: link}, nil, "MY009")
+	want := "created .june/rules/MY009.yml\ncreated .june/rules/rule-tests/MY009-test.yml\nnext: edit the rule and its examples, then run june verify --rules '.june/rules' --rule MY009\n"
+	if err != nil || res.Exit != 0 || string(res.Out) != want {
+		t.Fatalf("New = %d %q, %v, want %q", res.Exit, res.Out, err, want)
+	}
+	for _, rel := range []string{".june/rules/MY009.yml", ".june/rules/rule-tests/MY009-test.yml"} {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestNewDefaultsToRootBeforeJuneExists(t *testing.T) {
 	root := t.TempDir()
 	git(t, root, "init", "-q", "-b", "main")
@@ -93,7 +112,7 @@ func TestPathsNarrowTheCheck(t *testing.T) {
 		{"dot before narrower path", []string{".", "svc"}, both, "2 files"},
 		{"dot after narrower path", []string{"svc", "."}, both, "2 files"},
 		{"two paths", []string{"svc", "lib/"}, both, "2 files"},
-		{"an absolute path under the directory", []string{filepath.Join(env.Dir, "svc")}, "svc/a.py:2:9: " + py012, "1 file"},
+		{"a relative path with a dot prefix", []string{"./svc"}, "svc/a.py:2:9: " + py012, "1 file"},
 		{"a directory with no change", []string{".june"}, "", "0 files"},
 	}
 	for _, tt := range tests {
@@ -127,9 +146,9 @@ func TestPathsNarrowASuppliedList(t *testing.T) {
 
 func TestBadPathsAreRefused(t *testing.T) {
 	env := twoPackages(t, "")
+	sub := check.Env{Dir: filepath.Join(env.Dir, "svc")}
 	for _, bad := range []string{"nope", "../lib"} {
 		for _, paths := range [][]string{{bad}, {".", bad}, {bad, "."}} {
-			sub := check.Env{Dir: filepath.Join(env.Dir, "svc")}
 			res := runJune(t, sub, check.Request{Base: "main", Paths: paths})
 			cause := "does not exist"
 			if bad == "../lib" {
@@ -137,6 +156,16 @@ func TestBadPathsAreRefused(t *testing.T) {
 			}
 			if res.Exit != 2 || !strings.Contains(string(res.Out), cause) {
 				t.Errorf("paths %v: exit %d, output %s", paths, res.Exit, res.Out)
+			}
+		}
+	}
+	for _, caller := range []check.Env{env, sub} {
+		for _, bad := range []string{filepath.Join(env.Dir, "svc", "a.py"), filepath.Join(env.Dir, "missing.py")} {
+			for _, paths := range [][]string{{bad}, {".", bad}, {bad, "."}} {
+				res := runJune(t, caller, check.Request{Base: "main", Paths: paths})
+				if res.Exit != 2 || !strings.Contains(string(res.Out), "not relative to the working directory") || strings.Contains(string(res.Out), "does not exist") {
+					t.Errorf("paths %v from %s: exit %d, output %s", paths, caller.Dir, res.Exit, res.Out)
+				}
 			}
 		}
 	}
@@ -168,7 +197,9 @@ func TestConfigBaseYieldsToTheStagedSnapshot(t *testing.T) {
 
 func TestConfigBaseIsTheLowestPriorityBase(t *testing.T) {
 	env := twoPackages(t, "base: main\n")
-	if res := runJune(t, env, check.Request{}); !strings.Contains(string(res.Out), "base main (base in .june/config.yml)") {
+	res := runJune(t, env, check.Request{})
+	expect(t, res, 1, "lib/b.py:2:9: "+py012+"svc/a.py:2:9: "+py012)
+	if !strings.Contains(string(res.Out), "base main (base in .june/config.yml)") {
 		t.Errorf("config base unused:\n%s", res.Out)
 	}
 	if res := runJune(t, env, check.Request{Base: "HEAD"}); !strings.Contains(string(res.Out), "base HEAD (--base)") {
@@ -499,7 +530,6 @@ func TestPathsPreserveRenameCandidates(t *testing.T) {
 				{"unrestricted", nil, nil, false},
 				{"file", []string{"selected/fresh.py"}, nil, false},
 				{"directory", []string{"selected"}, nil, false},
-				{"absolute file", []string{filepath.Join(env.Dir, "selected/fresh.py")}, nil, false},
 				{"unrelated exclusion", []string{"selected/fresh.py"}, []string{"ignored"}, false},
 				{"renamed file", []string{"archive.py"}, nil, true},
 			} {

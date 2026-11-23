@@ -42,7 +42,7 @@ type Request struct {
 	// They add to the exclude list of .june/config.yml.
 	Exclude []string
 	// Paths narrows the check to these files and directories, relative to the working directory; empty means everything.
-	// A path that does not exist, or lies outside the working directory, is a refusal.
+	// An absolute path, a path that does not exist, or a path outside the working directory is a refusal.
 	Paths []string
 	// Legacy also lists rule matches on untouched lines of the checked files, as information only.
 	// They never change Exit; off by default.

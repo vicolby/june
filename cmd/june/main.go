@@ -65,7 +65,7 @@ const usage = `usage:
   june --version
   june --help | -h
 
-PATH narrows the check to those files and directories, relative to the working directory.
+PATH narrows the check to those files and directories, relative to the working directory. An absolute path is refused.
 .june/rules and .june/config.yml are found at the repository root, or in the working directory outside git.
 Flags must precede paths.
 
