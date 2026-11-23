@@ -824,13 +824,15 @@ func TestNewScaffoldsARuleThatVerifies(t *testing.T) {
 }
 
 func TestNewSuggestedCommandVerifiesTheChosenDirectory(t *testing.T) {
-	for _, dir := range []string{"", "mine", "author's rules $HOME; $(printf wrong) `printf wrong`"} {
-		t.Run(dir, func(t *testing.T) {
+	for _, args := range [][]string{
+		{"new", "null"},
+		{"new", "--rules", "", "null"},
+		{"new", "--rules", ".", "null"},
+		{"new", "--rules", "mine", "null"},
+		{"new", "--rules", "author's rules $HOME; $(printf wrong) `printf wrong`", "null"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			env := check.Env{Dir: t.TempDir()}
-			args := []string{"new", "null"}
-			if dir != "" {
-				args = []string{"new", "--rules", dir, "null"}
-			}
 			code, out, errOut := runArgs(t, env, args...)
 			if code != 0 || errOut != "" {
 				t.Fatalf("new = %d, %q, %q", code, out, errOut)

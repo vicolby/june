@@ -296,7 +296,7 @@ func New(env Env, dirs []string, id string) (Result, error) {
 		return refuse(req, "june new writes into one rules directory, and "+strconv.Itoa(len(dirs))+" were given. Fix: pass --rules once"), nil
 	}
 	dir := defaultRules
-	if len(dirs) == 1 {
+	if len(dirs) == 1 && dirs[0] != "" {
 		dir = dirs[0]
 	}
 	made, fault := rules.Scaffold(resolve(env.Dir, dir), id)
