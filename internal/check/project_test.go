@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/vicolby/june/internal/check"
+	"gopkg.in/yaml.v3"
 )
 
 // twoPackages is a repo whose rules sit at the root and whose changes sit in two packages.
@@ -42,13 +43,37 @@ func TestDefaultsResolveFromTheRepositoryRoot(t *testing.T) {
 	}
 }
 
-func TestWorkingDirectoryJuneDirectoryWinsOverTheRoot(t *testing.T) {
-	env := twoPackages(t, "")
+func TestNestedJuneDoesNotOverrideTheRepositoryRoot(t *testing.T) {
+	env := twoPackages(t, "exclude: [lib]\n")
+	write(t, filepath.Join(env.Dir, "svc/.june/config.yml"), "unknown: true\n")
 	write(t, filepath.Join(env.Dir, "svc/.june/rules/none.txt"), "")
 	sub := check.Env{Dir: filepath.Join(env.Dir, "svc")}
-	res := runJune(t, sub, check.Request{Base: "main"})
-	if res.Exit != 2 || !strings.Contains(string(res.Out), "june: error: ") {
-		t.Errorf("Exit = %d, Out = %q, want the local .june to be used and refused as no rules", res.Exit, res.Out)
+	expect(t, runJune(t, sub, check.Request{Base: "main"}), 1, "a.py:2:9: "+py012)
+	if v, err := check.Verify(context.Background(), sub, check.VerifyRequest{}); err != nil || v.Exit != 0 {
+		t.Fatalf("Verify = %d %q, %v", v.Exit, v.Out, err)
+	}
+	if n, err := check.New(context.Background(), sub, nil, "MY002"); err != nil || n.Exit != 0 {
+		t.Fatalf("New = %d %q, %v", n.Exit, n.Out, err)
+	}
+	if _, err := os.Stat(filepath.Join(env.Dir, ".june/rules/MY002.yml")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewDefaultsToRootBeforeJuneExists(t *testing.T) {
+	root := t.TempDir()
+	git(t, root, "init", "-q", "-b", "main")
+	write(t, filepath.Join(root, "svc/a.py"), "x = 1\n")
+	sub := check.Env{Dir: filepath.Join(root, "svc")}
+	res, err := check.New(context.Background(), sub, nil, "MY002")
+	if err != nil || res.Exit != 0 {
+		t.Fatalf("New = %d %q, %v", res.Exit, res.Out, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".june/rules/MY002.yml")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(sub.Dir, ".june")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("New created nested .june: %v", err)
 	}
 }
 
@@ -65,6 +90,8 @@ func TestPathsNarrowTheCheck(t *testing.T) {
 		{"a directory", []string{"svc"}, "svc/a.py:2:9: " + py012, "1 file"},
 		{"a file", []string{"lib/b.py"}, "lib/b.py:2:9: " + py012, "1 file"},
 		{"dot is everything", []string{"."}, both, "2 files"},
+		{"dot before narrower path", []string{".", "svc"}, both, "2 files"},
+		{"dot after narrower path", []string{"svc", "."}, both, "2 files"},
 		{"two paths", []string{"svc", "lib/"}, both, "2 files"},
 		{"an absolute path under the directory", []string{filepath.Join(env.Dir, "svc")}, "svc/a.py:2:9: " + py012, "1 file"},
 		{"a directory with no change", []string{".june"}, "", "0 files"},
@@ -100,11 +127,43 @@ func TestPathsNarrowASuppliedList(t *testing.T) {
 
 func TestBadPathsAreRefused(t *testing.T) {
 	env := twoPackages(t, "")
-	sub := check.Env{Dir: filepath.Join(env.Dir, "svc")}
-	refused(t, runJune(t, env, check.Request{Base: "main", Paths: []string{"nope"}}),
-		"june: error: the path \"nope\" does not exist. Fix: pass an existing file or directory relative to the working directory\n")
-	refused(t, runJune(t, sub, check.Request{Base: "main", Paths: []string{"../lib"}}),
-		"june: error: the path \"../lib\" is outside the working directory. Fix: pass files or directories under the working directory, or run june from a directory that holds them\n")
+	for _, bad := range []string{"nope", "../lib"} {
+		for _, paths := range [][]string{{bad}, {".", bad}, {bad, "."}} {
+			sub := check.Env{Dir: filepath.Join(env.Dir, "svc")}
+			res := runJune(t, sub, check.Request{Base: "main", Paths: paths})
+			cause := "does not exist"
+			if bad == "../lib" {
+				cause = "outside the working directory"
+			}
+			if res.Exit != 2 || !strings.Contains(string(res.Out), cause) {
+				t.Errorf("paths %v: exit %d, output %s", paths, res.Exit, res.Out)
+			}
+		}
+	}
+}
+
+func TestConfigBaseYieldsToTheStagedSnapshot(t *testing.T) {
+	env := twoPackages(t, "base: main\n")
+	commit(t, env)
+	write(t, filepath.Join(env.Dir, "safe.py"), "x = 1\n")
+	git(t, env.Dir, "add", "safe.py")
+	write(t, filepath.Join(env.Dir, "safe.py"), old)
+	write(t, filepath.Join(env.Dir, "untracked.py"), old)
+	env.Vars = map[string]string{"PRE_COMMIT": "1"}
+	res := runJune(t, env, check.Request{})
+	expect(t, res, 0, "")
+	if !strings.Contains(string(res.Out), "checked 1 file, 1 changed line; base HEAD (staged diff)") {
+		t.Fatalf("staged scope: %s", res.Out)
+	}
+	explicit := runJune(t, env, check.Request{Base: "main"})
+	if explicit.Exit != 1 || !strings.Contains(string(explicit.Out), "base main (--base)") {
+		t.Fatalf("explicit base: %d %s", explicit.Exit, explicit.Out)
+	}
+	write(t, filepath.Join(env.Dir, "safe.py"), old)
+	git(t, env.Dir, "add", "safe.py")
+	expect(t, runJune(t, env, check.Request{}), 1, "safe.py:1:9: "+py012)
+	write(t, filepath.Join(env.Dir, ".june/config.yml"), "base: -invalid\n")
+	expect(t, runJune(t, env, check.Request{}), 1, "safe.py:1:9: "+py012)
 }
 
 func TestConfigBaseIsTheLowestPriorityBase(t *testing.T) {
@@ -165,7 +224,7 @@ func TestInitWritesAStarterThatVerifiesAndIsIdempotent(t *testing.T) {
 	if err != nil || res.Exit != 0 {
 		t.Fatalf("Init = %d %q, %v", res.Exit, res.Out, err)
 	}
-	for _, rel := range []string{".june/rules/MY001.yml", ".june/rules/rule-tests/MY001-test.yml", ".june/config.yml", ".github/workflows/june.yml", ".june/gitlab-ci.yml", ".pre-commit-config.yaml"} {
+	for _, rel := range []string{".june/rules/MY001.yml", ".june/rules/rule-tests/MY001-test.yml", ".june/config.yml", ".github/workflows/june.yml", ".pre-commit-config.yaml"} {
 		if _, err := os.Stat(filepath.Join(env.Dir, rel)); err != nil {
 			t.Errorf("missing %s: %v", rel, err)
 		}
@@ -177,14 +236,38 @@ func TestInitWritesAStarterThatVerifiesAndIsIdempotent(t *testing.T) {
 		}
 		return string(b)
 	}
-	if got := read(".github/workflows/june.yml"); !strings.Contains(got, "uses: vicolby/june@v1.2.3") || !strings.Contains(got, "fetch-depth: 0") {
-		t.Errorf("workflow:\n%s", got)
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Uses string
+				With map[string]int
+			}
+		}
 	}
-	if got := read(".june/gitlab-ci.yml"); !strings.Contains(got, "releases/download/v1.2.3/install.sh | JUNE_VERSION=1.2.3 JUNE_INSTALL_AST_GREP=1 sh") || !strings.Contains(got, "GIT_DEPTH: 0") {
-		t.Errorf("gitlab:\n%s", got)
+	if err := yaml.Unmarshal([]byte(read(".github/workflows/june.yml")), &workflow); err != nil {
+		t.Fatal(err)
 	}
-	if got := read(".pre-commit-config.yaml"); !strings.Contains(got, "rev: v1.2.3") || !strings.Contains(got, "id: june") {
-		t.Errorf("pre-commit:\n%s", got)
+	steps := workflow.Jobs["june"].Steps
+	if len(steps) != 2 || steps[0].Uses != "actions/checkout@v4" || steps[0].With["fetch-depth"] != 0 {
+		t.Fatalf("checkout contract: %+v", steps)
+	}
+	if _, ok := steps[0].With["fetch-depth"]; !ok || steps[1].Uses != "vicolby/june@v1.2.3" {
+		t.Fatalf("workflow contract: %+v", steps)
+	}
+	if _, err := os.Stat(filepath.Join(env.Dir, ".june/gitlab-ci.yml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("default init wrote GitLab config: %v", err)
+	}
+	var hooks struct {
+		Repos []struct {
+			Repo, Rev string
+			Hooks     []struct{ ID string }
+		}
+	}
+	if err := yaml.Unmarshal([]byte(read(".pre-commit-config.yaml")), &hooks); err != nil {
+		t.Fatal(err)
+	}
+	if len(hooks.Repos) != 1 || hooks.Repos[0].Repo != "https://github.com/vicolby/june" || hooks.Repos[0].Rev != "v1.2.3" || len(hooks.Repos[0].Hooks) != 1 || hooks.Repos[0].Hooks[0].ID != "june" {
+		t.Fatalf("pre-commit contract: %+v", hooks)
 	}
 	if v, err := check.Verify(context.Background(), env, check.VerifyRequest{}); err != nil || v.Exit != 0 {
 		t.Errorf("the starter rule does not verify: %d %q, %v", v.Exit, v.Out, err)
@@ -195,22 +278,20 @@ func TestInitWritesAStarterThatVerifiesAndIsIdempotent(t *testing.T) {
 
 	// A second run, with edits in place, keeps every file.
 	write(t, filepath.Join(env.Dir, ".pre-commit-config.yaml"), "mine\n")
+	write(t, filepath.Join(env.Dir, ".github/workflows/june.yml"), "mine\n")
+	write(t, filepath.Join(env.Dir, ".june/config.yml"), "base: main\n")
 	write(t, filepath.Join(env.Dir, ".june/rules/MY001.yml"), "mine\n")
 	again, err := check.Init(context.Background(), env, check.InitRequest{Version: "1.2.3"})
 	if err != nil || again.Exit != 0 || strings.Contains(string(again.Out), "created") {
 		t.Fatalf("second Init = %d %q, %v", again.Exit, again.Out, err)
 	}
-	if read(".pre-commit-config.yaml") != "mine\n" || read(".june/rules/MY001.yml") != "mine\n" {
-		t.Error("a second Init overwrote a file")
+	for _, rel := range []string{".pre-commit-config.yaml", ".github/workflows/june.yml", ".june/rules/MY001.yml"} {
+		if read(rel) != "mine\n" {
+			t.Errorf("a second Init overwrote %s", rel)
+		}
 	}
-
-	// Force replaces the generated snippets, never the rules.
-	forced, err := check.Init(context.Background(), env, check.InitRequest{Version: "1.2.3", Force: true})
-	if err != nil || forced.Exit != 0 {
-		t.Fatalf("forced Init = %d %q, %v", forced.Exit, forced.Out, err)
-	}
-	if !strings.Contains(read(".pre-commit-config.yaml"), "id: june") || read(".june/rules/MY001.yml") != "mine\n" {
-		t.Error("--force did not replace the hook config, or touched the rules")
+	if read(".june/config.yml") != "base: main\n" {
+		t.Error("a second Init overwrote the config")
 	}
 }
 
@@ -230,5 +311,116 @@ func TestInitFromASubdirectoryWritesAtTheRepositoryRoot(t *testing.T) {
 	}
 	if !strings.Contains(string(res.Out), "vX.Y.Z") {
 		t.Errorf("a build without a release version does not say the pin is a placeholder:\n%s", res.Out)
+	}
+}
+
+func TestNewUsesConfiguredRulesDirectories(t *testing.T) {
+	for _, tc := range []struct {
+		name, config string
+		dirs         []string
+		want         string
+		exit         int
+	}{
+		{"configured", "rules: [ci-rules]\n", nil, "ci-rules", 0},
+		{"ambiguous", "rules: [ci-rules, other-rules]\n", nil, "", 2},
+		{"duplicates", "rules: [ci-rules, ./ci-rules]\n", nil, "ci-rules", 0},
+		{"explicit", "rules: [ci-rules, other-rules]\n", []string{"explicit"}, "svc/explicit", 0},
+		{"empty explicit", "rules: [ci-rules]\n", []string{""}, "svc/.june/rules", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := twoPackages(t, tc.config)
+			sub := check.Env{Dir: filepath.Join(env.Dir, "svc")}
+			res, err := check.New(context.Background(), sub, tc.dirs, "MY002")
+			if err != nil || res.Exit != tc.exit {
+				t.Fatalf("New = %d %q, %v", res.Exit, res.Out, err)
+			}
+			if tc.exit == 2 {
+				if _, err := os.Stat(filepath.Join(env.Dir, "ci-rules")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("ambiguous destination was written: %v", err)
+				}
+				return
+			}
+			if _, err := os.Stat(filepath.Join(env.Dir, tc.want, "MY002.yml")); err != nil {
+				t.Fatal(err)
+			}
+			v, err := check.Verify(context.Background(), sub, check.VerifyRequest{Rules: tc.dirs, Rule: "MY002"})
+			if err != nil || v.Exit != 0 {
+				t.Fatalf("Verify = %d %q, %v", v.Exit, v.Out, err)
+			}
+		})
+	}
+}
+
+func TestInitGitLabConsumerContract(t *testing.T) {
+	env := check.Env{Dir: t.TempDir()}
+	git(t, env.Dir, "init", "-q", "-b", "main")
+	res, err := check.Init(context.Background(), env, check.InitRequest{CI: "gitlab", Version: "v1.2.3"})
+	if err != nil || res.Exit != 0 {
+		t.Fatalf("Init = %d %q, %v", res.Exit, res.Out, err)
+	}
+	data, err := os.ReadFile(filepath.Join(env.Dir, ".june/gitlab-ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		June struct {
+			Image        string
+			Variables    map[string]string
+			Rules        []struct{ If string }
+			BeforeScript []string `yaml:"before_script"`
+			Script       []string
+			Artifacts    struct {
+				When    string
+				Reports map[string]string
+			}
+		}
+	}
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	job := config.June
+	if job.Image != "node:22" || job.Variables["GIT_DEPTH"] != "0" || len(job.Rules) != 1 || job.Rules[0].If != `$CI_PIPELINE_SOURCE == "merge_request_event"` {
+		t.Fatalf("GitLab environment: %+v", job)
+	}
+	if len(job.BeforeScript) != 1 || job.BeforeScript[0] != "curl -fsSL https://github.com/vicolby/june/releases/download/v1.2.3/install.sh | JUNE_VERSION=1.2.3 JUNE_INSTALL_AST_GREP=1 sh" || len(job.Script) != 1 || job.Script[0] != "june" {
+		t.Fatalf("GitLab commands: %+v", job)
+	}
+	if job.Artifacts.When != "always" || job.Artifacts.Reports["codequality"] != "gl-code-quality-report.json" {
+		t.Fatalf("GitLab report: %+v", job.Artifacts)
+	}
+	if _, err := os.Stat(filepath.Join(env.Dir, ".github/workflows/june.yml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("GitLab init wrote GitHub config: %v", err)
+	}
+}
+
+func TestInitGuidanceForPreservedRules(t *testing.T) {
+	env := check.Env{Dir: t.TempDir()}
+	git(t, env.Dir, "init", "-q", "-b", "main")
+	if res, err := check.New(context.Background(), env, nil, "CUSTOM"); err != nil || res.Exit != 0 {
+		t.Fatalf("New = %d %q, %v", res.Exit, res.Out, err)
+	}
+	res, err := check.Init(context.Background(), env, check.InitRequest{Version: "1.2.3"})
+	if err != nil || res.Exit != 0 || !strings.HasSuffix(string(res.Out), "next: run june verify to verify the preserved rules\n") {
+		t.Fatalf("Init = %d %q, %v", res.Exit, res.Out, err)
+	}
+	v, err := check.Verify(context.Background(), env, check.VerifyRequest{})
+	if err != nil || v.Exit != 0 {
+		t.Fatalf("suggested verification = %d %q, %v", v.Exit, v.Out, err)
+	}
+}
+
+func TestInitRefusesUnavailableRepositoryOrProvider(t *testing.T) {
+	for _, ci := range []string{"", "unknown"} {
+		env := check.Env{Dir: t.TempDir()}
+		if ci != "" {
+			git(t, env.Dir, "init", "-q", "-b", "main")
+		}
+		res, err := check.Init(context.Background(), env, check.InitRequest{CI: ci})
+		if err != nil || res.Exit != 2 {
+			t.Fatalf("Init = %d %q, %v", res.Exit, res.Out, err)
+		}
+		if _, err := os.Stat(filepath.Join(env.Dir, ".june")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("refused init wrote files: %v", err)
+		}
 	}
 }

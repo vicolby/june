@@ -943,13 +943,12 @@ func TestHelpListsTheAuthoringCommands(t *testing.T) {
 	}
 }
 
-func TestPathsMayFollowOrPrecedeFlags(t *testing.T) {
+func TestPathsFollowFlags(t *testing.T) {
 	env := project(t)
 	if err := os.WriteFile(filepath.Join(env.Dir, "other.py"), []byte("def g(b=[]):\n    pass\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
-		{"app.py", "--changed-lines", "-", "--format", "text"},
 		{"--changed-lines", "-", "--format", "text", "app.py"},
 		{"--changed-lines", "-", "--format", "text", "--", "app.py"},
 	} {
@@ -967,6 +966,11 @@ func TestPathsMayFollowOrPrecedeFlags(t *testing.T) {
 
 func TestInitCommand(t *testing.T) {
 	env := check.Env{Dir: t.TempDir()}
+	cmd := exec.CommandContext(context.Background(), "git", "init", "-q", "-b", "main")
+	cmd.Dir = env.Dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, output)
+	}
 	var out, errOut bytes.Buffer
 	if code := run(context.Background(), []string{"init"}, strings.NewReader(""), &out, &errOut, env); code != 0 || !strings.Contains(out.String(), "created .june/rules/MY001.yml\n") {
 		t.Fatalf("init: exit = %d, stdout = %q, stderr = %q", code, out.String(), errOut.String())
@@ -978,5 +982,62 @@ func TestInitCommand(t *testing.T) {
 	out.Reset()
 	if code := run(context.Background(), []string{"init", "extra"}, strings.NewReader(""), &out, &errOut, env); code != 2 || !strings.Contains(errOut.String(), `unexpected argument "extra"`) {
 		t.Errorf("init extra: exit = %d, stderr = %q", code, errOut.String())
+	}
+}
+
+func TestFlagsAfterPathsAreRefused(t *testing.T) {
+	code, _, errOut := runArgs(t, project(t), "app.py", "--base", "main")
+	if code != 2 || !strings.Contains(errOut, "flags must precede paths. Use: june [flags] [paths]") {
+		t.Fatalf("exit = %d, stderr = %q", code, errOut)
+	}
+}
+
+func TestInitRejectsForce(t *testing.T) {
+	code, _, errOut := runArgs(t, project(t), "init", "--force")
+	if code != 2 || !strings.Contains(errOut, "flag provided but not defined") {
+		t.Fatalf("exit = %d, stderr = %q", code, errOut)
+	}
+}
+
+func TestInitSuggestedCommandVerifiesTheStarterFromASubdirectory(t *testing.T) {
+	root := t.TempDir()
+	cmd := exec.CommandContext(context.Background(), "git", "init", "-q", "-b", "main")
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "svc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".june"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".june/config.yml"), []byte("rules: [ci-rules]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := check.Env{Dir: filepath.Join(root, "svc")}
+	code, out, errOut := runArgs(t, env, "init", "--ci", "gitlab")
+	if code != 0 || errOut != "" {
+		t.Fatalf("init = %d %q %q", code, out, errOut)
+	}
+	_, command, ok := strings.Cut(out, "then run ")
+	if !ok {
+		t.Fatalf("missing suggested command: %s", out)
+	}
+	cmd = exec.CommandContext(context.Background(), "sh", "-c", "june() { printf '%s\\000' \"$@\"; }; "+command)
+	cmd.Dir = env.Dir
+	parsed, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(strings.TrimSuffix(string(parsed), "\x00"), "\x00")
+	if code, out, errOut := runArgs(t, env, args...); code != 0 || errOut != "" || !strings.Contains(out, "verified 1 rule, 2 examples") {
+		t.Fatalf("suggested verification = %d %q %q", code, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".june/gitlab-ci.yml")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".github/workflows/june.yml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("GitLab flag wrote GitHub config: %v", err)
 	}
 }

@@ -33,7 +33,7 @@ type Request struct {
 	// Changed is the supplied touched-line list, one "path:7" or "path:7-12" per line.
 	Changed io.Reader
 	// Rules lists the rules directories, merged into one set; empty means the rules of .june/config.yml, else .june/rules.
-	// That directory is the working directory's, else the repository root's.
+	// Default directories resolve from the repository root, or the working directory outside git.
 	// A directory named twice counts once, and a rule id defined in two files is a rule fault.
 	Rules []string
 	// Format is the output format, one of diag's; empty is inferred: GitHub under GitHub Actions, GitLab under GitLab CI, else text.
@@ -258,7 +258,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 
 // VerifyRequest describes one verification of rule examples.
 type VerifyRequest struct {
-	// Rules lists the rules directories, none meaning ./.june/rules.
+	// Rules lists the rules directories; none uses the config, else repository-root .june/rules.
 	Rules []string
 	// Rule is the id of the one rule to verify, empty for all of them.
 	Rule string
@@ -266,7 +266,7 @@ type VerifyRequest struct {
 	Format diag.Format
 }
 
-// Rules verifies every example of every rule in dirs, none meaning ./.june/rules.
+// Rules verifies every example of every rule in dirs; none uses the config, else repository-root .june/rules.
 // Exit 0 means every example behaved. Any rule fault is Exit 2.
 func Rules(ctx context.Context, env Env, dirs []string) (Result, error) {
 	return Verify(ctx, env, VerifyRequest{Rules: dirs})
@@ -304,20 +304,18 @@ func New(ctx context.Context, env Env, dirs []string, id string) (Result, error)
 		return Result{}, errors.New("check: Env.Dir is empty")
 	}
 	req := Request{Format: diag.Text}
-	if len(dirs) > 1 {
-		return refuse(req, "june new writes into one rules directory, and "+strconv.Itoa(len(dirs))+" were given. Fix: pass --rules once"), nil
-	}
 	proj, bad := findProject(ctx, env)
 	if bad != nil {
 		return refuse(req, *bad), nil
 	}
-	dir := defaultRules
-	if proj.dir != env.Dir {
-		dir = resolve(proj.dir, defaultRules)
+	if len(dirs) == 0 {
+		dirs = proj.rulesDirs(env)
 	}
-	if len(dirs) == 1 && dirs[0] != "" {
-		dir = dirs[0]
+	dirs = distinct(env.Dir, dirs)
+	if len(dirs) > 1 {
+		return refuse(req, "june new writes into one rules directory, and "+strconv.Itoa(len(dirs))+" were given. Fix: pass --rules once"), nil
 	}
+	dir := dirs[0]
 	made, fault := rules.Scaffold(resolve(env.Dir, dir), id)
 	if fault != nil {
 		return refuseWith(req, faultDiagnostics(env.Dir, []string{dir}, []rules.Fault{*fault})...), nil
@@ -452,7 +450,7 @@ func findTouched(ctx context.Context, env Env, req Request, configBase string, s
 		if base := mergeRequestBase(ctx, env); base != "" {
 			return gitTouched(ctx, env, base, sourceMR, req.IgnoreSpace, skip)
 		}
-		if configBase != "" {
+		if configBase != "" && env.Vars["PRE_COMMIT"] != "1" {
 			return gitTouched(ctx, env, configBase, sourceConfig, req.IgnoreSpace, skip)
 		}
 		return gitTouched(ctx, env, "", "", req.IgnoreSpace, skip)

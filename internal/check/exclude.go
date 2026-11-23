@@ -28,8 +28,7 @@ type config struct {
 	Exclude []string `yaml:"exclude"`
 }
 
-// project is where june's own files live: the directory that holds .june, which is the working directory
-// when it has one, else the repository root, so a run from a subdirectory finds the same rules and config.
+// project is where june's own files live: the repository root, or the working directory outside git.
 type project struct {
 	dir    string
 	prefix string // the working directory under dir, slash-separated with a trailing slash, "" when they are the same
@@ -47,19 +46,12 @@ func repoLocation(ctx context.Context, env Env) (root, prefix string) {
 	return filepath.Clean(top), pre
 }
 
-func isDir(p string) bool {
-	info, err := os.Stat(p)
-	return err == nil && info.IsDir()
-}
-
 // findProject locates the project and reads its config.
 // The returned message is a complete "<cause>. Fix: <instruction>" refusal.
 func findProject(ctx context.Context, env Env) (project, *string) {
 	p := project{dir: env.Dir}
-	if !isDir(resolve(env.Dir, ".june")) {
-		if root, prefix := repoLocation(ctx, env); root != "" && prefix != "" && isDir(filepath.Join(root, ".june")) {
-			p.dir, p.prefix = root, prefix
-		}
+	if root, prefix := repoLocation(ctx, env); root != "" {
+		p.dir, p.prefix = root, prefix
 	}
 	raw, err := os.ReadFile(resolve(p.dir, defaultConfig))
 	switch {
@@ -123,6 +115,7 @@ func excludes(env Env, p project, req Request) (*excluder, *string) {
 		}
 		ex.globs = append(ex.globs, seg)
 	}
+	all := false
 	for _, arg := range req.Paths {
 		rel := filepath.ToSlash(arg)
 		if filepath.IsAbs(arg) {
@@ -142,10 +135,13 @@ func excludes(env Env, p project, req Request) (*excluder, *string) {
 			return nil, &msg
 		}
 		if rel == "." {
-			ex.only = nil
-			break
+			all = true
+			continue
 		}
 		ex.only = append(ex.only, strings.Split(rel, "/"))
+	}
+	if all {
+		ex.only = nil
 	}
 	return ex, nil
 }

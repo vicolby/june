@@ -86,7 +86,7 @@ The gh command requires a signed subject with the requested archive name and dig
 
 ```text
 june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--exclude GLOB]... [--base REF | --changed-lines FILE] [PATH]...
-june init [--force]
+june init [--ci github|gitlab]
 june verify [--rules DIR]... [--rule ID] [--format FORMAT]
 june new [--rules DIR] RULE
 june --version
@@ -95,9 +95,9 @@ june --help | -h
 
 | Flag | Meaning |
 | --- | --- |
-| `PATH` | Narrow the check to these files and directories, relative to the working directory. A path that does not exist or lies outside the working directory exits 2. Flags may come before or after paths; `--` ends the flags. |
+| `PATH` | Narrow the check to these files and directories, relative to the working directory. A path that does not exist or lies outside the working directory exits 2. Flags must precede paths; prefix paths starting with `-` with `./`. |
 | `--rules DIR` | Rules directory, repeatable for checks and `verify`; `new` takes one. Default: `rules` in `.june/config.yml`, else `.june/rules`. |
-| `--force` | With `june init`: replace the CI and hook files that exist. Rules are never overwritten. |
+| `--ci PROVIDER` | With `june init`: write `github` (default) or `gitlab` CI configuration. |
 | `--base REF` | Judge lines changed since the merge base of `REF` and `HEAD`. |
 | `--changed-lines FILE` | Judge lines listed in `FILE`, one `path:7` or `path:7-12` per line; `-` reads stdin. |
 | `--format FORMAT` | `text`, `json`, `sarif`, `github` or `gitlab`. Default: `github` under GitHub Actions, `gitlab` under GitLab CI, else `text`. `june verify` takes it too. |
@@ -112,13 +112,13 @@ june --rules path/to/rules --base main
 june src/api tests/test_api.py   # only those paths
 ```
 
-`.june/rules` and `.june/config.yml` are found in the working directory when it has a `.june` directory, else at the repository root, so a run from `svc/` uses the same rules as one from the root. Paths in the output stay relative to the working directory.
+`.june/rules` and `.june/config.yml` are found at the repository root, so a run from `svc/` uses the same rules as one from the root. Outside git they resolve from the working directory. Paths in the output stay relative to the working directory.
 
 ### Setting up
 
-`june init` sets up the repository (the working directory outside git): `.june/rules` with a starter rule from `june new` that passes `june verify`, a commented `.june/config.yml`, `.github/workflows/june.yml` using the [GitHub Action](#github-actions), `.june/gitlab-ci.yml` for [GitLab CI](#gitlab-ci) (add `include: - local: .june/gitlab-ci.yml` to `.gitlab-ci.yml`) and `.pre-commit-config.yaml` for [pre-commit](#pre-commit). The snippets pin the june release of the binary that wrote them; a build without a release version writes `X.Y.Z`, to replace. Running it again changes nothing: a file that exists is kept, an existing `.june/rules` is never touched, and `--force` replaces only the CI and hook files.
+`june init` requires a git repository and sets it up at the root: `.june/rules` with a starter rule from `june new` that passes `june verify`, a commented `.june/config.yml`, one CI snippet and `.pre-commit-config.yaml` for [pre-commit](#pre-commit). By default it writes `.github/workflows/june.yml` using the [GitHub Action](#github-actions). Use `june init --ci gitlab` to write `.june/gitlab-ci.yml` instead, then add `include: [{local: .june/gitlab-ci.yml}]` to `.gitlab-ci.yml`. The snippets pin the june release of the binary that wrote them; a build without a release version writes `X.Y.Z`, to replace. Running it again preserves existing files and rules.
 
-Without `--base` or `--changed-lines`, june infers the base, first hit wins: pre-commit refs, CI event base (see [GitHub Actions](#github-actions) and [GitLab CI](#gitlab-ci)), pre-commit staged diff, upstream branch, remote default branch. The summary names the one used. When the touched lines cannot be determined (a shallow clone, say) june exits 2 and names the fix.
+Without `--base` or `--changed-lines`, june infers the base, first hit wins: pre-commit refs, CI event base (see [GitHub Actions](#github-actions) and [GitLab CI](#gitlab-ci)), pre-commit staged diff, config base, upstream branch, remote default branch. The summary names the one used. When the touched lines cannot be determined (a shallow clone, say) june exits 2 and names the fix.
 
 ### Source encoding
 
@@ -170,7 +170,7 @@ A human still reviews the rule and its examples: a verified rule matches its exa
 ```yaml
 rules:            # rules directories, default .june/rules; --rules replaces them
   - .june/rules
-base: origin/main # used when no --base, CI event, merge request or pre-commit ref names a base
+base: origin/main # used when no --base, CI event, merge request or pre-commit scope names a base
 exclude:          # see below
   - vendor
 ```
@@ -224,7 +224,7 @@ jobs:
       - uses: vicolby/june@vX.Y.Z
 ```
 
-Inputs: `rules` (default `.june/rules`), `base` (a git ref to judge against), `version`.
+Inputs: `rules` (default: repository config, else `.june/rules`), `base` (a git ref to judge against), `version`.
 
 On a pull request june judges lines changed since the PR base and annotates the diff. In a merge queue (`merge_group`) it judges the group against `merge_group.base_sha`. When inferring that base, an unreadable or invalid event payload exits 2 instead of falling back to another branch; provide a readable `GITHUB_EVENT_PATH` with a valid `merge_group.base_sha`, or set `base` explicitly.
 
@@ -262,7 +262,7 @@ june:
   before_script:
     - curl -fsSL https://github.com/vicolby/june/releases/download/vX.Y.Z/install.sh | JUNE_VERSION=X.Y.Z JUNE_INSTALL_AST_GREP=1 sh
   script:
-    - june --rules .june/rules
+    - june
   artifacts:
     when: always
     reports:
@@ -279,7 +279,7 @@ repos:
     rev: v0.3.0  # latest release tag; v0.3.0 is the first with the hook
     hooks:
       - id: june
-        args: [--rules, path/to/rules]  # omit to use .june/rules
+        args: [--rules, path/to/rules]  # omit to use the configured rules
 ```
 
 Install june with Homebrew. The hook runs without filenames when Python files are involved and judges the staged change against HEAD. Under `--from-ref A --to-ref B`, or a pre-push that sets them, it judges the lines that range adds. A first push of a history with a root commit sets no refs, so pre-push judges nothing; CI covers it.

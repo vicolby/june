@@ -16,8 +16,8 @@ import (
 
 // InitRequest asks for a project to be set up.
 type InitRequest struct {
-	// Force overwrites the CI and hook files that exist. Rules are never overwritten.
-	Force bool
+	// CI selects github or gitlab; empty means github.
+	CI string
 	// Version is the june release the snippets pin, as stamped into the binary; anything but X.Y.Z leaves a placeholder.
 	Version string
 }
@@ -28,7 +28,7 @@ const configStarter = `# june configuration. Every key is optional. Paths and gl
 #
 # rules:             # rules directories, default .june/rules
 #   - .june/rules
-# base: origin/main  # judge against this ref when no CI event or pre-commit ref names one
+# base: origin/main  # judge against this ref when no CI event or pre-commit scope names one
 # exclude:           # path globs kept out of the check
 #   - vendor
 `
@@ -75,10 +75,8 @@ const preCommitConfig = `repos:
 
 var releaseVersion = regexp.MustCompile(`^v?(\d+\.\d+\.\d+)$`)
 
-// Init sets up the repository june runs in (the working directory outside git): the rules directory with a starter rule
-// that passes verification, a commented config, a GitHub Actions workflow, a GitLab CI include and the pre-commit hook config.
-// It is idempotent: a file that exists is kept, unless Force asks for the CI and hook files to be replaced.
-// An existing rules directory is never touched. Exit 2 reports a file that cannot be written.
+// Init sets up the repository with a starter rule, a config, one CI snippet and the pre-commit hook config.
+// It is idempotent: files that exist are kept. Exit 2 reports a file that cannot be written.
 func Init(ctx context.Context, env Env, req InitRequest) (Result, error) {
 	if env.Dir == "" {
 		return Result{}, errors.New("check: Env.Dir is empty")
@@ -87,12 +85,19 @@ func Init(ctx context.Context, env Env, req InitRequest) (Result, error) {
 		return Result{}, err
 	}
 	out := Request{Format: diag.Text}
+	provider := req.CI
+	if provider == "" {
+		provider = "github"
+	}
+	if provider != "github" && provider != "gitlab" {
+		return refuse(out, fmt.Sprintf("unknown CI provider %q. Fix: use june init --ci github or june init --ci gitlab", provider)), nil
+	}
 	root, prefix := repoLocation(ctx, env)
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
 	if root == "" {
-		root = env.Dir
+		return refuse(out, "june init requires a git repository. Fix: run june init inside a git work tree"), nil
 	}
 	version, pinned := "X.Y.Z", false
 	if m := releaseVersion.FindStringSubmatch(req.Version); m != nil {
@@ -112,6 +117,7 @@ func Init(ctx context.Context, env Env, req InitRequest) (Result, error) {
 		return filepath.ToSlash(rel)
 	}
 
+	starterCreated := false
 	rulesDir := filepath.Join(root, defaultRules)
 	if entries, err := os.ReadDir(rulesDir); err == nil && len(entries) > 0 {
 		fmt.Fprintf(&b, "kept %s (exists)\n", show(rulesDir))
@@ -120,30 +126,27 @@ func Init(ctx context.Context, env Env, req InitRequest) (Result, error) {
 		if fault != nil {
 			return refuseWith(out, faultDiagnostics(root, []string{rulesDir}, []rules.Fault{*fault})...), nil
 		}
+		starterCreated = true
 		for _, m := range made {
 			fmt.Fprintf(&b, "created %s\n", show(filepath.Join(rulesDir, m)))
 		}
 	}
 
-	files := []struct {
-		rel, body string
-		replace   bool // Force may replace it: it is generated snippet, not something the user wrote
-	}{
-		{defaultConfig, configStarter, false},
-		{".github/workflows/june.yml", fmt.Sprintf(githubWorkflow, version), true},
-		{".june/gitlab-ci.yml", fmt.Sprintf(gitlabInclude, version), true},
-		{".pre-commit-config.yaml", fmt.Sprintf(preCommitConfig, version), true},
+	ciPath, ciBody := ".github/workflows/june.yml", githubWorkflow
+	if provider == "gitlab" {
+		ciPath, ciBody = ".june/gitlab-ci.yml", gitlabInclude
+	}
+	files := []struct{ rel, body string }{
+		{defaultConfig, configStarter},
+		{ciPath, fmt.Sprintf(ciBody, version)},
+		{".pre-commit-config.yaml", fmt.Sprintf(preCommitConfig, version)},
 	}
 	for _, f := range files {
 		p := filepath.Join(root, filepath.FromSlash(f.rel))
-		err := writeFile(p, []byte(f.body), req.Force && f.replace)
+		err := writeFile(p, []byte(f.body))
 		switch {
 		case errors.Is(err, fs.ErrExist):
-			hint := "exists"
-			if f.replace {
-				hint += "; --force replaces it"
-			}
-			fmt.Fprintf(&b, "kept %s (%s)\n", show(p), hint)
+			fmt.Fprintf(&b, "kept %s (exists)\n", show(p))
 		case err != nil:
 			return refuse(out, fmt.Sprintf("%s cannot be written (%v). Fix: make the directory writable", show(p), err)), nil
 		default:
@@ -153,20 +156,20 @@ func Init(ctx context.Context, env Env, req InitRequest) (Result, error) {
 	if !pinned {
 		b.WriteString("note: this build has no release version, so the snippets pin vX.Y.Z. Fix: replace X.Y.Z with the june release you use\n")
 	}
-	fmt.Fprintf(&b, "next: edit the starter rule, then run june verify --rule %s\n", starterRuleID)
+	if starterCreated {
+		fmt.Fprintf(&b, "next: edit the starter rule, then run june verify --rules %s --rule %s\n", shellQuote(show(rulesDir)), starterRuleID)
+	} else {
+		b.WriteString("next: run june verify to verify the preserved rules\n")
+	}
 	return Result{Out: []byte(b.String())}, nil
 }
 
-// writeFile creates path and its directories. An existing file is fs.ErrExist unless replace is set.
-func writeFile(path string, data []byte, replace bool) error {
+// writeFile creates path and its directories. An existing file is fs.ErrExist.
+func writeFile(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
-	if replace {
-		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
-	}
-	f, err := os.OpenFile(path, flags, 0o644)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
 	}
