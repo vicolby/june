@@ -62,12 +62,17 @@ june-check:
   before_script:
     - curl -fsSL https://github.com/vicolby/june/releases/download/v%[1]s/install.sh | JUNE_VERSION=%[1]s JUNE_INSTALL_AST_GREP=1 sh
   script:
-    # A merge request pipeline names its own base; a default-branch pipeline judges the push since its previous commit.
+    # A merge request pipeline names its own base. A push is judged since CI_COMMIT_BEFORE_SHA.
+    # That variable is forty zeros for a schedule, a manual run, or the first commit, which uses HEAD~1.
     - |
       if [ -n "$CI_MERGE_REQUEST_IID" ]; then
         june
       else
-        june --base "$CI_COMMIT_BEFORE_SHA"
+        base="$CI_COMMIT_BEFORE_SHA"
+        if [ "$base" = "0000000000000000000000000000000000000000" ]; then
+          base="HEAD~1"
+        fi
+        june --base "$base"
       fi
   artifacts:
     when: always

@@ -265,11 +265,17 @@ june-check:
   before_script:
     - curl -fsSL https://github.com/vicolby/june/releases/download/vX.Y.Z/install.sh | JUNE_VERSION=X.Y.Z JUNE_INSTALL_AST_GREP=1 sh
   script:
+    # A merge request pipeline names its own base. A push is judged since CI_COMMIT_BEFORE_SHA.
+    # That variable is forty zeros for a schedule, a manual run, or the first commit, which uses HEAD~1.
     - |
       if [ -n "$CI_MERGE_REQUEST_IID" ]; then
         june
       else
-        june --base "$CI_COMMIT_BEFORE_SHA"
+        base="$CI_COMMIT_BEFORE_SHA"
+        if [ "$base" = "0000000000000000000000000000000000000000" ]; then
+          base="HEAD~1"
+        fi
+        june --base "$base"
       fi
   artifacts:
     when: always
@@ -277,7 +283,7 @@ june-check:
       codequality: gl-code-quality-report.json
 ```
 
-The job is named `june-check` so it does not clash with an existing `june` job; rename it freely. The MR widget compares against the latest report on the target branch, so the job also runs on the default branch, where a branch pipeline has no MR base and june judges the push since `$CI_COMMIT_BEFORE_SHA`.
+The job is named `june-check` so it does not clash with an existing `june` job; rename it freely. The MR widget compares against the latest report on the target branch, so the job also runs on the default branch. A branch pipeline has no MR base: a push is judged since `$CI_COMMIT_BEFORE_SHA`, and a schedule, a manual run, or the first commit (where GitLab sets that variable to forty zeros) is judged against `HEAD~1`. The first commit has no parent, so that pipeline still exits 2.
 
 ### Pre-commit
 
