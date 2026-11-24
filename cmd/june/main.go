@@ -88,6 +88,37 @@ exit codes:
   2  no verdict: bad usage, bad rules directory, shallow clone, no base, missing ast-grep
 `
 
+// initUsage, verifyUsage and newUsage are the help text of each subcommand: `june init --help` and so on.
+const initUsage = `usage: june init [--ci github|gitlab]
+
+Set up the repository root: .june/rules with a starter rule, .june/config.yml, one CI snippet and .pre-commit-config.yaml.
+Files that exist are kept. Must run inside a git repository.
+
+flags:
+  --ci PROVIDER  write github (default, .github/workflows/june.yml) or gitlab (.june/gitlab-ci.yml, job june-check) CI configuration
+  --help, -h     print this help
+`
+
+const verifyUsage = `usage: june verify [--rules DIR]... [--rule ID] [--format FORMAT]
+
+Check that every example of every rule behaves, or of one rule only.
+
+flags:
+  --rules DIR       rules directory, repeatable (default: rules in .june/config.yml, else .june/rules)
+  --rule ID         verify the examples of one rule only
+  --format FORMAT   text, json, sarif, github or gitlab
+  --help, -h        print this help
+`
+
+const newUsage = `usage: june new [--rules DIR] RULE
+
+Write a minimal rule RULE and its examples, which june verify accepts as written.
+
+flags:
+  --rules DIR    rules directory (default: rules in .june/config.yml, else .june/rules)
+  --help, -h     print this help
+`
+
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, env check.Env) int {
 	if len(args) > 0 && args[0] == "verify" {
 		return verify(ctx, args[1:], stdout, stderr, env)
@@ -163,7 +194,7 @@ func initProject(ctx context.Context, args []string, stdout, stderr io.Writer, e
 	ci := fs.String("ci", "github", "CI provider: github or gitlab")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			fmt.Fprint(stdout, usage)
+			fmt.Fprint(stdout, initUsage)
 			return 0
 		}
 		return usageError(stderr, err.Error())
@@ -185,7 +216,7 @@ func verify(ctx context.Context, args []string, stdout, stderr io.Writer, env ch
 	format := fs.String("format", "", "output format: text, json, sarif, github or gitlab")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			fmt.Fprint(stdout, usage)
+			fmt.Fprint(stdout, verifyUsage)
 			return 0
 		}
 		return usageError(stderr, err.Error())
@@ -213,7 +244,7 @@ func newRule(ctx context.Context, args []string, stdout, stderr io.Writer, env c
 	fs.Var(&rulesDirs, "rules", "rules directory (default ./.june/rules)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			fmt.Fprint(stdout, usage)
+			fmt.Fprint(stdout, newUsage)
 			return 0
 		}
 		return usageError(stderr, err.Error())

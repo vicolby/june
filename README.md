@@ -255,30 +255,36 @@ On `push` there is no PR base: supply one with `--base origin/main` or the [conf
 In a merge request pipeline june judges the lines the MR changed and writes a Code Quality report (error `major`, warning `minor`, opt-out `info`). Use full clone depth; a shallow clone exits 2. `X.Y.Z` is a pinned release as above.
 
 ```yaml
-june:
+june-check:
   image: node:22  # any image with git, curl and npm
   variables:
     GIT_DEPTH: 0
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   before_script:
     - curl -fsSL https://github.com/vicolby/june/releases/download/vX.Y.Z/install.sh | JUNE_VERSION=X.Y.Z JUNE_INSTALL_AST_GREP=1 sh
   script:
-    - june
+    - |
+      if [ -n "$CI_MERGE_REQUEST_IID" ]; then
+        june
+      else
+        june --base "$CI_COMMIT_BEFORE_SHA"
+      fi
   artifacts:
     when: always
     reports:
       codequality: gl-code-quality-report.json
 ```
 
-The MR widget compares against the latest report on the target branch, so also run the job on the default branch: add `- if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH` to `rules` and use `--base HEAD~1` there, since a branch pipeline has no MR base.
+The job is named `june-check` so it does not clash with an existing `june` job; rename it freely. The MR widget compares against the latest report on the target branch, so the job also runs on the default branch, where a branch pipeline has no MR base and june judges the push since `$CI_COMMIT_BEFORE_SHA`.
 
 ### Pre-commit
 
 ```yaml
 repos:
   - repo: https://github.com/vicolby/june
-    rev: v0.3.0  # latest release tag; v0.3.0 is the first with the hook
+    rev: v0.5.0  # latest release tag; v0.3.0 is the first with the hook
     hooks:
       - id: june
         args: [--rules, path/to/rules]  # omit to use the configured rules

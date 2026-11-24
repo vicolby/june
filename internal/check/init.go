@@ -50,16 +50,25 @@ jobs:
 const gitlabInclude = `# Include from .gitlab-ci.yml:
 #   include:
 #     - local: .june/gitlab-ci.yml
-june:
+# The job is june-check, so it does not clash with a job named june. It also runs on the default branch,
+# which gives the merge request Code Quality widget a baseline report to compare against.
+june-check:
   image: node:22  # any image with git, curl and npm
   variables:
     GIT_DEPTH: 0
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   before_script:
     - curl -fsSL https://github.com/vicolby/june/releases/download/v%[1]s/install.sh | JUNE_VERSION=%[1]s JUNE_INSTALL_AST_GREP=1 sh
   script:
-    - june
+    # A merge request pipeline names its own base; a default-branch pipeline judges the push since its previous commit.
+    - |
+      if [ -n "$CI_MERGE_REQUEST_IID" ]; then
+        june
+      else
+        june --base "$CI_COMMIT_BEFORE_SHA"
+      fi
   artifacts:
     when: always
     reports:

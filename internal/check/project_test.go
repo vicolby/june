@@ -394,7 +394,7 @@ func TestInitGitLabConsumerContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	var config struct {
-		June struct {
+		JuneCheck struct {
 			Image        string
 			Variables    map[string]string
 			Rules        []struct{ If string }
@@ -404,16 +404,16 @@ func TestInitGitLabConsumerContract(t *testing.T) {
 				When    string
 				Reports map[string]string
 			}
-		}
+		} `yaml:"june-check"`
 	}
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		t.Fatal(err)
 	}
-	job := config.June
-	if job.Image != "node:22" || job.Variables["GIT_DEPTH"] != "0" || len(job.Rules) != 1 || job.Rules[0].If != `$CI_PIPELINE_SOURCE == "merge_request_event"` {
+	job := config.JuneCheck
+	if job.Image != "node:22" || job.Variables["GIT_DEPTH"] != "0" || len(job.Rules) != 2 || job.Rules[0].If != `$CI_PIPELINE_SOURCE == "merge_request_event"` || job.Rules[1].If != `$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH` {
 		t.Fatalf("GitLab environment: %+v", job)
 	}
-	if len(job.BeforeScript) != 1 || job.BeforeScript[0] != "curl -fsSL https://github.com/vicolby/june/releases/download/v1.2.3/install.sh | JUNE_VERSION=1.2.3 JUNE_INSTALL_AST_GREP=1 sh" || len(job.Script) != 1 || job.Script[0] != "june" {
+	if len(job.BeforeScript) != 1 || job.BeforeScript[0] != "curl -fsSL https://github.com/vicolby/june/releases/download/v1.2.3/install.sh | JUNE_VERSION=1.2.3 JUNE_INSTALL_AST_GREP=1 sh" || len(job.Script) != 1 || !strings.Contains(job.Script[0], "then\n  june\nelse") || !strings.Contains(job.Script[0], `june --base "$CI_COMMIT_BEFORE_SHA"`) {
 		t.Fatalf("GitLab commands: %+v", job)
 	}
 	if job.Artifacts.When != "always" || job.Artifacts.Reports["codequality"] != "gl-code-quality-report.json" {
