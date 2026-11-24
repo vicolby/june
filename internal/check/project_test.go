@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -394,7 +395,7 @@ func TestInitGitLabConsumerContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	var config struct {
-		June struct {
+		JuneCheck struct {
 			Image        string
 			Variables    map[string]string
 			Rules        []struct{ If string }
@@ -404,17 +405,41 @@ func TestInitGitLabConsumerContract(t *testing.T) {
 				When    string
 				Reports map[string]string
 			}
-		}
+		} `yaml:"june-check"`
 	}
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		t.Fatal(err)
 	}
-	job := config.June
-	if job.Image != "node:22" || job.Variables["GIT_DEPTH"] != "0" || len(job.Rules) != 1 || job.Rules[0].If != `$CI_PIPELINE_SOURCE == "merge_request_event"` {
+	job := config.JuneCheck
+	if job.Image != "node:22" || job.Variables["GIT_DEPTH"] != "0" || len(job.Rules) != 2 || job.Rules[0].If != `$CI_PIPELINE_SOURCE == "merge_request_event"` || job.Rules[1].If != `$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH` {
 		t.Fatalf("GitLab environment: %+v", job)
 	}
-	if len(job.BeforeScript) != 1 || job.BeforeScript[0] != "curl -fsSL https://github.com/vicolby/june/releases/download/v1.2.3/install.sh | JUNE_VERSION=1.2.3 JUNE_INSTALL_AST_GREP=1 sh" || len(job.Script) != 1 || job.Script[0] != "june" {
+	if len(job.BeforeScript) != 1 || job.BeforeScript[0] != "curl -fsSL https://github.com/vicolby/june/releases/download/v1.2.3/install.sh | JUNE_VERSION=1.2.3 JUNE_INSTALL_AST_GREP=1 sh" || len(job.Script) != 1 {
 		t.Fatalf("GitLab commands: %+v", job)
+	}
+	// GitLab's predefined CI_COMMIT_BEFORE_SHA is forty zeros for a merge request,
+	// a schedule, a manual run, and the first commit. A push carries the previous commit.
+	const zeroSHA = "0000000000000000000000000000000000000000"
+	const pushSHA = "0123456789abcdef0123456789abcdef01234567"
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"merge request", []string{"CI_MERGE_REQUEST_IID=7", "CI_COMMIT_BEFORE_SHA=" + zeroSHA}, ""},
+		{"merged result", []string{"CI_MERGE_REQUEST_IID=7", "CI_COMMIT_BEFORE_SHA=" + pushSHA}, ""},
+		{"schedule", []string{"CI_COMMIT_BEFORE_SHA=" + zeroSHA}, "--base HEAD~1"},
+		{"push", []string{"CI_COMMIT_BEFORE_SHA=" + pushSHA}, "--base " + pushSHA},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.CommandContext(context.Background(), "sh", "-c", "june() { printf '%s' \"$*\"; }; . /dev/stdin")
+			cmd.Stdin = strings.NewReader(job.Script[0])
+			cmd.Env = tc.env
+			out, err := cmd.Output()
+			if err != nil || string(out) != tc.want {
+				t.Fatalf("june invoked as %q, %v; want %q", out, err, tc.want)
+			}
+		})
 	}
 	if job.Artifacts.When != "always" || job.Artifacts.Reports["codequality"] != "gl-code-quality-report.json" {
 		t.Fatalf("GitLab report: %+v", job.Artifacts)

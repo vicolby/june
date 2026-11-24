@@ -91,7 +91,7 @@ func TestActionSmokeChecksEventOutcome(t *testing.T) {
 }
 
 func TestHelpPrintsUsageAndExitsZero(t *testing.T) {
-	for _, args := range [][]string{{"--help"}, {"-h"}, {"verify", "--help"}, {"verify", "-h"}, {"--legacy", "--help"}} {
+	for _, args := range [][]string{{"--help"}, {"-h"}, {"--legacy", "--help"}} {
 		var out, errOut bytes.Buffer
 		if code := run(context.Background(), args, strings.NewReader(""), &out, &errOut, check.Env{Dir: t.TempDir()}); code != 0 {
 			t.Errorf("%v: exit = %d, want 0", args, code)
@@ -106,6 +106,32 @@ func TestHelpPrintsUsageAndExitsZero(t *testing.T) {
 		}
 		if strings.Contains(out.String(), "--ignore-whitespace, -w") {
 			t.Errorf("%v: help advertises -w as an alias: %q", args, out.String())
+		}
+	}
+}
+
+func TestSubcommandHelpIsItsOwn(t *testing.T) {
+	for _, tc := range []struct {
+		cmd  string
+		want []string
+	}{
+		{"init", []string{"usage: june init [--ci github|gitlab]", "--ci PROVIDER", "june-check"}},
+		{"verify", []string{"usage: june verify ", "--rule ID", "--format FORMAT"}},
+		{"new", []string{"usage: june new [--rules DIR] RULE", "--rules DIR"}},
+	} {
+		for _, flag := range []string{"--help", "-h"} {
+			var out, errOut bytes.Buffer
+			if code := run(context.Background(), []string{tc.cmd, flag}, strings.NewReader(""), &out, &errOut, check.Env{Dir: t.TempDir()}); code != 0 || errOut.Len() != 0 {
+				t.Errorf("%s %s: exit = %d, stderr = %q", tc.cmd, flag, code, errOut.String())
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("%s %s: stdout lacks %q: %q", tc.cmd, flag, want, out.String())
+				}
+			}
+			if strings.Contains(out.String(), "exit codes:") || strings.Contains(out.String(), "june --version") {
+				t.Errorf("%s %s: prints the general usage: %q", tc.cmd, flag, out.String())
+			}
 		}
 	}
 }

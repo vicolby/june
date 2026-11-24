@@ -255,30 +255,42 @@ On `push` there is no PR base: supply one with `--base origin/main` or the [conf
 In a merge request pipeline june judges the lines the MR changed and writes a Code Quality report (error `major`, warning `minor`, opt-out `info`). Use full clone depth; a shallow clone exits 2. `X.Y.Z` is a pinned release as above.
 
 ```yaml
-june:
+june-check:
   image: node:22  # any image with git, curl and npm
   variables:
     GIT_DEPTH: 0
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   before_script:
     - curl -fsSL https://github.com/vicolby/june/releases/download/vX.Y.Z/install.sh | JUNE_VERSION=X.Y.Z JUNE_INSTALL_AST_GREP=1 sh
   script:
-    - june
+    # A merge request pipeline names its own base. A push is judged since CI_COMMIT_BEFORE_SHA.
+    # That variable is forty zeros for a schedule, a manual run, or the first commit, which uses HEAD~1.
+    - |
+      if [ -n "$CI_MERGE_REQUEST_IID" ]; then
+        june
+      else
+        base="$CI_COMMIT_BEFORE_SHA"
+        if [ "$base" = "0000000000000000000000000000000000000000" ]; then
+          base="HEAD~1"
+        fi
+        june --base "$base"
+      fi
   artifacts:
     when: always
     reports:
       codequality: gl-code-quality-report.json
 ```
 
-The MR widget compares against the latest report on the target branch, so also run the job on the default branch: add `- if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH` to `rules` and use `--base HEAD~1` there, since a branch pipeline has no MR base.
+The job is named `june-check` so it does not clash with an existing `june` job; rename it freely. The MR widget compares against the latest report on the target branch, so the job also runs on the default branch. A branch pipeline has no MR base: a push is judged since `$CI_COMMIT_BEFORE_SHA`, and a schedule, a manual run, or the first commit (where GitLab sets that variable to forty zeros) is judged against `HEAD~1`. The first commit has no parent, so that pipeline still exits 2.
 
 ### Pre-commit
 
 ```yaml
 repos:
   - repo: https://github.com/vicolby/june
-    rev: v0.3.0  # latest release tag; v0.3.0 is the first with the hook
+    rev: v0.5.0  # latest release tag; v0.3.0 is the first with the hook
     hooks:
       - id: june
         args: [--rules, path/to/rules]  # omit to use the configured rules
