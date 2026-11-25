@@ -212,6 +212,10 @@ func TestAKeyWithInnerWhitespaceIsAnAuthFailureNotACrash(t *testing.T) {
 	}
 }
 
+func billingBody(code string) string {
+	return fmt.Sprintf(`{"error":{"message":"PROVIDER-BODY","type":"insufficient_quota","code":%q}}`, code)
+}
+
 func TestFailuresMapToKindsAndNeverEchoTheKey(t *testing.T) {
 	echo := func(msg string) string {
 		return fmt.Sprintf(`{"error":{"message":%q,"type":"x","code":"some_code"}}`, msg)
@@ -231,7 +235,12 @@ func TestFailuresMapToKindsAndNeverEchoTheKey(t *testing.T) {
 		{"unprocessable", 422, echo("bad"), review.BadRequest, "bad", 1},
 		{"bad request echoing the key", 400, echo("bad key " + key + " and sk-other-ABCDEFGHIJKL"), review.BadRequest, "[redacted]", 1},
 		{"rate limited", 429, echo("slow down"), review.RateLimited, "", 3},
-		{"out of quota", 429, `{"error":{"message":"You exceeded your current quota","code":"insufficient_quota"}}`, review.RateLimited, "insufficient_quota", 1},
+		{"out of quota", 429, `{"error":{"message":"You exceeded your current quota","type":"insufficient_quota","code":"insufficient_quota"}}`, review.RateLimited, "insufficient_quota", 1},
+		{"credits exhausted", 429, billingBody("credit_balance_exhausted"), review.RateLimited, "billing_limit", 1},
+		{"organization spend limit", 429, billingBody("organization_spend_limit_exceeded"), review.RateLimited, "billing_limit", 1},
+		{"project spend limit", 429, billingBody("project_spend_limit_exceeded"), review.RateLimited, "billing_limit", 1},
+		{"organization usage limit", 429, billingBody("organization_usage_limit_exceeded"), review.RateLimited, "billing_limit", 1},
+		{"quota type without the quota code", 429, `{"error":{"message":"PROVIDER-BODY","type":"insufficient_quota","code":"other"}}`, review.RateLimited, "billing_limit", 1},
 		{"server error", 500, echo("oops " + key), review.Unavailable, "", 3},
 		{"bad gateway with html", 502, "<html>" + key + "</html>", review.Unavailable, "", 3},
 		{"service unavailable", 503, "", review.Unavailable, "", 3},
@@ -254,11 +263,12 @@ func TestFailuresMapToKindsAndNeverEchoTheKey(t *testing.T) {
 				if ce.Detail != "" {
 					t.Errorf("Detail = %q, want none", ce.Detail)
 				}
+			} else if tc.detail == "insufficient_quota" || tc.detail == "billing_limit" {
+				if ce.Detail != tc.detail || strings.Contains(err.Error(), "exceeded") || strings.Contains(err.Error(), "PROVIDER-BODY") {
+					t.Errorf("err = %v, want fixed detail %q and not the body", err, tc.detail)
+				}
 			} else if !strings.Contains(ce.Detail, tc.detail) {
 				t.Errorf("Detail = %q, want it to contain %q", ce.Detail, tc.detail)
-			}
-			if tc.name == "out of quota" && (ce.Detail != "insufficient_quota" || strings.Contains(err.Error(), "exceeded")) {
-				t.Errorf("err = %v, want the fixed quota detail and not the body", err)
 			}
 			if tc.kind == review.Auth && ce.Detail != "" {
 				t.Errorf("Detail = %q: the body of a 401 or 403 is never echoed", ce.Detail)

@@ -128,7 +128,7 @@ func TestPrepareRefusals(t *testing.T) {
 		{"skill directory without SKILL.md", func(t *testing.T, d string, c *review.Config) {
 			put(t, filepath.Join(d, "sk", "other.md"), "x")
 			c.Skill = "sk"
-		}, "SKILL.md"},
+		}, "has no SKILL.md"},
 		{"skill with only front matter", func(t *testing.T, d string, c *review.Config) {
 			put(t, filepath.Join(d, "skill.md"), "---\nname: x\n---\n\n")
 			c.Skill = "skill.md"
@@ -155,6 +155,31 @@ func TestPrepareRefusals(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAnUnreadableSkillFileInADirectoryKeepsTheReadFault(t *testing.T) {
+	dir, cfg := workspace(t)
+	path := filepath.Join(dir, "team", "SKILL.md")
+	put(t, path, "Look for bugs.\n")
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+	if _, err := os.ReadFile(path); err == nil {
+		t.Skip("this process can read a mode 000 file")
+	}
+	cfg.Skill = "team"
+	plan, faults := review.Prepare(dir, cfg)
+	if plan != nil {
+		t.Fatalf("plan = %v, want a refusal", plan)
+	}
+	joined := strings.Join(faults, "\n")
+	if strings.Contains(joined, "has no SKILL.md") {
+		t.Errorf("faults = %q, a present file was reported missing", joined)
+	}
+	if !strings.Contains(joined, "cannot be read") || !strings.Contains(joined, "permission denied") {
+		t.Errorf("faults = %q, want the permission error", joined)
 	}
 }
 
@@ -835,8 +860,9 @@ func TestARateLimitAndAnExhaustedQuotaAreDifferentWarnings(t *testing.T) {
 		want         []string
 		banned       []string
 	}{
-		{"rate limit", "", []string{"the API rate limit was reached", "run the job again later"}, []string{"quota is used up"}},
-		{"quota", "insufficient_quota", []string{"the key's quota is used up", "check billing and quota for the key"}, []string{"run the job again", "rate limit", "insufficient_quota", "You exceeded"}},
+		{"rate limit", "", []string{"the API rate limit was reached", "run the job again later"}, []string{"quota is used up", "spend limit"}},
+		{"quota", "insufficient_quota", []string{"the key's quota is used up", "check billing and quota for the key"}, []string{"run the job again", "rate limit", "insufficient_quota", "You exceeded", "spend limit"}},
+		{"billing", "billing_limit", []string{"the call was blocked by billing or a spend limit", "check billing and spend limits"}, []string{"run the job again", "rate limit", "billing_limit", "quota is used up", "credit_balance_exhausted"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir, cfg := workspace(t)

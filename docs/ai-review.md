@@ -136,7 +136,7 @@ The code under review is untrusted input to the model. A prompt injected into a 
 | Source per call | 64 KiB, at most 4 calls | The same. |
 | One file's window | 48 KiB | The file is skipped and named, never truncated. |
 | Output per call | 16000 tokens, reasoning included | A warning that says to lower `--effort`, and only when that token budget is what stopped the answer. |
-| Retries | 2, for a rate limit, a server error or a network failure. A quota 429 is not retried. | The call fails. |
+| Retries | 2, for a rate limit, a server error or a network failure. A quota, billing, or spend-limit 429 is not retried. | The call fails. |
 | The whole run | 10 minutes | Calls not yet made are reported as not reviewed. |
 
 The worst case is 4 calls of 64 KiB of input and 16000 output tokens. A key spend cap is still the right backstop.
@@ -152,6 +152,7 @@ A failure never changes the exit code. It is one `june: warning:` line (a `::war
 | 400, 404, 422: a model that does not exist, an effort it does not take, too much input | `the API refused the request (HTTP 404: ...)` with the API's own message, scrubbed of the key |
 | 429 rate limit | `the API rate limit was reached`, after two retries |
 | 429, the key's quota is used up | `the key's quota is used up`; check billing and quota for the key. It is not retried and does not say to run the job again. |
+| 429, billing or a spend limit | `the call was blocked by billing or a spend limit`; check billing and spend limits. It is not retried and does not say to run the job again. |
 | 5xx, network | `the API was unavailable`, after two retries |
 | Over the time left | `the API did not answer in time` |
 | Output budget used up | `the model ran out of output budget before it finished`; lower `--effort` |

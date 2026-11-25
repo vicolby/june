@@ -178,12 +178,12 @@ func readSkill(dir, path string) (string, string) {
 	file := path
 	if info, err := os.Stat(full); err == nil && info.IsDir() {
 		file = filepath.Join(path, "SKILL.md")
+		if _, err := os.Stat(filepath.Join(full, "SKILL.md")); err != nil && os.IsNotExist(err) {
+			return "", fmt.Sprintf("the skill directory %s has no SKILL.md. Fix: pass the skill directory that holds SKILL.md, or the skill file", path)
+		}
 	}
 	text, fault := readText(dir, file, "skill", maxSkillBytes, "32 KiB")
 	if fault != "" {
-		if file != path && strings.Contains(fault, "cannot be read") {
-			return "", fmt.Sprintf("the skill directory %s has no SKILL.md. Fix: pass the skill directory that holds SKILL.md, or the skill file", path)
-		}
 		return "", fault
 	}
 	body, closed := frontMatter(text)

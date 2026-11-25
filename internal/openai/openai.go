@@ -205,12 +205,26 @@ func (c *Client) once(ctx context.Context, payload []byte) (review.Answer, *fail
 	return c.answer(raw)
 }
 
+func billingDetail(code, typ string) string {
+	switch code {
+	case "insufficient_quota":
+		return "insufficient_quota"
+	case "credit_balance_exhausted", "organization_spend_limit_exceeded", "project_spend_limit_exceeded", "organization_usage_limit_exceeded":
+		return "billing_limit"
+	}
+	if typ == "insufficient_quota" {
+		return "billing_limit"
+	}
+	return ""
+}
+
 // statusFailure maps a status that is not 200 to what the user can do about it.
 func (c *Client) statusFailure(res *http.Response) *failure {
 	status := res.StatusCode
 	raw, _ := io.ReadAll(io.LimitReader(res.Body, maxErrorBytes)) // An unreadable error body only loses the detail.
 	var env struct {
 		Error struct {
+			Type    string `json:"type"`
 			Code    string `json:"code"`
 			Message string `json:"message"`
 		} `json:"error"`
@@ -220,8 +234,8 @@ func (c *Client) statusFailure(res *http.Response) *failure {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return &failure{err: &review.CallError{Kind: review.Auth, Status: status}}
 	case status == http.StatusTooManyRequests:
-		if env.Error.Code == "insufficient_quota" {
-			return &failure{err: &review.CallError{Kind: review.RateLimited, Status: status, Detail: "insufficient_quota"}}
+		if detail := billingDetail(env.Error.Code, env.Error.Type); detail != "" {
+			return &failure{err: &review.CallError{Kind: review.RateLimited, Status: status, Detail: detail}}
 		}
 		f := &failure{err: &review.CallError{Kind: review.RateLimited, Status: status}, retry: true}
 		if secs, err := strconv.Atoi(strings.TrimSpace(res.Header.Get("Retry-After"))); err == nil && secs >= 0 {

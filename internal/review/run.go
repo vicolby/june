@@ -207,10 +207,14 @@ func failure(e *CallError, files []string) diag.Diagnostic {
 		}
 		fix = "check --model and --effort against what the API accepts for your key"
 	case RateLimited:
-		if e.Detail == "insufficient_quota" {
+		switch e.Detail {
+		case "insufficient_quota":
 			what = "the key's quota is used up" + status
 			fix = "check billing and quota for the key"
-		} else {
+		case "billing_limit":
+			what = "the call was blocked by billing or a spend limit" + status
+			fix = "check billing and spend limits"
+		default:
 			what = "the API rate limit was reached" + status
 			fix = "run the job again later"
 		}
