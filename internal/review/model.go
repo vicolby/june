@@ -41,7 +41,7 @@ const (
 	Auth
 	// BadRequest means the provider refused the request: an unknown model, an unsupported effort, input too long.
 	BadRequest
-	// RateLimited means the provider asked to slow down, and retries did not help.
+	// RateLimited means the provider asked to slow down, or the key's quota is used up.
 	RateLimited
 	// Unavailable means a server error or a network failure, after retries.
 	Unavailable

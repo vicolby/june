@@ -307,20 +307,17 @@ func TestABlankPromptOrSkillIsAbsent(t *testing.T) {
 	}
 }
 
-func TestTheSchemaNamesOnlyTheFilesOfTheCall(t *testing.T) {
+func TestTheSchemaRequiresEveryAnswerFieldAndDoesNotEnumPaths(t *testing.T) {
 	dir, cfg := workspace(t)
 	fake := reviewtest.NewFake(reviewtest.Reply())
 	run(t, prepare(t, dir, cfg), fake, touch("pkg/a.py", "x = 1\n", 1, 1), touch("pkg/b.py", "y = 2\n", 1, 1))
 	var schema struct {
-		Required   []string `json:"required"`
 		Properties struct {
 			Findings struct {
 				Items struct {
 					Required   []string `json:"required"`
 					Properties struct {
-						Path struct {
-							Enum []string `json:"enum"`
-						} `json:"path"`
+						Path map[string]any `json:"path"`
 					} `json:"properties"`
 				} `json:"items"`
 			} `json:"findings"`
@@ -329,12 +326,70 @@ func TestTheSchemaNamesOnlyTheFilesOfTheCall(t *testing.T) {
 	if err := json.Unmarshal(fake.Queries()[0].Schema, &schema); err != nil {
 		t.Fatalf("schema is not JSON: %v", err)
 	}
-	if got := schema.Properties.Findings.Items.Properties.Path.Enum; strings.Join(got, ",") != "pkg/a.py,pkg/b.py" {
-		t.Errorf("path enum = %v", got)
+	path := schema.Properties.Findings.Items.Properties.Path
+	if _, ok := path["enum"]; ok {
+		t.Errorf("path enum = %v", path["enum"])
+	}
+	if path["type"] != "string" {
+		t.Errorf("path type = %v", path["type"])
 	}
 	if got := strings.Join(schema.Properties.Findings.Items.Required, ","); got != "path,line,reason" {
 		t.Errorf("item required = %q, want strict mode to require every property", got)
 	}
+}
+
+func TestACallOfMoreThanAThousandFilesSendsNoPathEnumAndDropsUnsentPaths(t *testing.T) {
+	const n = 1001
+	dir, cfg := workspace(t)
+	srcs := make([]review.Source, n)
+	for i := range srcs {
+		srcs[i] = touch(fmt.Sprintf("f%04d.py", i), "x\n", 1, 1)
+	}
+	kept := srcs[0].Path
+	fake := reviewtest.NewFake(reviewtest.Reply(
+		reviewtest.Finding{Path: kept, Line: 1, Reason: "kept"},
+		reviewtest.Finding{Path: "not-sent.py", Line: 1, Reason: "not sent"},
+	))
+	out := run(t, prepare(t, dir, cfg), fake, srcs...)
+	qs := fake.Queries()
+	if len(qs) != 1 || out.Calls != 1 || out.Reviewed != n || out.NotReviewed != 0 {
+		t.Fatalf("calls, reviewed, not reviewed = %d, %d, %d", out.Calls, out.Reviewed, out.NotReviewed)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(qs[0].Schema, &schema); err != nil {
+		t.Fatalf("schema is not JSON: %v", err)
+	}
+	if jsonHasKey(schema, "enum") {
+		t.Errorf("schema still has an enum: %s", qs[0].Schema)
+	}
+	got := findings(out)
+	if len(got) != 1 || got[0].File != kept || got[0].Msg != "kept" {
+		t.Errorf("findings = %+v", got)
+	}
+	if !strings.Contains(out.Detail, "1 model finding discarded") {
+		t.Errorf("detail = %q, want the unsent path counted as discarded", out.Detail)
+	}
+}
+
+func jsonHasKey(v any, key string) bool {
+	switch n := v.(type) {
+	case map[string]any:
+		if _, ok := n[key]; ok {
+			return true
+		}
+		for _, c := range n {
+			if jsonHasKey(c, key) {
+				return true
+			}
+		}
+	case []any:
+		for _, c := range n {
+			if jsonHasKey(c, key) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // --- windows ---
@@ -766,6 +821,37 @@ func TestAnIncompleteStopNamesTheOutputBudgetOnlyWhenTokensRanOut(t *testing.T) 
 				}
 			}
 			for _, banned := range []string{"lower --effort", "output budget", "run the job again"} {
+				if strings.Contains(w[0], banned) {
+					t.Errorf("warning = %q, want it not to contain %q", w[0], banned)
+				}
+			}
+		})
+	}
+}
+
+func TestARateLimitAndAnExhaustedQuotaAreDifferentWarnings(t *testing.T) {
+	for _, tc := range []struct {
+		name, detail string
+		want         []string
+		banned       []string
+	}{
+		{"rate limit", "", []string{"the API rate limit was reached", "run the job again later"}, []string{"quota is used up"}},
+		{"quota", "insufficient_quota", []string{"the key's quota is used up", "check billing and quota for the key"}, []string{"run the job again", "rate limit", "insufficient_quota", "You exceeded"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, cfg := workspace(t)
+			fake := reviewtest.NewFake(reviewtest.Fail(&review.CallError{Kind: review.RateLimited, Status: 429, Detail: tc.detail}))
+			out := run(t, prepare(t, dir, cfg), fake, touch("a.py", lines(3), 1, 3))
+			w := warnings(out)
+			if len(w) != 1 {
+				t.Fatalf("warnings = %q, want one", w)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(w[0], want) {
+					t.Errorf("warning = %q, want it to contain %q", w[0], want)
+				}
+			}
+			for _, banned := range tc.banned {
 				if strings.Contains(w[0], banned) {
 					t.Errorf("warning = %q, want it not to contain %q", w[0], banned)
 				}

@@ -231,7 +231,7 @@ func TestFailuresMapToKindsAndNeverEchoTheKey(t *testing.T) {
 		{"unprocessable", 422, echo("bad"), review.BadRequest, "bad", 1},
 		{"bad request echoing the key", 400, echo("bad key " + key + " and sk-other-ABCDEFGHIJKL"), review.BadRequest, "[redacted]", 1},
 		{"rate limited", 429, echo("slow down"), review.RateLimited, "", 3},
-		{"out of quota", 429, `{"error":{"message":"You exceeded your current quota","code":"insufficient_quota"}}`, review.RateLimited, "", 1},
+		{"out of quota", 429, `{"error":{"message":"You exceeded your current quota","code":"insufficient_quota"}}`, review.RateLimited, "insufficient_quota", 1},
 		{"server error", 500, echo("oops " + key), review.Unavailable, "", 3},
 		{"bad gateway with html", 502, "<html>" + key + "</html>", review.Unavailable, "", 3},
 		{"service unavailable", 503, "", review.Unavailable, "", 3},
@@ -250,8 +250,15 @@ func TestFailuresMapToKindsAndNeverEchoTheKey(t *testing.T) {
 			if ce.Kind != tc.kind || ce.Status != tc.status {
 				t.Errorf("kind, status = %d, %d; want %d, %d", ce.Kind, ce.Status, tc.kind, tc.status)
 			}
-			if !strings.Contains(ce.Detail, tc.detail) {
+			if tc.detail == "" {
+				if ce.Detail != "" {
+					t.Errorf("Detail = %q, want none", ce.Detail)
+				}
+			} else if !strings.Contains(ce.Detail, tc.detail) {
 				t.Errorf("Detail = %q, want it to contain %q", ce.Detail, tc.detail)
+			}
+			if tc.name == "out of quota" && (ce.Detail != "insufficient_quota" || strings.Contains(err.Error(), "exceeded")) {
+				t.Errorf("err = %v, want the fixed quota detail and not the body", err)
 			}
 			if tc.kind == review.Auth && ce.Detail != "" {
 				t.Errorf("Detail = %q: the body of a 401 or 403 is never echoed", ce.Detail)

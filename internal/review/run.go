@@ -91,11 +91,9 @@ func (p *Plan) ask(ctx context.Context, m Model, b call, t *tally) ([]diag.Diagn
 	var in strings.Builder
 	in.WriteString("RULES\n" + strings.TrimRight(p.rules, "\r\n") + "\nEND RULES\n")
 	byPath := map[string]window{}
-	var names []string
 	for _, w := range b.windows {
 		in.WriteString("\n" + w.text)
 		byPath[w.path] = w
-		names = append(names, w.path)
 	}
 	t.calls++
 	ans, err := m.Complete(ctx, Query{
@@ -103,7 +101,7 @@ func (p *Plan) ask(ctx context.Context, m Model, b call, t *tally) ([]diag.Diagn
 		Effort:          p.effort,
 		Instructions:    p.instructions,
 		Input:           in.String(),
-		Schema:          schema(names),
+		Schema:          schema(),
 		MaxOutputTokens: p.limits.OutputTokens,
 	})
 	if err != nil {
@@ -145,9 +143,9 @@ func (p *Plan) ask(ctx context.Context, m Model, b call, t *tally) ([]diag.Diagn
 	return out, nil
 }
 
-// schema is the JSON Schema of an answer for the files of one call. Strict mode wants every property required and no others,
+// schema is the JSON Schema of an answer. Strict mode wants every property required and no others,
 // so the limits on text are enforced in code instead.
-func schema(paths []string) json.RawMessage {
+func schema() json.RawMessage {
 	type obj = map[string]any
 	s := obj{
 		"type": "object", "additionalProperties": false, "required": []string{"findings"},
@@ -156,7 +154,7 @@ func schema(paths []string) json.RawMessage {
 			"items": obj{
 				"type": "object", "additionalProperties": false, "required": []string{"path", "line", "reason"},
 				"properties": obj{
-					"path":   obj{"type": "string", "enum": paths},
+					"path":   obj{"type": "string"},
 					"line":   obj{"type": "integer"},
 					"reason": obj{"type": "string"},
 				},
@@ -209,8 +207,13 @@ func failure(e *CallError, files []string) diag.Diagnostic {
 		}
 		fix = "check --model and --effort against what the API accepts for your key"
 	case RateLimited:
-		what = "the API rate limit was reached" + status
-		fix = "run the job again later"
+		if e.Detail == "insufficient_quota" {
+			what = "the key's quota is used up" + status
+			fix = "check billing and quota for the key"
+		} else {
+			what = "the API rate limit was reached" + status
+			fix = "run the job again later"
+		}
 	case Timeout:
 		what = "the API did not answer in time"
 		fix = "run the job again; a lower --effort answers faster"

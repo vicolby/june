@@ -220,7 +220,10 @@ func (c *Client) statusFailure(res *http.Response) *failure {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return &failure{err: &review.CallError{Kind: review.Auth, Status: status}}
 	case status == http.StatusTooManyRequests:
-		f := &failure{err: &review.CallError{Kind: review.RateLimited, Status: status}, retry: env.Error.Code != "insufficient_quota"}
+		if env.Error.Code == "insufficient_quota" {
+			return &failure{err: &review.CallError{Kind: review.RateLimited, Status: status, Detail: "insufficient_quota"}}
+		}
+		f := &failure{err: &review.CallError{Kind: review.RateLimited, Status: status}, retry: true}
 		if secs, err := strconv.Atoi(strings.TrimSpace(res.Header.Get("Retry-After"))); err == nil && secs >= 0 {
 			f.after = time.Duration(secs) * time.Second
 			if f.after == 0 {
