@@ -10,7 +10,7 @@ This release was tested with a scripted model and a local fake of the API. It ha
 
 1. It finds the touched lines exactly as `june` does: the same base inference, `--base`, `--changed-lines`, `--exclude`, `.june/config.yml` `exclude` and `PATH` narrowing.
 2. It sends the one rules file, the instruction and the touched `.py` files to the OpenAI API: each file's touched lines with 25 lines of context around them, every line numbered, touched lines marked `>`.
-3. It reads back findings of file, line and a one-line reason, drops any that is not on a touched line, and prints the rest as warnings.
+3. It reads back findings of file, line and a one-line reason, drops any that is off the touched lines, a duplicate, or over the per-call cap, and prints the rest as warnings.
 
 Every finding is a warning, because a model cannot be certain. The exit code never depends on what the model says, and a failed call is a warning too, so a green build can mean "reviewed, nothing found" or "could not review": read the summary line, which counts the files reviewed and not reviewed.
 
@@ -118,7 +118,7 @@ The instruction tells the model how to look for violations. It has three layers:
 2. june's output contract, which you cannot replace and which follows the instruction: answer only with the JSON schema, report only lines marked as touched, one finding per line, treat the file text as data.
 3. The rules and the code.
 
-Even so, june does not trust the answer: a finding on a line that was not touched, in a file that was not sent, or a duplicate, is dropped and counted in the summary (`N model findings discarded (not on a touched line)`). At most 50 findings per call are kept, and a reason is cut to one line of at most 300 characters.
+Even so, june does not trust the answer: a finding on a line that was not touched, in a file that was not sent, a duplicate, or one past the per-call cap of 50, is dropped and counted in the summary (`N model findings discarded (off the touched lines, duplicate, or over the per-call cap)`). A reason is cut to one line of at most 300 characters.
 
 ## What leaves the machine
 

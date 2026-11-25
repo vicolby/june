@@ -305,7 +305,7 @@ func (p *Plan) detail(o Outcome, t tally) string {
 	s := fmt.Sprintf("ai review %s effort %s: %s reviewed, %d not reviewed, %s, %d tokens in, %d out",
 		p.model, effort, count(o.Reviewed, "file"), o.NotReviewed, count(o.Calls, "call"), t.in, t.out)
 	if t.discarded > 0 {
-		s += fmt.Sprintf("; %s discarded (not on a touched line)", count(t.discarded, "model finding"))
+		s += fmt.Sprintf("; %s discarded (off the touched lines, duplicate, or over the per-call cap)", count(t.discarded, "model finding"))
 	}
 	return s
 }

@@ -423,7 +423,7 @@ func TestACallOfMoreThanAThousandFilesSendsNoPathEnumAndDropsUnsentPaths(t *test
 	if len(got) != 1 || got[0].File != kept || got[0].Msg != "kept" {
 		t.Errorf("findings = %+v", got)
 	}
-	if !strings.Contains(out.Detail, "1 model finding discarded") {
+	if !strings.Contains(out.Detail, "1 model finding discarded (off the touched lines, duplicate, or over the per-call cap)") {
 		t.Errorf("detail = %q, want the unsent path counted as discarded", out.Detail)
 	}
 }
@@ -559,7 +559,7 @@ func TestModelFindingsThatBreakTheGuardAreDroppedAndCounted(t *testing.T) {
 	if strings.Join(got, "|") != "2:kept|3:also kept" {
 		t.Errorf("findings = %v", got)
 	}
-	if !strings.Contains(out.Detail, "5 model findings discarded") {
+	if !strings.Contains(out.Detail, "5 model findings discarded (off the touched lines, duplicate, or over the per-call cap)") {
 		t.Errorf("detail = %q, want the discard count", out.Detail)
 	}
 }
@@ -574,7 +574,7 @@ func TestAtMostFiftyFindingsPerCallAreKept(t *testing.T) {
 	if n := len(findings(out)); n != 50 {
 		t.Errorf("findings = %d, want 50", n)
 	}
-	if !strings.Contains(out.Detail, "30 model findings discarded") {
+	if !strings.Contains(out.Detail, "30 model findings discarded (off the touched lines, duplicate, or over the per-call cap)") {
 		t.Errorf("detail = %q", out.Detail)
 	}
 }
