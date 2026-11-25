@@ -63,6 +63,20 @@ func ParseFormat(s string) (Format, bool) {
 // GitLabReport is the path of the Code Quality report, which GitLab reads as a codequality artifact.
 const GitLabReport = "gl-code-quality-report.json"
 
+// ReviewGitLabReport is the Code Quality report of june review, a file of its own so that running both commands in one job never overwrites the first.
+const ReviewGitLabReport = "gl-code-quality-review-report.json"
+
+// Names says what one command calls its outputs.
+type Names struct {
+	// Heading is the title of the GitHub job summary section.
+	Heading string
+	// GitLabReport is the path of the GitLab Code Quality report.
+	GitLabReport string
+}
+
+// checkNames are the names of the june check, which never change.
+var checkNames = Names{Heading: "june", GitLabReport: GitLabReport}
+
 type Diagnostic struct {
 	File string
 	// File is the path the plain text prints. A Failure may carry the file it concerns, and its Code the rule, for JSON.
@@ -76,6 +90,9 @@ type Diagnostic struct {
 	Msg       string
 	// Note and URL are the rule's own note and url fields, for a finding. Empty when the rule has none.
 	Note, URL string
+	// Volatile marks a Msg that differs from run to run for the same problem, such as a model's wording.
+	// A GitLab fingerprint then hashes the file, code and line, and leaves the message out.
+	Volatile bool
 }
 
 // File is an extra artifact rendered beside the plain output.
@@ -92,6 +109,11 @@ type File struct {
 // GitLab returns that text and a Code Quality file. JSON and SARIF return one document and no text.
 // The closed switch below is the only place a format is chosen.
 func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File) {
+	return RenderAs(ds, summary, f, checkNames)
+}
+
+// RenderAs is Render for a command with names of its own for the files it writes.
+func RenderAs(ds []Diagnostic, summary string, f Format, names Names) (out []byte, files []File) {
 	sorted := append([]Diagnostic(nil), ds...)
 	sortDiagnostics(sorted)
 
@@ -125,7 +147,7 @@ func Render(ds []Diagnostic, summary string, f Format) (out []byte, files []File
 		}
 		return append(a.Bytes(), b.Bytes()...), nil
 	case GitLab:
-		return b.Bytes(), []File{{Path: GitLabReport, Data: codeQuality(sorted)}}
+		return b.Bytes(), []File{{Path: names.GitLabReport, Data: codeQuality(sorted)}}
 	default: // Text, and "" before a caller has chosen one.
 		return b.Bytes(), nil
 	}
@@ -243,13 +265,23 @@ func codeQuality(sorted []Diagnostic) []byte {
 }
 
 // fingerprints hashes each diagnostic's file, rule, message and ordinal among identical ones in sorted order.
+// A volatile diagnostic hashes its line instead of its message.
 func fingerprints(sorted []Diagnostic) []string {
-	type key struct{ file, code, msg string }
+	type key struct {
+		file, code, msg string
+		line            int
+	}
 	seen := map[key]int{}
 	out := make([]string, len(sorted))
 	for i, d := range sorted {
-		k := key{d.File, d.Code, d.Msg}
-		sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d", d.File, d.Code, d.Msg, seen[k])))
+		k := key{file: d.File, code: d.Code, msg: d.Msg}
+		text := fmt.Sprintf("%s\x00%s\x00%s\x00%d", d.File, d.Code, d.Msg, seen[k])
+		if d.Volatile {
+			// The wording is not stable, so the place is the identity.
+			k = key{file: d.File, code: d.Code, line: d.Line}
+			text = fmt.Sprintf("%s\x00%s\x00line %d\x00%d", d.File, d.Code, d.Line, seen[k])
+		}
+		sum := sha256.Sum256([]byte(text))
 		seen[k]++
 		out[i] = hex.EncodeToString(sum[:])
 	}
