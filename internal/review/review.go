@@ -97,7 +97,7 @@ func Prepare(dir string, cfg Config) (*Plan, []string) {
 	}
 	if strings.TrimSpace(cfg.Rules) == "" {
 		fault("--rules is required", "pass the Markdown file that holds the rules to check, --rules PATH")
-	} else if text, f := readText(dir, cfg.Rules, "rules file", maxRulesBytes, "64 KiB"); f != "" {
+	} else if text, f := readText(dir, cfg.Rules, "rules file", maxRulesBytes, "64 KiB", "write the rules into it"); f != "" {
 		faults = append(faults, f)
 	} else {
 		p.rules = text
@@ -126,7 +126,7 @@ func Prepare(dir string, cfg Config) (*Plan, []string) {
 }
 
 // readText reads a UTF-8 text file of at most max bytes and refuses an empty one.
-func readText(dir, path, what string, max int, maxLabel string) (string, string) {
+func readText(dir, path, what string, max int, maxLabel, emptyFix string) (string, string) {
 	full := path
 	if !filepath.IsAbs(full) {
 		full = filepath.Join(dir, path)
@@ -154,7 +154,7 @@ func readText(dir, path, what string, max int, maxLabel string) (string, string)
 	}
 	text := string(raw)
 	if strings.TrimSpace(text) == "" {
-		return "", fmt.Sprintf("the %s %s is empty. Fix: write the rules into it", what, path)
+		return "", fmt.Sprintf("the %s %s is empty. Fix: %s", what, path, emptyFix)
 	}
 	return text, ""
 }
@@ -182,7 +182,7 @@ func readSkill(dir, path string) (string, string) {
 			return "", fmt.Sprintf("the skill directory %s has no SKILL.md. Fix: pass the skill directory that holds SKILL.md, or the skill file", path)
 		}
 	}
-	text, fault := readText(dir, file, "skill", maxSkillBytes, "32 KiB")
+	text, fault := readText(dir, file, "skill", maxSkillBytes, "32 KiB", "write the instruction in the skill body")
 	if fault != "" {
 		return "", fault
 	}

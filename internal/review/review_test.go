@@ -158,6 +158,38 @@ func TestPrepareRefusals(t *testing.T) {
 	}
 }
 
+func TestAnEmptySkillAsksForAnInstructionAndAnEmptyRulesFileAsksForRules(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		body  string
+		file  string
+		skill string
+		want  string
+		ban   string
+	}{
+		{"empty skill file", "", "skill.md", "skill.md", "write the instruction in the skill body", "write the rules into it"},
+		{"whitespace skill file", " \n\t\n", "skill.md", "skill.md", "write the instruction in the skill body", "write the rules into it"},
+		{"empty SKILL.md", "", filepath.Join("team", "SKILL.md"), "team", "write the instruction in the skill body", "write the rules into it"},
+		{"whitespace SKILL.md", " \n\t\n", filepath.Join("team", "SKILL.md"), "team", "write the instruction in the skill body", "write the rules into it"},
+		{"empty rules file", "", "rules.md", "", "write the rules into it", "write the instruction in the skill body"},
+		{"whitespace rules file", " \n\t\n", "rules.md", "", "write the rules into it", "write the instruction in the skill body"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, cfg := workspace(t)
+			put(t, filepath.Join(dir, tc.file), tc.body)
+			cfg.Skill = tc.skill
+			plan, faults := review.Prepare(dir, cfg)
+			if plan != nil || len(faults) == 0 {
+				t.Fatalf("plan = %v, faults = %v, want a refusal", plan, faults)
+			}
+			joined := strings.Join(faults, "\n")
+			if !strings.Contains(joined, tc.want) || strings.Contains(joined, tc.ban) {
+				t.Errorf("faults = %q, want %q and not %q", joined, tc.want, tc.ban)
+			}
+		})
+	}
+}
+
 func TestAnUnreadableSkillFileInADirectoryKeepsTheReadFault(t *testing.T) {
 	dir, cfg := workspace(t)
 	path := filepath.Join(dir, "team", "SKILL.md")

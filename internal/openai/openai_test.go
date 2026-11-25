@@ -213,7 +213,7 @@ func TestAKeyWithInnerWhitespaceIsAnAuthFailureNotACrash(t *testing.T) {
 }
 
 func billingBody(code string) string {
-	return fmt.Sprintf(`{"error":{"message":"PROVIDER-BODY","type":"insufficient_quota","code":%q}}`, code)
+	return fmt.Sprintf(`{"error":{"message":"PROVIDER-BODY","type":"invalid_request_error","code":%q}}`, code)
 }
 
 func TestFailuresMapToKindsAndNeverEchoTheKey(t *testing.T) {
