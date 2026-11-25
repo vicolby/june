@@ -65,7 +65,7 @@ jobs:
 
 The action runs the check first, then the review. The review step is skipped when `ai-model` is empty, and it also skips when the check step failed, so a build that already failed on a real error spends nothing. To review regardless, a separate step can run `june review` itself. The other inputs are `ai-skill` and `ai-prompt`. Keep the model and effort in repository variables, so they change without a pull request.
 
-A pull request from a fork has no secrets: the key arrives empty, nothing is sent, and the job warns `ai review skipped: no API key was given` and stays green. That is expected there.
+A pull request from a fork has no secrets: the key arrives empty, nothing is sent, and the job warns `ai review skipped: OPENAI_API_KEY is not set` and stays green. That is expected there.
 
 ### GitLab CI
 
@@ -147,14 +147,14 @@ A failure never changes the exit code. It is one `june: warning:` line (a `::war
 
 | Situation | The warning says |
 | --- | --- |
-| No key, or an empty one | `no API key was given` |
+| No key, or an empty one | `OPENAI_API_KEY is not set` |
 | 401 or 403 | `the API rejected the credentials (HTTP 401)`; the API's text is never printed |
 | 400, 404, 422: a model that does not exist, an effort it does not take, too much input | `the API refused the request (HTTP 404: ...)` with the API's own message, scrubbed of the key |
 | 429 | `the API rate limit was reached`, after two retries |
 | 5xx, network | `the API was unavailable`, after two retries |
 | Over the time left | `the API did not answer in time` |
 | Output budget used up | `the model ran out of output budget before it finished`; lower `--effort` |
-| The model stopped short for any other reason | `the model stopped before it finished`. The warning does not say to lower `--effort` and does not repeat the provider's reason. |
+| The model stopped short for any other reason | `the model stopped before it finished`; the provider stopped the answer and these files stay not reviewed; report it if it repeats. It does not say to lower `--effort` or to run the job again, and it does not repeat the provider's reason. |
 | Refusal, or an answer that is not the JSON asked for | `the model declined to answer`, `the answer was not the expected JSON` |
 
 A typo in `--model` therefore gives a green build with a loud warning. Read the warnings of a new setup once.

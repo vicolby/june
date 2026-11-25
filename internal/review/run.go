@@ -220,7 +220,7 @@ func failure(e *CallError, files []string) diag.Diagnostic {
 			fix = "lower --effort so less of the budget goes to reasoning"
 		} else {
 			what = "the model stopped before it finished"
-			fix = "run the job again"
+			fix = "the provider stopped the answer and these files stay not reviewed; report it if it repeats"
 		}
 	case Refused:
 		what = "the model declined to answer"

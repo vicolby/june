@@ -760,10 +760,12 @@ func TestAnIncompleteStopNamesTheOutputBudgetOnlyWhenTokensRanOut(t *testing.T) 
 				}
 				return
 			}
-			if !strings.Contains(w[0], "stopped before it finished") {
-				t.Errorf("warning = %q, want the non-budget stop", w[0])
+			for _, want := range []string{"stopped before it finished", "report it if it repeats"} {
+				if !strings.Contains(w[0], want) {
+					t.Errorf("warning = %q, want it to contain %q", w[0], want)
+				}
 			}
-			for _, banned := range []string{"lower --effort", "output budget"} {
+			for _, banned := range []string{"lower --effort", "output budget", "run the job again"} {
 				if strings.Contains(w[0], banned) {
 					t.Errorf("warning = %q, want it not to contain %q", w[0], banned)
 				}
