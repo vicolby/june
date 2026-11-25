@@ -232,8 +232,8 @@ func (p *Plan) Run(ctx context.Context, m Model, files []Source) (Outcome, error
 		return Outcome{}, err
 	}
 	var out Outcome
-	var skippedLarge, skippedBudget []string
-	windows := p.windows(files, &skippedLarge)
+	var skippedOutside, skippedLarge, skippedBudget []string
+	windows := p.windows(files, &skippedOutside, &skippedLarge)
 	batches, over := p.batch(windows)
 	for _, w := range over {
 		skippedBudget = append(skippedBudget, w.path)
@@ -262,6 +262,10 @@ func (p *Plan) Run(ctx context.Context, m Model, files []Source) (Outcome, error
 		t.reviewed += len(b.windows)
 		out.Diags = append(out.Diags, findings...)
 	}
+	if len(skippedOutside) > 0 {
+		out.Diags = append(out.Diags, warn(fmt.Sprintf("ai review left out %s whose changed lines are not in the file: %s. Fix: regenerate the changed-lines list from the current tree",
+			count(len(skippedOutside), "file"), named(skippedOutside))))
+	}
 	if len(skippedLarge) > 0 {
 		out.Diags = append(out.Diags, warn(fmt.Sprintf("ai review skipped %s whose changed lines and their context are over the %s limit of one file: %s. Fix: split the file, or keep it out of the review with --exclude",
 			count(len(skippedLarge), "file"), kib(p.limits.fileBytes()), named(skippedLarge))))
@@ -271,7 +275,7 @@ func (p *Plan) Run(ctx context.Context, m Model, files []Source) (Outcome, error
 			count(len(skippedBudget), "file"), kib(p.limits.TotalBytes), count(p.limits.MaxCalls, "call"), named(skippedBudget))))
 	}
 	out.Reviewed, out.Calls = t.reviewed, t.calls
-	out.NotReviewed = len(skippedLarge) + len(skippedBudget) + len(unreviewed)
+	out.NotReviewed = len(skippedOutside) + len(skippedLarge) + len(skippedBudget) + len(unreviewed)
 	sortDiagnostics(out.Diags)
 	out.Detail = p.detail(out, t)
 	return out, nil

@@ -51,7 +51,7 @@ Read as documented, and stable:
 | `GITHUB_ACTIONS`, `GITHUB_EVENT_NAME`, `GITHUB_EVENT_PATH`, `GITHUB_BASE_REF`, `GITHUB_STEP_SUMMARY` | Detecting GitHub Actions, the pull request or merge group base, and the job summary. |
 | `GITLAB_CI`, `CI_MERGE_REQUEST_EVENT_TYPE`, `CI_MERGE_REQUEST_DIFF_BASE_SHA` | Detecting GitLab CI and the merge request base. |
 | `PRE_COMMIT`, `PRE_COMMIT_FROM_REF`, `PRE_COMMIT_TO_REF` | The pre-commit scope. |
-| `OPENAI_API_KEY`, `OPENAI_BASE_URL` | `june review` only, and [Experimental](#june-review-experimental), not Stable. |
+| `OPENAI_API_KEY` | `june review` only, and [Experimental](#june-review-experimental), not Stable. |
 
 The install script reads `JUNE_VERSION`, `JUNE_INSTALL_DIR`, `JUNE_OS`, `JUNE_ARCH`, `JUNE_INSTALL_AST_GREP` and `JUNE_RELEASES_URL` ([README](README.md#install)). june does not read any other variable of its own. It drops the git variables that change what a diff means (`GIT_DIFF_OPTS`, `GIT_EXTERNAL_DIFF` and the `GIT_*_PATHSPECS` family) before it runs git. How june infers the base from these is covered by the scope order in the [README](README.md#usage); a vendor adding a variable never changes a verdict.
 
@@ -60,7 +60,7 @@ The install script reads `JUNE_VERSION`, `JUNE_INSTALL_DIR`, `JUNE_OS`, `JUNE_AR
 Nothing in this section is Stable, and 1.0 does not freeze it. It can change in any minor release, and the release notes name the change. Breaking it never breaks the Stable sections: a bare `june`, `verify` and `new` never call a model.
 
 - **Command.** `june review --rules FILE --model MODEL [--effort LEVEL] [--skill PATH | --prompt TEXT]`, with the scope flags of `june` (`--base`, `--changed-lines`, `--exclude`, `--ignore-whitespace`, `--format`, `PATH`). `--rules` is one Markdown file and `--model` is required. `--skill` and `--prompt` together exit 2.
-- **Environment.** `OPENAI_API_KEY` and `OPENAI_BASE_URL` (`https`, or `http` on loopback). It reads no other variable of its own.
+- **Environment.** `OPENAI_API_KEY`. Requests go to `https://api.openai.com/v1`. It reads no other variable of its own.
 - **Where.** GitHub Actions and GitLab CI only. Elsewhere, under pre-commit and under `pull_request_target` it exits 2.
 - **Exit codes.** Exit 2 for bad usage, a bad rules file, skill or prompt, a scope it cannot establish, and a refused environment. Otherwise 0, always. A finding is a warning with rule `AI`, and a failed call (no key, a rejected key, an unknown model, a timeout) is a loud warning with exit 0, so a green `june review` can mean it could not review. Read the summary's count of files not reviewed.
 - **Reports.** The formats of `june`, with `AI` as the rule code and the summary heading `june review`. The GitLab report is `gl-code-quality-review-report.json`, so it never overwrites the check's. Its fingerprint hashes the file and line, because the model's wording varies between runs. The summary ends with an `ai review ...` clause, and its wording is for people.

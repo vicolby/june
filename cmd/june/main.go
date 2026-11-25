@@ -148,7 +148,6 @@ GitLab Code Quality findings go to gl-code-quality-review-report.json.
 
 environment:
   OPENAI_API_KEY   the API key; without it nothing is sent and the run only warns
-  OPENAI_BASE_URL  the API root, https or http on loopback (default https://api.openai.com/v1)
 
 exit codes:
   0  reviewed, or skipped with a warning
@@ -227,7 +226,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 }
 
 // reviewCommand is `june review`: a model reviews the touched lines against a Markdown rules file.
-// It reads the API key and endpoint from the environment, never from a flag, and builds the only client that opens a connection.
+// It reads the API key from the environment, never from a flag, and builds the only client that opens a connection.
 func reviewCommand(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, env check.Env) int {
 	fs := flag.NewFlagSet("june review", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -287,7 +286,7 @@ func reviewCommand(ctx context.Context, args []string, stdin io.Reader, stdout, 
 		req.Changed = f
 	}
 
-	client, err := openai.New(openai.Config{APIKey: env.Vars["OPENAI_API_KEY"], BaseURL: env.Vars["OPENAI_BASE_URL"], UserAgent: "june/" + version})
+	client, err := openai.New(openai.Config{APIKey: env.Vars["OPENAI_API_KEY"], UserAgent: "june/" + version})
 	if err != nil {
 		return fail(stderr, err.Error())
 	}

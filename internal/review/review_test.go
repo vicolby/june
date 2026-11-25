@@ -226,7 +226,7 @@ func TestNoEffortIsLeftForTheModelDefault(t *testing.T) {
 
 func TestTheDefaultInstructionAndTheContractAreSent(t *testing.T) {
 	q := query(t, review.Config{}, nil)
-	if !strings.Contains(q.Instructions, "violat") {
+	if !strings.Contains(q.Instructions, "You review a code change") {
 		t.Errorf("default instruction missing:\n%s", q.Instructions)
 	}
 	if !strings.Contains(q.Instructions, contractMark) {
@@ -498,8 +498,54 @@ func TestNothingToReviewMakesNoCall(t *testing.T) {
 	if n := len(fake.Queries()); n != 0 {
 		t.Errorf("calls = %d, want none", n)
 	}
-	if out.Calls != 0 || len(out.Diags) != 0 {
+	if out.Calls != 0 || out.Reviewed != 0 || out.NotReviewed != 0 || len(out.Diags) != 0 {
 		t.Errorf("outcome = %+v", out)
+	}
+}
+
+func TestAFileOfOnlyANewlineIsReviewedAsOneEmptyLine(t *testing.T) {
+	dir, cfg := workspace(t)
+	for _, text := range []string{"\n", "\r\n"} {
+		fake := reviewtest.NewFake(reviewtest.Reply())
+		out := run(t, prepare(t, dir, cfg), fake, touch("a.py", text, 1, 1))
+		if len(fake.Queries()) != 1 {
+			t.Fatalf("text %q calls = %d", text, len(fake.Queries()))
+		}
+		in := fake.Queries()[0].Input
+		if !strings.Contains(in, "FILE a.py\n") || !strings.Contains(in, "> 1| \n") || strings.Contains(in, "2|") {
+			t.Errorf("text %q window =\n%s", text, in)
+		}
+		if out.Reviewed != 1 || out.NotReviewed != 0 {
+			t.Errorf("text %q reviewed, not reviewed = %d, %d", text, out.Reviewed, out.NotReviewed)
+		}
+	}
+}
+
+func TestAFileWhoseTouchedLinesFallOutsideItIsNotReviewed(t *testing.T) {
+	dir, cfg := workspace(t)
+	fake := reviewtest.NewFake(reviewtest.Reply())
+	out := run(t, prepare(t, dir, cfg), fake,
+		touch("z.py", lines(10), 50, 50),
+		touch("empty.py", "", 1, 1),
+		touch("ok.py", "x = 1\n", 1, 1),
+		touch("blank.py", "\n", 2, 2),
+	)
+	if len(fake.Queries()) != 1 {
+		t.Fatalf("calls = %d", len(fake.Queries()))
+	}
+	in := fake.Queries()[0].Input
+	if !strings.Contains(in, "FILE ok.py") || strings.Contains(in, "FILE z.py") || strings.Contains(in, "FILE empty.py") || strings.Contains(in, "FILE blank.py") {
+		t.Errorf("input =\n%s", in)
+	}
+	if out.Reviewed != 1 || out.NotReviewed != 3 {
+		t.Errorf("reviewed, not reviewed = %d, %d", out.Reviewed, out.NotReviewed)
+	}
+	w := warnings(out)
+	if len(w) != 1 || !strings.Contains(w[0], "blank.py") || !strings.Contains(w[0], "empty.py") || !strings.Contains(w[0], "z.py") || strings.Contains(w[0], "ok.py") || !strings.Contains(w[0], "Fix: ") {
+		t.Errorf("warnings = %q", w)
+	}
+	if !strings.Contains(out.Detail, "1 file reviewed, 3 not reviewed") {
+		t.Errorf("detail = %q", out.Detail)
 	}
 }
 

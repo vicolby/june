@@ -10,11 +10,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -24,8 +21,8 @@ import (
 	"github.com/vicolby/june/internal/review"
 )
 
-// DefaultBaseURL is where requests go unless Config.BaseURL says otherwise.
-const DefaultBaseURL = "https://api.openai.com/v1"
+// apiRoot is the only address a request is sent to.
+const apiRoot = "https://api.openai.com/v1"
 
 const (
 	maxRetries      = 2
@@ -43,8 +40,6 @@ const (
 type Config struct {
 	// APIKey is the bearer credential. Empty makes every call fail with review.NoCredentials, without a request.
 	APIKey string
-	// BaseURL is the API root, default DefaultBaseURL. It must be https, or http on a loopback address.
-	BaseURL string
 	// UserAgent is sent with every request; empty means "june".
 	UserAgent string
 	// Client sends the requests; nil means a new http.Client. Its redirects are always refused.
@@ -60,20 +55,16 @@ type Client struct {
 	delay            time.Duration
 }
 
-// New checks cfg. It never touches the network, and a bad key is not an error here: it fails the call that uses it.
-// A BaseURL that is not https, or http on loopback, is refused with a fix.
+// New builds a client. It never touches the network, and a bad key is not an error here: it fails the call that uses it.
+// Requests go to https://api.openai.com/v1 and nowhere else.
 func New(cfg Config) (*Client, error) {
-	base, err := baseURL(cfg.BaseURL)
-	if err != nil {
-		return nil, err
-	}
 	hc := &http.Client{}
 	if cfg.Client != nil {
 		copied := *cfg.Client
 		hc = &copied
 	}
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	c := &Client{key: strings.TrimSpace(cfg.APIKey), base: base, agent: cfg.UserAgent, http: hc, delay: cfg.RetryDelay}
+	c := &Client{key: strings.TrimSpace(cfg.APIKey), base: apiRoot, agent: cfg.UserAgent, http: hc, delay: cfg.RetryDelay}
 	if c.agent == "" {
 		c.agent = defaultUserText
 	}
@@ -81,44 +72,6 @@ func New(cfg Config) (*Client, error) {
 		c.delay = defaultDelay
 	}
 	return c, nil
-}
-
-// BaseURL is the API root requests go to, without a trailing slash.
-func (c *Client) BaseURL() string { return c.base }
-
-// baseURL validates raw. The text of raw is never echoed, since it may hold credentials.
-func baseURL(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return DefaultBaseURL, nil
-	}
-	bad := func(why string) (string, error) {
-		return "", fmt.Errorf("OPENAI_BASE_URL is not usable: %s. Fix: set it to an https URL such as %s, or unset it", why, DefaultBaseURL)
-	}
-	u, err := url.Parse(raw)
-	switch {
-	case err != nil || u.Host == "" || u.Hostname() == "":
-		return bad("it is not an absolute URL")
-	case u.User != nil:
-		return bad("it carries a user name or password")
-	case u.RawQuery != "" || u.Fragment != "" || u.ForceQuery:
-		return bad("it has a query or a fragment")
-	case u.Scheme == "https":
-	case u.Scheme == "http" && loopback(u.Hostname()):
-	case u.Scheme == "http":
-		return bad("plain http is only allowed for a loopback address, so that the key never travels unencrypted")
-	default:
-		return bad("only https is supported")
-	}
-	return strings.TrimRight(u.String(), "/"), nil
-}
-
-func loopback(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 type request struct {

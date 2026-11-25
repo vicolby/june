@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,7 +66,7 @@ func reviewProject(t *testing.T, api *fakeAPI, extra map[string]string) check.En
 	}
 	vars := map[string]string{"GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "push", "OPENAI_API_KEY": testKey}
 	if api != nil {
-		vars["OPENAI_BASE_URL"] = api.srv.URL + "/v1"
+		useOpenAIServer(t, api.srv.URL)
 	}
 	for k, v := range extra {
 		vars[k] = v
@@ -205,13 +207,46 @@ func TestReviewRefusesOutsideCIAndMakesNoRequest(t *testing.T) {
 	}
 }
 
-func TestReviewRefusesABaseURLThatIsNotHTTPSOrLoopback(t *testing.T) {
-	env := reviewProject(t, nil, map[string]string{"OPENAI_BASE_URL": "http://api.example.com/v1"})
+func TestReviewIgnoresAnEndpointVariable(t *testing.T) {
+	api := newFakeAPI(t, 200, answer(`[]`))
+	env := reviewProject(t, api, map[string]string{"OPENAI_BASE_URL": "http://evil.example/v1"})
 	code, out, errOut := runReview(t, env, baseArgs...)
-	if code != 2 || !strings.Contains(out+errOut, "OPENAI_BASE_URL") || !strings.Contains(out+errOut, "Fix: ") {
-		t.Errorf("exit = %d, out = %q, err = %q", code, out, errOut)
+	if code != 0 || errOut != "" || api.requests.Load() != 1 {
+		t.Errorf("exit = %d, requests = %d, stderr = %q\n%s", code, api.requests.Load(), errOut, out)
 	}
 }
+
+// useOpenAIServer makes the process's default HTTP transport serve the fixed OpenAI URL from serverURL.
+// june review builds its client with a nil Transport, so this is the request the command actually sends.
+func useOpenAIServer(t *testing.T, serverURL string) {
+	t.Helper()
+	target, err := url.Parse(serverURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if realTransport == nil {
+		realTransport = http.DefaultTransport
+	}
+	http.DefaultTransport = roundTripper(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Scheme != "https" || req.URL.Host != "api.openai.com" || !strings.HasPrefix(req.URL.Path, "/v1/") {
+			t.Errorf("request URL = %s, want https://api.openai.com/v1/...", req.URL)
+			return nil, fmt.Errorf("request %s is not the OpenAI API", req.URL)
+		}
+		cloned := req.Clone(req.Context())
+		cloned.URL.Scheme = target.Scheme
+		cloned.URL.Host = target.Host
+		cloned.Host = target.Host
+		return realTransport.RoundTrip(cloned)
+	})
+	t.Cleanup(func() { http.DefaultTransport = realTransport })
+}
+
+// realTransport is the process transport captured before these tests replace it.
+var realTransport http.RoundTripper
+
+type roundTripper func(*http.Request) (*http.Response, error)
+
+func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestReviewOnGitLabWritesItsOwnReportFile(t *testing.T) {
 	api := newFakeAPI(t, 200, answer(`[{"path":"app.py","line":2,"reason":"verbose switches behavior"}]`))
@@ -237,10 +272,13 @@ func TestReviewHelpAndUsage(t *testing.T) {
 	if code != 0 || errOut != "" {
 		t.Fatalf("exit = %d, stderr = %q", code, errOut)
 	}
-	for _, want := range []string{"usage: june review ", "--rules PATH", "--model", "--effort", "--skill", "--prompt", "OPENAI_API_KEY", "OPENAI_BASE_URL", "Experimental", "exit codes:"} {
+	for _, want := range []string{"usage: june review ", "--rules PATH", "--model", "--effort", "--skill", "--prompt", "OPENAI_API_KEY", "Experimental", "exit codes:"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help lacks %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "OPENAI_BASE_URL") {
+		t.Errorf("help still offers an endpoint override:\n%s", out)
 	}
 	_, general, _ := runArgs(t, check.Env{Dir: t.TempDir()}, "--help")
 	if !strings.Contains(general, "june review ") {

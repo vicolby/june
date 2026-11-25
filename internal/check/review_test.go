@@ -56,6 +56,45 @@ func doReview(t *testing.T, env check.Env, req check.ReviewRequest) check.Result
 	return res
 }
 
+func TestReviewSendsANewlineOnlyFileAndCountsLinesItCannotSend(t *testing.T) {
+	t.Parallel()
+	t.Run("a file of only a newline", func(t *testing.T) {
+		t.Parallel()
+		for name, body := range map[string]string{"lf": "\n", "crlf": "\r\n"} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				env := inCI(reviewTree(t, map[string]string{"app.py": body}))
+				fake := reviewtest.NewFake(reviewtest.Reply())
+				res := doReview(t, env, reviewReq(fake, "app.py:1\n"))
+				if res.Exit != 0 || len(fake.Queries()) != 1 {
+					t.Fatalf("Exit = %d, calls = %d\n%s", res.Exit, len(fake.Queries()), res.Out)
+				}
+				if !strings.Contains(fake.Queries()[0].Input, "> 1| \n") {
+					t.Errorf("input =\n%s", fake.Queries()[0].Input)
+				}
+				if got := summaryOf(res); !strings.Contains(got, "checked 1 file, 1 changed line") || !strings.Contains(got, "1 file reviewed, 0 not reviewed") {
+					t.Errorf("summary = %q", got)
+				}
+			})
+		}
+	})
+	t.Run("a changed line past the end of the file", func(t *testing.T) {
+		t.Parallel()
+		env := inCI(reviewTree(t, map[string]string{"app.py": "x = 1\n"}))
+		fake := reviewtest.NewFake()
+		res := doReview(t, env, reviewReq(fake, "app.py:50\n"))
+		if res.Exit != 0 || len(fake.Queries()) != 0 {
+			t.Fatalf("Exit = %d, calls = %d\n%s", res.Exit, len(fake.Queries()), res.Out)
+		}
+		if !strings.Contains(string(res.Out), "app.py") || !strings.Contains(string(res.Out), "not in the file") {
+			t.Errorf("Out =\n%s", res.Out)
+		}
+		if got := summaryOf(res); !strings.Contains(got, "checked 1 file, 1 changed line") || !strings.Contains(got, "0 files reviewed, 1 not reviewed") {
+			t.Errorf("summary = %q", got)
+		}
+	})
+}
+
 func TestReviewReportsAFindingAsAWarningWithExitZero(t *testing.T) {
 	t.Parallel()
 	env := inCI(reviewTree(t, map[string]string{"app.py": "def f(a):\n    return a\n\ndef g(verbose):\n    pass\n"}))

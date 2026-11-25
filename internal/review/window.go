@@ -19,10 +19,10 @@ type window struct {
 // lines splits source into lines the way a reader counts them: a final line break ends a line, it does not start another.
 func lines(text string) []string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.TrimSuffix(text, "\n")
 	if text == "" {
 		return nil
 	}
+	text = strings.TrimSuffix(text, "\n")
 	return strings.Split(text, "\n")
 }
 

@@ -31,14 +31,13 @@ june review --rules PATH --model MODEL [--effort LEVEL] [--skill PATH | --prompt
 
 `--skill` and `--prompt` together exit 2. An empty `--skill`, `--prompt` or `--effort` counts as not given, so a CI variable that is unset needs no special case.
 
-The key and the endpoint come from the environment, never from a flag, because a flag shows in the process list:
+The key comes from the environment, never from a flag, because a flag shows in the process list:
 
 | Variable | Meaning |
 | --- | --- |
 | `OPENAI_API_KEY` | The API key. Without it nothing is sent and the run only warns. |
-| `OPENAI_BASE_URL` | The API root. Default `https://api.openai.com/v1`. It must be `https`, or `http` on a loopback address, which is how tests point june at a local fake. |
 
-Only OpenAI is supported in this release.
+Requests go to `https://api.openai.com/v1`. Only OpenAI is supported in this release.
 
 ## Where it runs
 
@@ -123,7 +122,7 @@ Even so, june does not trust the answer: a finding on a line that was not touche
 
 ## What leaves the machine
 
-To the endpoint, per call: the instruction, the whole rules file, the touched Python files' windows with their repository paths, the model name and effort, and the key in an `Authorization` header. Nothing else: no other files, no history, no environment, no telemetry. Requests set `store: false`. What OpenAI keeps for abuse monitoring, and zero-retention terms, are your agreement with OpenAI.
+To `https://api.openai.com/v1`, per call: the instruction, the whole rules file, the touched Python files' windows with their repository paths, the model name and effort, and the key in an `Authorization` header. Nothing else: no other files, no history, no environment, no telemetry. Requests set `store: false`. What OpenAI keeps for abuse monitoring, and zero-retention terms, are your agreement with OpenAI.
 
 A secret committed to a touched file goes with it: june has no secret scanner. `--exclude` and the config `exclude` keep paths out of the request.
 

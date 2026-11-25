@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -30,6 +31,41 @@ var query = review.Query{
 
 const okBody = `{"status":"completed","output":[{"type":"reasoning","summary":[]},{"type":"message","content":[{"type":"output_text","text":"{\"findings\":[]}"}]}],"usage":{"input_tokens":812,"output_tokens":96}}`
 
+// rewriteOpenAI sends the adapter's fixed OpenAI request to a local server.
+// A request to any other host fails the test: the adapter has no endpoint setting.
+func rewriteOpenAI(t *testing.T, serverURL string) http.RoundTripper {
+	t.Helper()
+	target, err := url.Parse(serverURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return roundTripper(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Scheme != "https" || req.URL.Host != "api.openai.com" || !strings.HasPrefix(req.URL.Path, "/v1/") {
+			t.Errorf("request URL = %s, want https://api.openai.com/v1/...", req.URL)
+			return nil, fmt.Errorf("request %s is not the OpenAI API", req.URL)
+		}
+		cloned := req.Clone(req.Context())
+		cloned.URL.Scheme = target.Scheme
+		cloned.URL.Host = target.Host
+		cloned.Host = target.Host
+		return http.DefaultTransport.RoundTrip(cloned)
+	})
+}
+
+type roundTripper func(*http.Request) (*http.Response, error)
+
+func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func newTestClient(t *testing.T, cfg openai.Config, serverURL string) *openai.Client {
+	t.Helper()
+	cfg.Client = &http.Client{Transport: rewriteOpenAI(t, serverURL)}
+	c, err := openai.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
 // serve runs h as the API and returns a client for it with fast retries.
 func serve(t *testing.T, h http.HandlerFunc) (*openai.Client, *atomic.Int32) {
 	t.Helper()
@@ -39,10 +75,7 @@ func serve(t *testing.T, h http.HandlerFunc) (*openai.Client, *atomic.Int32) {
 		h(w, r)
 	}))
 	t.Cleanup(srv.Close)
-	c, err := openai.New(openai.Config{APIKey: key, BaseURL: srv.URL + "/v1", UserAgent: "june/test", RetryDelay: time.Millisecond})
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := newTestClient(t, openai.Config{APIKey: key, UserAgent: "june/test", RetryDelay: time.Millisecond}, srv.URL)
 	return c, &n
 }
 
@@ -136,12 +169,9 @@ func TestWithoutAKeyNothingIsSent(t *testing.T) {
 	for _, k := range []string{"", "  \n"} {
 		var n atomic.Int32
 		srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { n.Add(1) }))
-		c, err := openai.New(openai.Config{APIKey: k, BaseURL: srv.URL})
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, err = c.Complete(context.Background(), query)
-		srv.Close()
+		t.Cleanup(srv.Close)
+		c := newTestClient(t, openai.Config{APIKey: k}, srv.URL)
+		_, err := c.Complete(context.Background(), query)
 		if ce := callErr(t, err); ce.Kind != review.NoCredentials || !strings.Contains(ce.Detail, "OPENAI_API_KEY is not set") {
 			t.Errorf("err = %+v", ce)
 		}
@@ -158,14 +188,20 @@ func TestAKeyWithTrailingNewlineIsTrimmed(t *testing.T) {
 		reply(200, okBody)(w, r)
 	}))
 	defer srv.Close()
-	c, _ := openai.New(openai.Config{APIKey: key + "\n", BaseURL: srv.URL})
+	c := newTestClient(t, openai.Config{APIKey: key + "\n"}, srv.URL)
 	if _, err := c.Complete(context.Background(), query); err != nil || auth != "Bearer "+key {
 		t.Errorf("auth = %q, err = %v", auth, err)
 	}
 }
 
 func TestAKeyWithInnerWhitespaceIsAnAuthFailureNotACrash(t *testing.T) {
-	c, err := openai.New(openai.Config{APIKey: "sk-a b\x01c", BaseURL: "http://127.0.0.1:1"})
+	c, err := openai.New(openai.Config{
+		APIKey: "sk-a b\x01c",
+		Client: &http.Client{Transport: roundTripper(func(*http.Request) (*http.Response, error) {
+			t.Error("a request was sent")
+			return nil, errors.New("no network")
+		})},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,9 +313,9 @@ func TestARetryNeverOutlivesTheCallersDeadline(t *testing.T) {
 
 func TestANetworkFailureIsRetriedThenUnavailable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	url := srv.URL
+	serverURL := srv.URL
 	srv.Close()
-	c, _ := openai.New(openai.Config{APIKey: key, BaseURL: url, RetryDelay: time.Millisecond})
+	c := newTestClient(t, openai.Config{APIKey: key, RetryDelay: time.Millisecond}, serverURL)
 	_, err := c.Complete(context.Background(), query)
 	ce := callErr(t, err)
 	if ce.Kind != review.Unavailable || strings.Contains(err.Error(), key) || strings.Contains(ce.Detail, "127.0.0.1") {
@@ -370,48 +406,6 @@ func TestAHugeBodyIsCutOff(t *testing.T) {
 	_, err := c.Complete(context.Background(), query)
 	if ce := callErr(t, err); ce.Kind != review.Malformed {
 		t.Errorf("err = %v", err)
-	}
-}
-
-func TestBaseURL(t *testing.T) {
-	for _, tc := range []struct {
-		in      string
-		wantURL string // "" for a refusal
-	}{
-		{"", "https://api.openai.com/v1"},
-		{"https://api.openai.com/v1", "https://api.openai.com/v1"},
-		{"https://gateway.example.com/openai/v1/", "https://gateway.example.com/openai/v1"},
-		{"http://127.0.0.1:8080/v1", "http://127.0.0.1:8080/v1"},
-		{"http://localhost:8080", "http://localhost:8080"},
-		{"http://[::1]:8080/v1", "http://[::1]:8080/v1"},
-		{"http://example.com/v1", ""},
-		{"http://127.0.0.1.example.com", ""},
-		{"ftp://127.0.0.1", ""},
-		{"api.openai.com", ""},
-		{"https://", ""},
-		{"https://user:pass@example.com", ""},
-		{"https://example.com/v1?x=1", ""},
-		{"https://example.com/v1#frag", ""},
-		{"https://exa mple.com", ""},
-	} {
-		t.Run(tc.in, func(t *testing.T) {
-			c, err := openai.New(openai.Config{APIKey: key, BaseURL: tc.in})
-			if tc.wantURL == "" {
-				if err == nil || !strings.Contains(err.Error(), "Fix: ") {
-					t.Fatalf("err = %v, want a refusal with a fix", err)
-				}
-				if strings.Contains(err.Error(), "user:pass") {
-					t.Errorf("the refusal must not echo credentials in the URL: %v", err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("err = %v", err)
-			}
-			if got := c.BaseURL(); got != tc.wantURL {
-				t.Errorf("BaseURL = %q, want %q", got, tc.wantURL)
-			}
-		})
 	}
 }
 

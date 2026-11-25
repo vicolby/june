@@ -29,15 +29,18 @@ type tally struct {
 
 func (l Limits) fileBytes() int { return min(l.FileBytes, l.CallBytes) }
 
-// windows renders the files in path order. A file with no touched line inside it is not reviewed, and is not left out either.
-// A window over the limit of one file is named in tooLarge.
-func (p *Plan) windows(files []Source, tooLarge *[]string) []window {
+// windows renders the files in path order. A file that has touched lines, none of them inside the file, is named in outside.
+// A file with no touched lines is not reviewed and not left out. A window over the limit of one file is named in tooLarge.
+func (p *Plan) windows(files []Source, outside, tooLarge *[]string) []window {
 	sorted := append([]Source(nil), files...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Path < sorted[j].Path })
 	var out []window
 	for _, s := range sorted {
 		w, ok := newWindow(s)
 		if !ok {
+			if len(s.Touched) > 0 {
+				*outside = append(*outside, s.Path)
+			}
 			continue
 		}
 		if len(w.text) > p.limits.fileBytes() {

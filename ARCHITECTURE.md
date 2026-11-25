@@ -36,7 +36,7 @@ Layout: `cmd/june`, `internal/{check,rules,review,openai,diag}`, plus `internal/
 - Output is sorted, with no clock and no ANSI. The safe.directory fix may name the repository path.
 - A rule fault anywhere refuses the whole run, never a partial rule set. An unsupported or unreadable ast-grep version is a rule fault.
 - Nothing is fetched. The check path (`june`, `june verify`, `june new`) uses no network, model or clock.
-- `june review` is the only command that opens a connection, and only to the configured OpenAI endpoint. Its findings are warnings on touched lines and never change the exit code, and it exits 2 outside GitHub Actions and GitLab CI. The determinism invariants above do not apply to the model's answer.
+- `june review` is the only command that opens a connection, and only to `https://api.openai.com/v1`. Its findings are warnings on touched lines and never change the exit code, and it exits 2 outside GitHub Actions and GitLab CI. The determinism invariants above do not apply to the model's answer.
 
 ## Where things are
 
