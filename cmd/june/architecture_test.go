@@ -20,8 +20,8 @@ func goList(t *testing.T, args ...string) []string {
 }
 
 // Only june review opens a connection. The packages that decide a check, and the review engine that decides what a
-// model is asked, import no network package, so that "the check path never reaches a network" is a fact the build
-// enforces and no longer a sentence in the README.
+// model is asked, import no network package, so the README's "no network on the check path" promise is a fact the
+// build enforces.
 func TestOnlyTheOpenAIAdapterReachesTheNetwork(t *testing.T) {
 	network := map[string]bool{"net": true, "net/http": true, "crypto/tls": true}
 	for _, pkg := range []string{"check", "rules", "diag", "review"} {

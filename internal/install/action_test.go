@@ -225,7 +225,7 @@ type actionStep struct {
 	Run   string
 }
 
-func readAction(t *testing.T) (root string, steps []actionStep, inputs map[string]struct{ Default string }) {
+func readAction(t *testing.T) (steps []actionStep, inputs map[string]struct{ Default string }) {
 	t.Helper()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -242,11 +242,11 @@ func readAction(t *testing.T) (root string, steps []actionStep, inputs map[strin
 	if err := yaml.Unmarshal(data, &action); err != nil {
 		t.Fatal(err)
 	}
-	return root, action.Runs.Steps, action.Inputs
+	return action.Runs.Steps, action.Inputs
 }
 
 func TestActionReviewStepIsOptInAndPassesTheKeyAsAnInput(t *testing.T) {
-	_, steps, inputs := readAction(t)
+	steps, inputs := readAction(t)
 	var review *actionStep
 	for i := range steps {
 		if steps[i].Name == "Review with a model" {
@@ -288,7 +288,7 @@ func TestActionReviewStepIsOptInAndPassesTheKeyAsAnInput(t *testing.T) {
 }
 
 func TestActionReviewStepMapsInputsToFlags(t *testing.T) {
-	_, steps, _ := readAction(t)
+	steps, _ := readAction(t)
 	var script string
 	for _, step := range steps {
 		if step.Name == "Review with a model" {

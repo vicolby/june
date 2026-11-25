@@ -108,7 +108,7 @@ Example violation: `def send(msg, urgent=True)` where `urgent` changes what the 
 A new public function needs a docstring that says what it returns.
 ```
 
-A finding carries no rule id: its message is the model's own one-line reason, so say in the file what each rule is and let the model name it. A finding has no opt-out in this release. A `# june: ignore[...]` comment does not apply to it, and makes a bare `june` run warn about a malformed opt-out.
+A finding carries no rule id: its message is the model's own one-line reason, so say in the file what each rule is and let the model name it. A finding has no opt-out in this release, and a `# june: ignore[...]` comment does not suppress it. On a bare `june` run the comment follows the [opt-out contract](../README.md#opt-outs). `AI` is not a loaded rule, so a well-formed comment that names it warns that the rule does not exist.
 
 ## The instruction
 
@@ -126,7 +126,7 @@ To `https://api.openai.com/v1`, per call: the instruction, the whole rules file,
 
 A secret committed to a touched file goes with it: june has no secret scanner. `--exclude` and the config `exclude` keep paths out of the request.
 
-The code under review is untrusted input to the model. A prompt injected into a comment can add, hide or reword a warning. It cannot fail a build, and the guard above keeps any finding on a touched line.
+The code under review is untrusted input to the model. A prompt injected into a comment can add, hide or reword a warning. It cannot fail a build, and it cannot place a finding on a line the change did not touch.
 
 ## Cost and time bounds
 

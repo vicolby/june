@@ -2,8 +2,8 @@
 //
 // The rules are one Markdown file that this package hands to the model as it is: it parses no rule, gives none an id
 // and loads nothing else. What it does own is everything around that text: the instruction and the output contract,
-// which lines of which files are sent, the size budgets, the answer's schema, and the guard that drops any finding
-// the model reports outside the lines the change touched. Every finding is a warning, since a model cannot be certain.
+// which lines of which files are sent, the size budgets, the answer's schema, and the guard that drops a finding
+// off a touched line, a duplicate, or one past the per-call cap. Every finding is a warning, since a model cannot be certain.
 //
 // The package imports no network package. A provider is a Model that the caller passes in.
 package review
