@@ -67,7 +67,7 @@ type Config struct {
 	Prompt string
 	// Model is the provider's model name. It is required, and has no default.
 	Model string
-	// Effort is the reasoning effort, passed through as it is. Empty leaves it to the model's default.
+	// Effort is the reasoning effort, passed to the API as given. Empty leaves it to the model's default.
 	Effort string
 	Limits Limits
 }
@@ -80,10 +80,7 @@ type Plan struct {
 	limits        Limits
 }
 
-var (
-	modelName  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$`)
-	effortWord = regexp.MustCompile(`^[a-z][a-z_-]{0,31}$`)
-)
+var modelName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$`)
 
 // Prepare validates cfg and reads the files it names, relative to dir. A fault is a complete "<cause>. Fix: <instruction>"
 // refusal; any fault means there is no Plan, and all of them are reported at once.
@@ -98,10 +95,6 @@ func Prepare(dir string, cfg Config) (*Plan, []string) {
 	case !modelName.MatchString(p.model):
 		fault(fmt.Sprintf("--model %q is not a model name", p.model), "pass the model name as the provider spells it")
 	}
-	if p.effort != "" && !effortWord.MatchString(p.effort) {
-		fault(fmt.Sprintf("--effort %q is not an effort level", p.effort), "pass one lowercase word the model accepts, such as low, medium or high, or omit --effort")
-	}
-
 	if strings.TrimSpace(cfg.Rules) == "" {
 		fault("--rules is required", "pass the Markdown file that holds the rules to check, --rules PATH")
 	} else if text, f := readText(dir, cfg.Rules, "rules file", maxRulesBytes, "64 KiB"); f != "" {

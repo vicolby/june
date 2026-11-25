@@ -25,7 +25,7 @@ june review --rules PATH --model MODEL [--effort LEVEL] [--skill PATH | --prompt
 | --- | --- |
 | `--rules PATH` | The one Markdown file of rules. Required. It can live anywhere: in the repository, or in a checkout of a shared guidelines repository. |
 | `--model MODEL` | The model to ask. Required: there is no default, because a baked-in name goes stale and hides cost. |
-| `--effort LEVEL` | Reasoning effort, passed to the API as you give it. Which values are valid depends on the model, so june does not check them: the API rejects a bad one and june reports its message. Omit it for the model's own default. |
+| `--effort LEVEL` | Reasoning effort, passed to the API as given. Which values are valid depends on the model, so june does not check them: the API rejects a bad one and june reports its message. Omit it for the model's own default. |
 | `--skill PATH` | A skill directory (its `SKILL.md`) or a skill file. Its body replaces the default instruction; front matter is dropped and anything else the skill bundles is ignored. |
 | `--prompt TEXT` | An instruction that replaces the default one. |
 
@@ -135,7 +135,7 @@ The code under review is untrusted input to the model. A prompt injected into a 
 | Source per run | 256 KiB | Files in path order until it is full. The rest are named in one warning and counted as not reviewed. |
 | Source per call | 64 KiB, at most 4 calls | The same. |
 | One file's window | 48 KiB | The file is skipped and named, never truncated. |
-| Output per call | 16000 tokens, reasoning included | A warning that says to lower `--effort`. |
+| Output per call | 16000 tokens, reasoning included | A warning that says to lower `--effort`, and only when that token budget is what stopped the answer. |
 | Retries | 2, for a rate limit, a server error or a network failure | The call fails. |
 | The whole run | 10 minutes | Calls not yet made are reported as not reviewed. |
 
@@ -154,6 +154,7 @@ A failure never changes the exit code. It is one `june: warning:` line (a `::war
 | 5xx, network | `the API was unavailable`, after two retries |
 | Over the time left | `the API did not answer in time` |
 | Output budget used up | `the model ran out of output budget before it finished`; lower `--effort` |
+| The model stopped short for any other reason | `the model stopped before it finished`. The warning does not say to lower `--effort` and does not repeat the provider's reason. |
 | Refusal, or an answer that is not the JSON asked for | `the model declined to answer`, `the answer was not the expected JSON` |
 
 A typo in `--model` therefore gives a green build with a loud warning. Read the warnings of a new setup once.

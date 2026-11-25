@@ -47,7 +47,7 @@ const (
 	Unavailable
 	// Timeout means the call did not finish in the time that was left.
 	Timeout
-	// Incomplete means the output budget ran out before the answer was complete.
+	// Incomplete means the model stopped before the answer was complete.
 	Incomplete
 	// Refused means the model declined to answer.
 	Refused

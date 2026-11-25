@@ -110,7 +110,6 @@ func TestPrepareRefusals(t *testing.T) {
 		{"no model", func(_ *testing.T, _ string, c *review.Config) { c.Model = "" }, "--model is required"},
 		{"blank model", func(_ *testing.T, _ string, c *review.Config) { c.Model = "  " }, "--model is required"},
 		{"model with a space", func(_ *testing.T, _ string, c *review.Config) { c.Model = "gpt 5" }, "--model"},
-		{"effort that is not a word", func(_ *testing.T, _ string, c *review.Config) { c.Effort = "High!" }, "--effort"},
 		{"no rules", func(_ *testing.T, _ string, c *review.Config) { c.Rules = "" }, "--rules is required"},
 		{"rules file missing", func(_ *testing.T, _ string, c *review.Config) { c.Rules = "nope.md" }, "nope.md"},
 		{"rules is a directory", func(t *testing.T, d string, c *review.Config) {
@@ -221,6 +220,32 @@ func TestTheModelGetsTheWholeRulesFileAndTheModelAndEffortAsGiven(t *testing.T) 
 func TestNoEffortIsLeftForTheModelDefault(t *testing.T) {
 	if q := query(t, review.Config{}, nil); q.Effort != "" {
 		t.Errorf("Effort = %q, want empty", q.Effort)
+	}
+}
+
+func TestAnUnusualEffortReachesTheModelUnchanged(t *testing.T) {
+	for _, tc := range []struct{ name, effort string }{
+		{"capital letters", "High"},
+		{"a digit", "x1"},
+		{"a trailing space", "low "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, cfg := workspace(t)
+			cfg.Effort = tc.effort
+			plan, faults := review.Prepare(dir, cfg)
+			if plan == nil || len(faults) != 0 {
+				t.Fatalf("Prepare refused %q: %v", tc.effort, faults)
+			}
+			fake := reviewtest.NewFake(reviewtest.Reply())
+			run(t, plan, fake, touch("a.py", "x = 1\n", 1, 1))
+			got := fake.Queries()
+			if len(got) != 1 {
+				t.Fatalf("calls = %d, want 1", len(got))
+			}
+			if got[0].Effort != tc.effort {
+				t.Errorf("Effort = %q, want %q", got[0].Effort, tc.effort)
+			}
+		})
 	}
 }
 
@@ -664,7 +689,7 @@ func TestEveryCallFailureIsALoudWarningNotAnError(t *testing.T) {
 		{review.RateLimited, "rate limit"},
 		{review.Unavailable, "unavailable"},
 		{review.Timeout, "did not answer in time"},
-		{review.Incomplete, "ran out of output budget"},
+		{review.Incomplete, "stopped before it finished"},
 		{review.Refused, "declined"},
 		{review.Malformed, "not the expected JSON"},
 	} {
@@ -692,6 +717,56 @@ func TestEveryCallFailureIsALoudWarningNotAnError(t *testing.T) {
 			}
 			if out.Reviewed != 0 || out.NotReviewed != 1 {
 				t.Errorf("reviewed, not reviewed = %d, %d", out.Reviewed, out.NotReviewed)
+			}
+		})
+	}
+}
+
+func TestAnIncompleteStopNamesTheOutputBudgetOnlyWhenTokensRanOut(t *testing.T) {
+	for _, tc := range []struct {
+		reason string
+		budget bool
+	}{
+		{"max_output_tokens", true},
+		{"content_filter", false},
+		{"max_messages", false},
+		{"steered", false},
+		{"", false},
+		{"provider-said-TOKEN", false},
+	} {
+		name := tc.reason
+		if name == "" {
+			name = "no reason"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir, cfg := workspace(t)
+			fake := reviewtest.NewFake(reviewtest.Fail(&review.CallError{Kind: review.Incomplete, Detail: tc.reason}))
+			out := run(t, prepare(t, dir, cfg), fake, touch("a.py", lines(3), 1, 3))
+			w := warnings(out)
+			if len(w) != 1 {
+				t.Fatalf("warnings = %q, want one", w)
+			}
+			if tc.reason != "" && strings.Contains(w[0], tc.reason) {
+				t.Errorf("warning echoed the provider reason %q: %s", tc.reason, w[0])
+			}
+			if out.Reviewed != 0 || out.NotReviewed != 1 {
+				t.Errorf("reviewed, not reviewed = %d, %d", out.Reviewed, out.NotReviewed)
+			}
+			if tc.budget {
+				for _, want := range []string{"ran out of output budget", "lower --effort", "a.py", "Fix: "} {
+					if !strings.Contains(w[0], want) {
+						t.Errorf("warning = %q, want it to contain %q", w[0], want)
+					}
+				}
+				return
+			}
+			if !strings.Contains(w[0], "stopped before it finished") {
+				t.Errorf("warning = %q, want the non-budget stop", w[0])
+			}
+			for _, banned := range []string{"lower --effort", "output budget"} {
+				if strings.Contains(w[0], banned) {
+					t.Errorf("warning = %q, want it not to contain %q", w[0], banned)
+				}
 			}
 		})
 	}

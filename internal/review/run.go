@@ -215,8 +215,13 @@ func failure(e *CallError, files []string) diag.Diagnostic {
 		what = "the API did not answer in time"
 		fix = "run the job again; a lower --effort answers faster"
 	case Incomplete:
-		what = "the model ran out of output budget before it finished"
-		fix = "lower --effort so less of the budget goes to reasoning"
+		if e.Detail == "max_output_tokens" {
+			what = "the model ran out of output budget before it finished"
+			fix = "lower --effort so less of the budget goes to reasoning"
+		} else {
+			what = "the model stopped before it finished"
+			fix = "run the job again"
+		}
 	case Refused:
 		what = "the model declined to answer"
 		fix = "check that the rules and the instruction ask for a code review"
