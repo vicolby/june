@@ -29,9 +29,10 @@ func TestActionPrefersPinnedASTGrep(t *testing.T) {
 	if err := yaml.Unmarshal(data, &action); err != nil {
 		t.Fatal(err)
 	}
-	if len(action.Runs.Steps) != 2 {
-		t.Fatalf("steps = %d, want install then run", len(action.Runs.Steps))
+	if len(action.Runs.Steps) != 3 {
+		t.Fatalf("steps = %d, want install, run, then the optional review", len(action.Runs.Steps))
 	}
+	action.Runs.Steps = action.Runs.Steps[:2] // the review step has its own test
 	pin, err := os.ReadFile(filepath.Join(root, ".ast-grep-version"))
 	if err != nil {
 		t.Fatal(err)
@@ -211,6 +212,122 @@ func TestActionHonorsConfiguredAndExplicitRules(t *testing.T) {
 			}
 			if code != tc.exit || (code == 1 && !strings.Contains(string(out), "CUSTOM")) {
 				t.Fatalf("action exit = %d, want %d: %s", code, tc.exit, out)
+			}
+		})
+	}
+}
+
+type actionStep struct {
+	Name  string
+	If    string `yaml:"if"`
+	Shell string
+	Env   map[string]string
+	Run   string
+}
+
+func readAction(t *testing.T) (steps []actionStep, inputs map[string]struct{ Default string }) {
+	t.Helper()
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "action.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var action struct {
+		Inputs map[string]struct{ Default string }
+		Runs   struct{ Steps []actionStep }
+	}
+	if err := yaml.Unmarshal(data, &action); err != nil {
+		t.Fatal(err)
+	}
+	return action.Runs.Steps, action.Inputs
+}
+
+func TestActionReviewStepIsOptInAndPassesTheKeyAsAnInput(t *testing.T) {
+	steps, inputs := readAction(t)
+	var review *actionStep
+	for i := range steps {
+		if steps[i].Name == "Review with a model" {
+			review = &steps[i]
+		}
+	}
+	if review == nil {
+		t.Fatal("missing the review step")
+	}
+	if review.If != "inputs.ai-model != ''" {
+		t.Errorf("if = %q: the step must be skipped unless a model is named, and keep the default success() condition so a failed check spends nothing", review.If)
+	}
+	if review.Shell != "bash" {
+		t.Errorf("shell = %q", review.Shell)
+	}
+	for env, input := range map[string]string{
+		"OPENAI_API_KEY": "openai-api-key", "INPUT_AI_MODEL": "ai-model", "INPUT_AI_RULES": "ai-rules",
+		"INPUT_AI_EFFORT": "ai-effort", "INPUT_AI_SKILL": "ai-skill", "INPUT_AI_PROMPT": "ai-prompt", "INPUT_BASE": "base",
+	} {
+		if got, want := review.Env[env], "${{ inputs."+input+" }}"; got != want {
+			t.Errorf("env %s = %q, want %q", env, got, want)
+		}
+		if _, ok := inputs[input]; !ok {
+			t.Errorf("input %s is not declared", input)
+		}
+	}
+	for name, in := range inputs {
+		if strings.HasPrefix(name, "ai-") || name == "openai-api-key" {
+			if in.Default != "" {
+				t.Errorf("input %s defaults to %q: the review must be opt-in", name, in.Default)
+			}
+		}
+	}
+	for _, step := range steps {
+		if step.Name != review.Name && strings.Contains(step.Run, "OPENAI_API_KEY") {
+			t.Errorf("step %q can see the key", step.Name)
+		}
+	}
+}
+
+func TestActionReviewStepMapsInputsToFlags(t *testing.T) {
+	steps, _ := readAction(t)
+	var script string
+	for _, step := range steps {
+		if step.Name == "Review with a model" {
+			script = step.Run
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"model and rules only", []string{"INPUT_AI_MODEL=m", "INPUT_AI_RULES=docs/ai.md"}, "review --rules docs/ai.md --model m"},
+		{"everything", []string{"INPUT_AI_MODEL=m", "INPUT_AI_RULES=docs/ai.md", "INPUT_AI_EFFORT=high", "INPUT_AI_SKILL=skills/x", "INPUT_AI_PROMPT=Be strict.", "INPUT_BASE=origin/main"},
+			"review --rules docs/ai.md --model m --effort high --skill skills/x --prompt Be strict. --base origin/main"},
+		{"empty optional inputs", []string{"INPUT_AI_MODEL=m", "INPUT_AI_RULES=r.md", "INPUT_AI_EFFORT=", "INPUT_AI_SKILL=", "INPUT_AI_PROMPT=", "INPUT_BASE="}, "review --rules r.md --model m"},
+		{"values with spaces stay one argument", []string{"INPUT_AI_MODEL=m", "INPUT_AI_RULES=my rules/a b.md"}, "review --rules my rules/a b.md --model m"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tools, out := t.TempDir(), filepath.Join(t.TempDir(), "args")
+			fake := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$ARGS_OUT\"\nprintf '%s' \"$OPENAI_API_KEY\" > \"$ARGS_OUT.key\"\n"
+			if err := os.WriteFile(filepath.Join(tools, "june"), []byte(fake), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.CommandContext(context.Background(), "bash", "-e", "-c", script)
+			// GitHub sets every declared input in the step's environment, empty or not.
+			unset := []string{"INPUT_AI_EFFORT=", "INPUT_AI_SKILL=", "INPUT_AI_PROMPT=", "INPUT_BASE="}
+			cmd.Env = append([]string{"PATH=" + tools + string(os.PathListSeparator) + "/usr/bin:/bin", "ARGS_OUT=" + out, "OPENAI_API_KEY=sk-from-input"}, append(unset, tc.env...)...)
+			if b, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("%v\n%s", err, b)
+			}
+			got, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if lines := strings.Split(strings.TrimSuffix(string(got), "\n"), "\n"); strings.Join(lines, " ") != tc.want {
+				t.Errorf("june got %q, want %q", lines, tc.want)
+			}
+			if k, _ := os.ReadFile(out + ".key"); string(k) != "sk-from-input" {
+				t.Errorf("june saw the key %q", k)
 			}
 		})
 	}

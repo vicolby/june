@@ -91,8 +91,8 @@ var cp1252High = [32]rune{
 	0, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0, 0x017E, 0x0178,
 }
 
-// toUTF8 returns source as UTF-8 text, or the reason it cannot be read the way Python would read it.
-func toUTF8(source []byte) ([]byte, string) {
+// Decode returns source as UTF-8 text, or the reason it cannot be read the way Python would read it.
+func Decode(source []byte) ([]byte, string) {
 	if bytes.IndexByte(source, 0) >= 0 {
 		return nil, "it contains NUL bytes"
 	}

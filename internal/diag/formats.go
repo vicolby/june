@@ -211,10 +211,15 @@ const maxSummaryRows = 100
 // StepSummary renders a Markdown job summary: the summary line and a table of findings, opt-outs and failures.
 // Legacy matches are information on untouched lines, so they stay out.
 func StepSummary(ds []Diagnostic, summary string) []byte {
+	return StepSummaryAs(ds, summary, checkNames.Heading)
+}
+
+// StepSummaryAs is StepSummary under a heading of its own.
+func StepSummaryAs(ds []Diagnostic, summary, heading string) []byte {
 	sorted := append([]Diagnostic(nil), ds...)
 	sortDiagnostics(sorted)
 	var b strings.Builder
-	b.WriteString("## june\n\n")
+	fmt.Fprintf(&b, "## %s\n\n", mdText(heading))
 	if summary != "" {
 		fmt.Fprintf(&b, "%s\n\n", mdText(summary))
 	}

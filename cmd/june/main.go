@@ -14,6 +14,8 @@ import (
 
 	"github.com/vicolby/june/internal/check"
 	"github.com/vicolby/june/internal/diag"
+	"github.com/vicolby/june/internal/openai"
+	"github.com/vicolby/june/internal/review"
 )
 
 // version is stamped at build time with -ldflags "-X main.version=...".
@@ -62,6 +64,7 @@ const usage = `usage:
   june init [--ci github|gitlab]
   june verify [--rules DIR]... [--rule ID] [--format FORMAT]
   june new [--rules DIR] RULE
+  june review --rules PATH --model MODEL [--effort LEVEL] [--skill PATH | --prompt TEXT] [--base REF | --changed-lines FILE] [--exclude GLOB]... [--format FORMAT] [PATH]...
   june --version
   june --help | -h
 
@@ -86,6 +89,8 @@ exit codes:
   0  no error-severity finding on a touched line
   1  an error-severity finding on a touched line with no valid opt-out
   2  no verdict: bad usage, bad rules directory, shallow clone, no base, missing ast-grep
+
+june review is experimental: a model reviews the touched lines against a Markdown rules file, in CI only. Run june review --help.
 `
 
 // initUsage, verifyUsage and newUsage are the help text of each subcommand: `june init --help` and so on.
@@ -119,7 +124,40 @@ flags:
   --help, -h     print this help
 `
 
+const reviewUsage = `usage: june review --rules PATH --model MODEL [--effort LEVEL] [--skill PATH | --prompt TEXT] [--base REF | --changed-lines FILE] [--exclude GLOB]... [--ignore-whitespace] [--format FORMAT] [PATH]...
+
+Experimental. Ask a model whether the lines this change touched break the rules in a Markdown file. Runs only in GitHub Actions or GitLab CI.
+Every finding is a warning: the exit code never depends on what the model says, and a failed call is a warning too.
+The touched Python files, with context lines around the touched lines, and the rules are sent to the OpenAI API.
+
+flags:
+  --rules PATH          the one Markdown file of rules; all of it is sent to the model
+  --model MODEL         the model to ask; there is no default
+  --effort LEVEL        reasoning effort, passed to the API as given (default: the model's own)
+  --skill PATH          a skill directory or file whose body replaces the default instruction
+  --prompt TEXT         an instruction that replaces the default one; not with --skill
+  --base REF            judge lines changed since the merge base of REF and HEAD
+  --changed-lines FILE  file of touched lines, path:7 or path:7-12 per line; - reads stdin
+  --exclude GLOB        keep paths out of the review, repeatable; adds to exclude in .june/config.yml
+  --ignore-whitespace   do not count a line whose only change is whitespace as touched (git diff -w)
+  --format FORMAT       text, json, sarif, github or gitlab (default: github under GitHub Actions, gitlab under GitLab CI)
+  --help, -h            print this help
+
+An empty --skill, --prompt or --effort counts as not given.
+GitLab Code Quality findings go to gl-code-quality-review-report.json.
+
+environment:
+  OPENAI_API_KEY   the API key; without it nothing is sent and the run only warns
+
+exit codes:
+  0  reviewed, or skipped with a warning
+  2  misuse: not CI, no --model or --rules, a bad file, no way to know which lines changed
+`
+
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, env check.Env) int {
+	if len(args) > 0 && args[0] == "review" {
+		return reviewCommand(ctx, args[1:], stdin, stdout, stderr, env)
+	}
 	if len(args) > 0 && args[0] == "verify" {
 		return verify(ctx, args[1:], stdout, stderr, env)
 	}
@@ -184,6 +222,76 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 
 	res, err := check.Change(ctx, env, req)
+	return finish(env.Dir, stdout, stderr, res, err)
+}
+
+// reviewCommand is `june review`: a model reviews the touched lines against a Markdown rules file.
+// It reads the API key from the environment, never from a flag, and builds the only client that opens a connection.
+func reviewCommand(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, env check.Env) int {
+	fs := flag.NewFlagSet("june review", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var rulesFiles, excludes dirList
+	fs.Var(&rulesFiles, "rules", "the Markdown file of rules")
+	fs.Var(&excludes, "exclude", "path glob to keep out of the review, repeatable")
+	model := fs.String("model", "", "the model to ask")
+	effort := fs.String("effort", "", "reasoning effort")
+	skill := fs.String("skill", "", "skill directory or file whose body replaces the default instruction")
+	prompt := fs.String("prompt", "", "instruction that replaces the default one")
+	base := fs.String("base", "", "git ref; judge lines changed since its merge base with HEAD")
+	changedLines := fs.String("changed-lines", "", "file of touched lines, path:7 or path:7-12 per line; - reads stdin")
+	format := fs.String("format", "", "output format: text, json, sarif, github or gitlab")
+	ignoreSpace := fs.Bool("ignore-whitespace", false, "do not count a line whose only change is whitespace as touched (git diff -w)")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprint(stdout, reviewUsage)
+			return 0
+		}
+		return usageError(stderr, err.Error())
+	}
+	paths := fs.Args()
+	for _, arg := range paths {
+		if strings.HasPrefix(arg, "-") {
+			return usageError(stderr, "flags must precede paths. Use: june review [flags] [paths]; prefix paths starting with - with ./")
+		}
+	}
+	if len(rulesFiles) > 1 {
+		return usageError(stderr, "june review takes one rules file, and "+fmt.Sprint(len(rulesFiles))+" were given")
+	}
+	rules := ""
+	if len(rulesFiles) == 1 {
+		rules = rulesFiles[0]
+	}
+
+	req := check.ReviewRequest{
+		Base: *base, Exclude: excludes, Paths: paths, IgnoreSpace: *ignoreSpace,
+		AI: review.Config{Rules: rules, Skill: *skill, Prompt: *prompt, Model: *model, Effort: *effort},
+	}
+	if *format != "" {
+		f, ok := diag.ParseFormat(*format)
+		if !ok {
+			return usageError(stderr, fmt.Sprintf("unknown format %q", *format))
+		}
+		req.Format = f
+	}
+	switch *changedLines {
+	case "":
+	case "-":
+		req.Changed = stdin
+	default:
+		f, err := os.Open(*changedLines)
+		if err != nil {
+			return fail(stderr, "the changed-lines file cannot be read. Fix: pass an existing file to --changed-lines")
+		}
+		defer func() { _ = f.Close() }() // Read-only file; closing cannot change the verdict.
+		req.Changed = f
+	}
+
+	client, err := openai.New(openai.Config{APIKey: env.Vars["OPENAI_API_KEY"], UserAgent: "june/" + version})
+	if err != nil {
+		return fail(stderr, err.Error())
+	}
+	req.Model = client
+	res, err := check.Review(ctx, env, req)
 	return finish(env.Dir, stdout, stderr, res, err)
 }
 
@@ -302,7 +410,7 @@ func appendFile(path string, data []byte) (err error) {
 }
 
 func usageError(stderr io.Writer, cause string) int {
-	return fail(stderr, cause+". Fix: usage is june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--exclude GLOB]... [--base REF | --changed-lines FILE] [PATH]..., june init [--ci github|gitlab], june verify [--rules DIR]... [--rule ID] [--format FORMAT], june new [--rules DIR] RULE, june --version, or june --help")
+	return fail(stderr, cause+". Fix: usage is june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--exclude GLOB]... [--base REF | --changed-lines FILE] [PATH]..., june init [--ci github|gitlab], june verify [--rules DIR]... [--rule ID] [--format FORMAT], june new [--rules DIR] RULE, june review --rules PATH --model MODEL, june --version, or june --help")
 }
 
 func fail(stderr io.Writer, msg string) int {

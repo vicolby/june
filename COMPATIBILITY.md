@@ -12,7 +12,7 @@ june is at 0.x. Until 1.0, anything below can change in a minor release, and the
 | `1` | An error-severity finding on a touched line with no valid opt-out. |
 | `2` | No verdict: bad usage, bad rules, no base, shallow clone, missing or unsupported `ast-grep`. |
 
-No other code is used for a verdict. Warnings, `--legacy` lines and opt-outs never change the code. A run that cannot give a verdict exits 2 and never 0.
+No other code is used for a verdict. Warnings, `--legacy` lines and opt-outs never change the code. A run of `june`, `june verify` or `june new` that cannot give a verdict exits 2 and never 0. `june review` is the exception: see [below](#june-review-experimental).
 
 ## Summary line (Stable)
 
@@ -51,8 +51,22 @@ Read as documented, and stable:
 | `GITHUB_ACTIONS`, `GITHUB_EVENT_NAME`, `GITHUB_EVENT_PATH`, `GITHUB_BASE_REF`, `GITHUB_STEP_SUMMARY` | Detecting GitHub Actions, the pull request or merge group base, and the job summary. |
 | `GITLAB_CI`, `CI_MERGE_REQUEST_EVENT_TYPE`, `CI_MERGE_REQUEST_DIFF_BASE_SHA` | Detecting GitLab CI and the merge request base. |
 | `PRE_COMMIT`, `PRE_COMMIT_FROM_REF`, `PRE_COMMIT_TO_REF` | The pre-commit scope. |
+| `OPENAI_API_KEY` | `june review` only, and [Experimental](#june-review-experimental), not Stable. |
 
 The install script reads `JUNE_VERSION`, `JUNE_INSTALL_DIR`, `JUNE_OS`, `JUNE_ARCH`, `JUNE_INSTALL_AST_GREP` and `JUNE_RELEASES_URL` ([README](README.md#install)). june does not read any other variable of its own. It drops the git variables that change what a diff means (`GIT_DIFF_OPTS`, `GIT_EXTERNAL_DIFF` and the `GIT_*_PATHSPECS` family) before it runs git. How june infers the base from these is covered by the scope order in the [README](README.md#usage); a vendor adding a variable never changes a verdict.
+
+## `june review` (Experimental)
+
+Nothing in this section is Stable, and 1.0 does not freeze it. It can change in any minor release, and the release notes name the change. Breaking it never breaks the Stable sections: a bare `june`, `verify` and `new` never call a model.
+
+- **Command.** `june review --rules FILE --model MODEL [--effort LEVEL] [--skill PATH | --prompt TEXT]`, with the scope flags of `june` (`--base`, `--changed-lines`, `--exclude`, `--ignore-whitespace`, `--format`, `PATH`). `--rules` is one Markdown file and `--model` is required. `--skill` and `--prompt` together exit 2.
+- **Environment.** `OPENAI_API_KEY`. Requests go to `https://api.openai.com/v1`. It reads no other variable of its own.
+- **Where.** GitHub Actions and GitLab CI only. Elsewhere, under pre-commit and under `pull_request_target` it exits 2.
+- **Exit codes.** Exit 2 for bad usage, a bad rules file, skill or prompt, a scope it cannot establish, and a refused environment. Otherwise 0, always. A finding is a warning with rule `AI`, and a failed call (no key, a rejected key, an unknown model, a timeout) is a loud warning with exit 0, so a green `june review` can mean it could not review. Read the summary's count of files not reviewed.
+- **Reports.** The formats of `june`, with `AI` as the rule code and the summary heading `june review`. The GitLab report is `gl-code-quality-review-report.json`, so it never overwrites the check's. Its fingerprint hashes the file and line, because the model's wording varies between runs. The summary ends with an `ai review ...` clause, and its wording is for people.
+- **Not promised.** The wording and number of findings, the default instruction, the budgets, the request sent to the API and the set of supported providers. An AI finding has no opt-out.
+
+`june review` has no live test in CI. Its tests use a scripted model and a local fake of the API, and this release was not run against the live OpenAI API. At each release bump that changes it, run it manually once against a pull request with a real key and a cheap model, and confirm a finding appears as an annotation and that a wrong model name gives a warning with exit 0.
 
 ## Rules layout (Stable)
 
@@ -81,6 +95,6 @@ At 1.0 the **Stable** items above are frozen until 2.0. Not frozen: the wording 
 
 ## How the promise is checked
 
-Each stable surface has a test: the exit codes and summary in `internal/check`, the formats in `internal/diag`, rule layout and sidecars in `internal/rules`. CI runs the suite with the race detector on Linux and macOS, runs the parsers' fuzz targets weekly, and runs the binary on a real GitHub Actions runner against a fixture repository, reading the annotations back through the API (`testdata/e2e/run.sh github`).
+Each stable surface has a test (Experimental ones, `june review`, have scenario tests with a scripted model and a local fake API, in `internal/check`, `internal/review`, `internal/openai` and `cmd/june`): the exit codes and summary in `internal/check`, the formats in `internal/diag`, rule layout and sidecars in `internal/rules`. CI runs the suite with the race detector on Linux and macOS, runs the parsers' fuzz targets weekly, and runs the binary on a real GitHub Actions runner against a fixture repository, reading the annotations back through the API (`testdata/e2e/run.sh github`).
 
 The automated june CI check for GitLab simulates merge request pipeline variables (`testdata/e2e/run.sh gitlab`). At each release bump, manually run a real GitLab pipeline in the `gimmefear/test-june` project using the release being checked. Open a merge request that adds a mutable default argument and confirm the job fails with exit 1 and the merge request shows one Code Quality finding for `PY012`. This real GitLab check is manual, not an automated june CI job.

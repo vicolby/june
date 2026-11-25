@@ -765,3 +765,65 @@ func TestGitHubNoteLineSeparatorsPreserveLiteralEscapes(t *testing.T) {
 		})
 	}
 }
+
+// A finding whose message changes from run to run, like a model's reason, still keeps one fingerprint per file and line.
+func TestGitLabFingerprintOfAVolatileFindingIgnoresItsMessage(t *testing.T) {
+	prints := func(ds []diag.Diagnostic) []string {
+		_, files := diag.Render(ds, "", diag.GitLab)
+		var got []qualityEntry
+		if err := json.Unmarshal(files[0].Data, &got); err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, e := range got {
+			out = append(out, e.Fingerprint)
+		}
+		return out
+	}
+	one := []diag.Diagnostic{
+		{File: "a.py", Line: 2, Col: 1, Code: "AI", Sev: diag.Warning, Kind: diag.Finding, Msg: "first wording", Volatile: true},
+		{File: "a.py", Line: 5, Col: 1, Code: "AI", Sev: diag.Warning, Kind: diag.Finding, Msg: "other", Volatile: true},
+	}
+	two := []diag.Diagnostic{
+		{File: "a.py", Line: 2, Col: 1, Code: "AI", Sev: diag.Warning, Kind: diag.Finding, Msg: "second wording", Volatile: true},
+		{File: "a.py", Line: 5, Col: 1, Code: "AI", Sev: diag.Warning, Kind: diag.Finding, Msg: "again different", Volatile: true},
+	}
+	a, b := prints(one), prints(two)
+	if !reflect.DeepEqual(a, b) {
+		t.Errorf("message changed the fingerprints: %v vs %v", a, b)
+	}
+	if a[0] == a[1] {
+		t.Errorf("two lines share a fingerprint: %v", a)
+	}
+	moved := []diag.Diagnostic{one[0]}
+	moved[0].Line = 3
+	if c := prints(moved); c[0] == a[0] {
+		t.Errorf("a finding on another line kept its fingerprint")
+	}
+	same := []diag.Diagnostic{one[0], one[0]}
+	if p := prints(same); p[0] == p[1] {
+		t.Errorf("two findings on one line share a fingerprint: %v", p)
+	}
+}
+
+func TestRenderAsNamesTheGitLabReport(t *testing.T) {
+	names := diag.Names{Heading: "june review", GitLabReport: diag.ReviewGitLabReport}
+	out, files := diag.RenderAs(gitlabDiags(), "june: summary", diag.GitLab, names)
+	plain, _ := diag.Render(gitlabDiags(), "june: summary", diag.Text)
+	if string(out) != string(plain) {
+		t.Errorf("out = %s, want the plain text", out)
+	}
+	if len(files) != 1 || files[0].Path != "gl-code-quality-review-report.json" {
+		t.Fatalf("files = %v, want one gl-code-quality-review-report.json", files)
+	}
+	if diag.ReviewGitLabReport == diag.GitLabReport {
+		t.Errorf("the review report would overwrite the check report")
+	}
+}
+
+func TestStepSummaryAsUsesItsHeading(t *testing.T) {
+	got := string(diag.StepSummaryAs(nil, "june: clean", "june review"))
+	if got != "## june review\n\njune: clean\n\n" {
+		t.Errorf("got %q", got)
+	}
+}
