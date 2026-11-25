@@ -1,5 +1,5 @@
 name: june
-description: Check the lines a change touches against your guideline rules. Installs june and ast-grep, then runs june.
+description: Check the lines a change touches against your guideline rules. Installs june and ast-grep, then runs june, and optionally asks a model to review the same lines (experimental).
 inputs:
   version:
     description: june release to install, X.Y.Z. Default is the release the action is pinned to (uses vicolby/june@vX.Y.Z); required for any other ref.
@@ -9,6 +9,24 @@ inputs:
     default: ""
   base:
     description: Git ref to judge changes against. Default is the pull request base, or the merge group base in a merge queue.
+    default: ""
+  ai-model:
+    description: Experimental. The OpenAI model that reviews the touched lines against ai-rules. Empty skips the review step.
+    default: ""
+  ai-rules:
+    description: Experimental. The one Markdown file of rules the model reviews against, relative to the repository. Required with ai-model.
+    default: ""
+  ai-effort:
+    description: Experimental. Reasoning effort for the model, as the API spells it. Empty leaves it to the model.
+    default: ""
+  ai-skill:
+    description: Experimental. A skill directory or file whose body replaces the default review instruction. Not with ai-prompt.
+    default: ""
+  ai-prompt:
+    description: Experimental. An instruction that replaces the default review instruction. Not with ai-skill.
+    default: ""
+  openai-api-key:
+    description: Experimental. The OpenAI API key for the review, from a secret, for example secrets.OPENAI_API_KEY. Pull requests from forks have no secrets, and the review then only warns.
     default: ""
 runs:
   using: composite
@@ -51,3 +69,30 @@ runs:
           set -- "$@" --base "$INPUT_BASE"
         fi
         june "$@"
+    - name: Review with a model
+      if: inputs.ai-model != ''
+      shell: bash
+      env:
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        INPUT_AI_MODEL: ${{ inputs.ai-model }}
+        INPUT_AI_RULES: ${{ inputs.ai-rules }}
+        INPUT_AI_EFFORT: ${{ inputs.ai-effort }}
+        INPUT_AI_SKILL: ${{ inputs.ai-skill }}
+        INPUT_AI_PROMPT: ${{ inputs.ai-prompt }}
+        INPUT_BASE: ${{ inputs.base }}
+      run: |
+        set -eu
+        set -- --rules "$INPUT_AI_RULES" --model "$INPUT_AI_MODEL"
+        if [ -n "$INPUT_AI_EFFORT" ]; then
+          set -- "$@" --effort "$INPUT_AI_EFFORT"
+        fi
+        if [ -n "$INPUT_AI_SKILL" ]; then
+          set -- "$@" --skill "$INPUT_AI_SKILL"
+        fi
+        if [ -n "$INPUT_AI_PROMPT" ]; then
+          set -- "$@" --prompt "$INPUT_AI_PROMPT"
+        fi
+        if [ -n "$INPUT_BASE" ]; then
+          set -- "$@" --base "$INPUT_BASE"
+        fi
+        june review "$@"
