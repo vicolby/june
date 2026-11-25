@@ -16,8 +16,8 @@ Version 1 checks Python only: files ending in `.py`. `.pyi` stubs and scripts wi
 ## Promises
 
 - **No telemetry.** june collects and sends no usage data, crash reports or identifiers.
-- **No network on the check path.** `june`, `june verify` and `june new` open no network connection. The binary imports no HTTP or socket package, and runs only `git` and `ast-grep` as local subprocesses. Checked by running a check and `june verify` with network access denied: both gave their normal verdict.
-- Network is used only to install: `install.sh` downloads the release, `JUNE_INSTALL_AST_GREP=1` runs `npm`, and the GitHub Action does both. The promise covers june's own code; it was not audited for `git` or `ast-grep`, though the sandboxed run above included both.
+- **No network on the check path.** `june`, `june verify` and `june new` open no network connection, and run only `git` and `ast-grep` as local subprocesses. Checked by running a check and `june verify` with network access denied: both gave their normal verdict. Only the experimental [`june review`](docs/ai-review.md) opens a connection, to the OpenAI API, and a test fails the build if any package outside `internal/openai` imports `net/http`, and none of the packages that decide a check depends on `net`.
+- Network is used only to install, and by `june review` when you opt in: `install.sh` downloads the release, `JUNE_INSTALL_AST_GREP=1` runs `npm`, and the GitHub Action does both. The promise covers june's own code; it was not audited for `git` or `ast-grep`, though the sandboxed run above included both.
 
 ## Why june
 
@@ -89,6 +89,7 @@ june [--format FORMAT] [--legacy] [--ignore-whitespace] [--rules DIR]... [--excl
 june init [--ci github|gitlab]
 june verify [--rules DIR]... [--rule ID] [--format FORMAT]
 june new [--rules DIR] RULE
+june review --rules FILE --model MODEL [--effort LEVEL] [--skill PATH | --prompt TEXT] [--base REF | --changed-lines FILE] [--exclude GLOB]... [--format FORMAT] [PATH]...
 june --version
 june --help | -h
 ```
@@ -105,6 +106,7 @@ june --help | -h
 | `--exclude GLOB` | Keep paths out of the check, repeatable. Adds to `exclude` in `.june/config.yml`. |
 | `--legacy` | Also list violations on untouched lines, as information only. |
 | `--ignore-whitespace` | Do not count a line as touched when only its whitespace changed, like `git diff -w`. Strict by default. Not valid with `--changed-lines`. |
+| `--model MODEL`, `--effort LEVEL`, `--skill PATH`, `--prompt TEXT` | With `june review`: the model (required), its reasoning effort, and the replacement for the default instruction (one of the two, not both). `--rules` is a single Markdown file there. See [AI review](docs/ai-review.md). |
 | `--help`, `-h` | Print usage and flags to stdout and exit 0. |
 
 Use a full-history git checkout.
@@ -298,6 +300,22 @@ repos:
 
 Install june with Homebrew. The hook runs without filenames when Python files are involved and judges the staged change against HEAD. Under `--from-ref A --to-ref B`, or a pre-push that sets them, it judges the lines that range adds. A first push of a history with a root commit sets no refs, so pre-push judges nothing; CI covers it.
 
+### AI review (experimental)
+
+`june review` asks an OpenAI model whether the touched lines break the guidelines in one Markdown file of your rules, for the taste and design rules no tool can decide. It runs only in GitHub Actions and GitLab CI, never as part of a bare `june`, and every finding is a warning: it never fails a build.
+
+```yaml
+      - uses: vicolby/june@vX.Y.Z
+        with:
+          ai-model: ${{ vars.JUNE_AI_MODEL }}
+          ai-rules: docs/ai-rules.md
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+```
+
+The action inputs are `ai-model` (empty skips the review), `ai-rules`, `ai-effort`, `ai-skill`, `ai-prompt` and `openai-api-key`. The review step runs after the check and, like any later step, only if the check did not fail. A pull request from a fork has no secrets, so there the review only warns that it had no key.
+
+What it sends, what it costs, the GitLab job, the failure warnings and why a finding has no opt-out are in [AI review](docs/ai-review.md). It sends the touched Python files and your rules file to OpenAI with your key, so read [What leaves the machine](docs/ai-review.md#what-leaves-the-machine) before enabling it. This release has not run against the live OpenAI API.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -306,13 +324,14 @@ Install june with Homebrew. The hook runs without filenames when Python files ar
 | `1` | An error-severity finding on a touched line with no valid opt-out. |
 | `2` | No verdict: bad usage, bad rules directory, shallow clone, no base, missing, too-old, or unreadable `ast-grep`. Output: `june: error: <cause>. Fix: <instruction>`. |
 
-Warnings, `--legacy` lines and opt-outs never change the exit code.
+Warnings, `--legacy` lines and opt-outs never change the exit code. `june review` uses the same codes: it exits 0 whatever the model says or fails to say, and 2 for bad usage, a bad rules file, no scope, or a run outside GitHub Actions and GitLab CI.
 
 Unexpected internal errors include the issue URL and june version, and ask you to report the command you ran.
 
 ## More
 
-- [VISION.md](VISION.md): purpose, scope, and the planned advisory LLM review (not built).
+- [VISION.md](VISION.md): purpose and scope, including the advisory LLM review.
+- [docs/ai-review.md](docs/ai-review.md): `june review`, the experimental model review of taste and design rules.
 - [docs/writing-rules.md](docs/writing-rules.md): writing and verifying rules, including with a model in the loop.
 - [ARCHITECTURE.md](ARCHITECTURE.md): module map and invariants.
 - [COMPATIBILITY.md](COMPATIBILITY.md): what is stable, what may change and what 1.0 freezes.

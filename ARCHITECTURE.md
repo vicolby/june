@@ -7,14 +7,18 @@ It holds the module map and the invariants. Everything else is in the code and i
 
 ```
 cmd/june -> check -> rules   (load and verify rules, scan files)
+                  -> review  (ask a model about the touched lines; june review only)
                   -> diag    (render diagnostics)
+cmd/june -> openai           (the one adapter of review.Model that opens a connection)
 ```
 
-Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`. Tests keep fixture rules in `testdata/rules` and `internal/rules/testdata`; june ships no rules.
+Layout: `cmd/june`, `internal/{check,rules,review,openai,diag}`, plus `internal/install`. Tests keep fixture rules in `testdata/rules` and `internal/rules/testdata`; june ships no rules.
 
 - `cmd/june` is a shell and owns no decision. It maps flags to a `check.Request`, snapshots the environment, writes the output and report files, and returns the exit code.
 - `check` is the deep module. It decides one change: which lines are touched, which findings land on them, which opt-outs apply, and the exit code. It hides repo discovery, CI detection and scope inference, merge-base and shallow-clone handling, diff parsing, the changed-lines list parser, opt-out matching and sorting.
 - `rules` owns ast-grep rules, their sidecar examples (`rule-tests/<id>-test.yml`), the shared `utils/` rules and the `june new` scaffold. A rule set loads only if every example behaves, so an unverified rule never produces a verdict. It checks the ast-grep version before verifying examples, stages files at their real paths so a rule's `files` and `ignores` apply, refuses rule keys june does not use (`note` and `url` are used: they travel with each finding), runs ast-grep and hides the invocation, source encodings, and the zero-based to one-based line shift. `RuleSet.Version` is the version a verdict used.
+- `review` is the deep module of `june review`. It decides what a model is asked and what of its answer becomes a finding: windows of the touched lines, the instruction and the output contract, hard budgets, and a guard that drops any finding off a touched line. Its one seam is `review.Model`, with the OpenAI adapter in `openai` and a scripted fake in `review/reviewtest`. Model text reaches output only through `diag`, as a warning. `check.Review` reuses the scope of a change check, so both commands judge the same lines.
+- `openai` is the Responses API adapter: strict JSON-schema output, `store: false`, bounded retries, no redirects. It is the only package that imports `net/http`, and `cmd/june` wires it in. The key is never put in an error or a log. A test fails the build if `check`, `rules`, `diag` or `review` ever depend on `net` or `net/http`.
 - `diag` is the one ruff-shaped vocabulary for findings, opt-outs, legacy matches, rule faults and june's own failures, and renders it as text, GitHub, GitLab, JSON or SARIF. `june verify` reuses it: a failing example is a failure that carries its file and rule.
 
 ## Invariants
@@ -31,7 +35,8 @@ Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`. Test
 - The same input yields the same exit code and the same findings; CI event context is part of that input (see [GitHub Actions](README.md#github-actions)). Output paths follow [Usage](README.md#usage). The summary's base label names the base and where it came from.
 - Output is sorted, with no clock and no ANSI. The safe.directory fix may name the repository path.
 - A rule fault anywhere refuses the whole run, never a partial rule set. An unsupported or unreadable ast-grep version is a rule fault.
-- Nothing is fetched. The check path uses no network, model or clock.
+- Nothing is fetched. The check path (`june`, `june verify`, `june new`) uses no network, model or clock.
+- `june review` is the only command that opens a connection, and only to the configured OpenAI endpoint. Its findings are warnings on touched lines and never change the exit code, and it exits 2 outside GitHub Actions and GitLab CI. The determinism invariants above do not apply to the model's answer.
 
 ## Where things are
 
@@ -44,6 +49,6 @@ Layout: `cmd/june`, `internal/{check,rules,diag}`, plus `internal/install`. Test
 ## House rules
 
 - A module earns its place by the deletion test: if complexity vanishes without it, it is a pass-through.
-- A seam needs two real adapters. Touched lines (git and the supplied list) and output format are real seams; ast-grep and language are not.
+- A seam needs two real adapters. Touched lines (git and the supplied list), output format and the review model (OpenAI and the scripted fake) are real seams; ast-grep and language are not.
 - Guideline-specific Python knowledge stays in rule data.
 - No registry or plugin load: extension is a closed switch and a release.

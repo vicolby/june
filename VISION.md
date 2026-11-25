@@ -3,7 +3,7 @@
 june exists so that code-guideline rules a tool can decide are decided by a tool, never by an LLM's judgment.
 It serves teams whose AI agents write code against shared guideline skills, and it turns each checkable rule into a deterministic CI and pre-commit failure that an agent fixes the way it fixes a ruff or mypy error.
 It owns deterministic enforcement of guideline rules on the lines a change touches.
-Version 2 adds an advisory LLM review of the taste and design guidelines no tool can decide.
+An advisory LLM review of the taste and design guidelines no tool can decide is a separate, experimental command.
 
 ## The skill holds only what a tool cannot check
 Every rule that can be decided from a single file's syntax tree belongs in june, and the skill keeps only judgment, taste, and design guidance.
@@ -39,11 +39,12 @@ Every rule ships with passing and failing examples, and june refuses a rule whos
 Rules are ast-grep rules, and june owns them directly, never as configuration for another linter.
 
 ## Taste and design rules get an advisory LLM review
-Version 2 adds `june review`, a separate command that asks a model whether the lines a change touches follow the taste and design rules no tool can decide.
+`june review` is a separate command that asks a model whether the lines a change touches follow the taste and design rules no tool can decide.
 The user supplies the rule file by path, from any source.
-It runs locally and in CI, with the Anthropic API or the OpenAI API through an API token, or through the Claude or Codex command-line tool run locally.
+The first cut is experimental: it runs only in CI, through the OpenAI API with a key from a CI secret, and the user names the model.
+Later versions add local use, the Anthropic API and the Claude or Codex command-line tools.
 The review is opt-in and never part of a bare `june` run.
-Its findings are advisory only: they never set exit 1 and never block a build, like `--legacy`.
+Its findings are advisory only: they are warnings, never set exit 1 and never block a build, like `--legacy`.
 A review finding never replaces a deterministic rule, and a rule a tool can decide stays in june.
 Every v1 guarantee holds on the check path.
 The deterministic check never calls a model, has no network and gives the same verdict on every run.
@@ -51,14 +52,14 @@ The deterministic check never calls a model, has no network and gives the same v
 ## Scope
 june is not a linter engine, not a replacement for ruff or mypy, and not a rule marketplace.
 The check path has no model.
-In version 2 the LLM review is a separate command, and its findings never decide a verdict.
+The LLM review is a separate command, and its findings never decide a verdict.
 Version 1 checks Python only.
 june ships no rules: the user supplies their own.
 It ships through Homebrew, with ast-grep as a dependency.
 It also ships as release binaries for darwin and linux, with ast-grep installed separately.
 There is no pip package and no container image.
 june finds the touched lines itself from git against the target branch, and also accepts a list of changed lines from the CI job or the pre-commit hook.
-Reviewing the guidelines no tool can check belongs to version 2.
+Reviewing the guidelines no tool can check is the experimental `june review`; local use and other providers belong to a later version.
 Reporting per-guideline coverage belongs to a later version.
 
 A change aligns when it makes a tool-decidable rule more exact, easier for an agent to act on, or cheaper to adopt on legacy code, or when it makes the advisory review more useful to an agent without letting it decide a verdict.
