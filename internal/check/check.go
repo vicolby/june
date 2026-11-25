@@ -73,34 +73,15 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	if env.Dir == "" {
 		return Result{}, errors.New("check: Env.Dir is empty")
 	}
-
-	if err := ctx.Err(); err != nil {
-		return Result{}, err
-	}
-	req.Format = formatFor(env, req)
-	req.root = repoPrefix(ctx, env, req.Format)
-	req.stepSummary = env.Vars["GITHUB_STEP_SUMMARY"]
-	proj, bad := findProject(ctx, env)
-	if err := ctx.Err(); err != nil {
-		return Result{}, err
-	}
-	if bad != nil {
-		return refuse(req, *bad), nil
-	}
-	skip, bad := excludes(env, proj, req)
-	if bad != nil {
-		return refuse(req, *bad), nil
-	}
-	touched, sc, bad, err := findTouched(ctx, env, req, proj.cfg.Base, skip)
-	if sc.scanDir != "" {
-		defer func() { _ = os.RemoveAll(sc.scanDir) }()
-	}
+	scp, refusal, err := scopeChange(ctx, env, req)
+	defer scp.close()
 	if err != nil {
 		return Result{}, err
 	}
-	if bad != nil {
-		return refuse(req, *bad), nil
+	if refusal != nil {
+		return *refusal, nil
 	}
+	req, proj, skip, touched, sc := scp.req, scp.proj, scp.skip, scp.touched, scp.sc
 
 	rs, refusal, err := load(ctx, env, proj, req.Rules, "", req)
 	if refusal != nil {
@@ -110,10 +91,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		return Result{}, err
 	}
 
-	root := env.Dir
-	if sc.scanDir != "" {
-		root = sc.scanDir
-	}
+	root := scp.root(env)
 	files, excluded := skip.filter(touched.pythonFiles())
 	scanned, err := rs.Scan(ctx, root, files)
 	if err != nil {
@@ -214,37 +192,131 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 			lines += touched.lineCount(f)
 		}
 	}
-	if lines == 0 && pullRequestEvent(env) {
-		base := sc.base
-		if base == "" || sc.source == sourceRefs || sc.source == sourceStaged {
-			// Supplied lines and pre-commit scopes do not identify the PR base.
-			base, _, _ = eventBase(env)
+	if lines == 0 {
+		refusal, warning, err := scp.judgedNothing(ctx, env)
+		if err != nil {
+			return Result{}, err
 		}
-		if base != "" {
-			head, herr := git(ctx, env, "", "rev-parse", "HEAD^{commit}")
-			target, terr := git(ctx, env, "", "rev-parse", base+"^{commit}")
-			if err := ctx.Err(); err != nil {
-				return Result{}, err
-			}
-			if herr == nil && terr == nil && strings.TrimSpace(head) == strings.TrimSpace(target) {
-				return refuse(req, fmt.Sprintf("HEAD is the base %q of this pull request, so nothing was judged. Fix: check out the change under review (with pull_request_target, set ref on actions/checkout to the pull request head), or run june on pull_request", base)), nil
-			}
+		if refusal != nil {
+			return *refusal, nil
 		}
-		warns++
-		ds = append(ds, diag.Diagnostic{Kind: diag.Failure, Sev: diag.Warning,
-			Msg: "this pull request judged 0 changed lines. Fix: if it changes Python files, check that the checkout is the change under review (pull_request_target checks out the base branch by default)"})
+		if warning != nil {
+			warns++
+			ds = append(ds, *warning)
+		}
 	}
 	sum := summary(errs, warns, optOutCount, checked, lines)
 	if n := len(scanned.Skipped); n > 0 {
 		sum += "; " + count(n, "file") + " skipped, not readable as text"
 	}
+	sum += scopeNotes(sc, len(files), excluded)
+	if legacy > 0 {
+		sum += "; " + count(legacy, "legacy violation") + " listed"
+	}
+	return render(req, exit, ds, sum), nil
+}
+
+// scoped is the front half of a verdict that every command on a change shares: the project, the excludes
+// and the touched lines, so june and june review judge the same lines.
+type scoped struct {
+	req     Request
+	proj    project
+	skip    *excluder
+	touched touchedSet
+	sc      scope
+}
+
+// scopeChange finds the project, the excludes and the touched lines of req.
+// The scoped value is usable for close even when it returns a refusal or an error.
+// A refusal is a complete verdict of exit 2; an error is cancellation.
+func scopeChange(ctx context.Context, env Env, req Request) (scoped, *Result, error) {
+	s := scoped{}
+	if err := ctx.Err(); err != nil {
+		return s, nil, err
+	}
+	req.Format = formatFor(env, req)
+	req.root = repoPrefix(ctx, env, req.Format)
+	req.stepSummary = env.Vars["GITHUB_STEP_SUMMARY"]
+	s.req = req
+	proj, bad := findProject(ctx, env)
+	if err := ctx.Err(); err != nil {
+		return s, nil, err
+	}
+	if bad != nil {
+		res := refuse(req, *bad)
+		return s, &res, nil
+	}
+	s.proj = proj
+	skip, bad := excludes(env, proj, req)
+	if bad != nil {
+		res := refuse(req, *bad)
+		return s, &res, nil
+	}
+	s.skip = skip
+	touched, sc, bad, err := findTouched(ctx, env, req, proj.cfg.Base, skip)
+	s.touched, s.sc = touched, sc
+	if err != nil {
+		return s, nil, err
+	}
+	if bad != nil {
+		res := refuse(req, *bad)
+		return s, &res, nil
+	}
+	return s, nil, nil
+}
+
+// close removes the temporary tree of a staged or ref run.
+func (s scoped) close() {
+	if s.sc.scanDir != "" {
+		_ = os.RemoveAll(s.sc.scanDir) // Best-effort scratch cleanup cannot change the verdict.
+	}
+}
+
+// root is the directory the touched files are read from: the worktree, or the post-image tree of a staged or ref run.
+func (s scoped) root(env Env) string {
+	if s.sc.scanDir != "" {
+		return s.sc.scanDir
+	}
+	return env.Dir
+}
+
+// judgedNothing explains a pull request run that judged no changed line: a refusal when HEAD is the base
+// of the pull request, so the checkout is not the change under review, else a warning. A run outside a pull request needs neither.
+func (s scoped) judgedNothing(ctx context.Context, env Env) (*Result, *diag.Diagnostic, error) {
+	if !pullRequestEvent(env) {
+		return nil, nil, nil
+	}
+	base := s.sc.base
+	if base == "" || s.sc.source == sourceRefs || s.sc.source == sourceStaged {
+		// Supplied lines and pre-commit scopes do not identify the PR base.
+		base, _, _ = eventBase(env)
+	}
+	if base != "" {
+		head, herr := git(ctx, env, "", "rev-parse", "HEAD^{commit}")
+		target, terr := git(ctx, env, "", "rev-parse", base+"^{commit}")
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		if herr == nil && terr == nil && strings.TrimSpace(head) == strings.TrimSpace(target) {
+			res := refuse(s.req, fmt.Sprintf("HEAD is the base %q of this pull request, so nothing was judged. Fix: check out the change under review (with pull_request_target, set ref on actions/checkout to the pull request head), or run june on pull_request", base))
+			return &res, nil, nil
+		}
+	}
+	return nil, &diag.Diagnostic{Kind: diag.Failure, Sev: diag.Warning,
+		Msg: "this pull request judged 0 changed lines. Fix: if it changes Python files, check that the checkout is the change under review (pull_request_target checks out the base branch by default)"}, nil
+}
+
+// scopeNotes is the part of a summary that says what scope was judged and what was left out of it:
+// paths june could not read as regular files, a missing Python file, the base and its source, and the exclude count.
+func scopeNotes(sc scope, files, excluded int) string {
+	var sum string
 	if sc.notRegular > 0 {
 		sum += "; " + count(sc.notRegular, "changed .py path") + " skipped, not regular files (symlink or submodule)"
 	}
 	if sc.notPresent > 0 {
 		sum += "; " + count(sc.notPresent, "changed .py path") + " skipped, absent from sparse checkout"
 	}
-	if len(files) == 0 {
+	if files == 0 {
 		sum += "; note: no changed Python files found - june reads .py files only, not .pyi or scripts without an extension - so if some were expected, check --base and the checkout"
 	}
 	if sc.base != "" {
@@ -253,10 +325,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	if excluded > 0 {
 		sum += "; " + count(excluded, "file") + " excluded"
 	}
-	if legacy > 0 {
-		sum += "; " + count(legacy, "legacy violation") + " listed"
-	}
-	return render(req, exit, ds, sum), nil
+	return sum
 }
 
 // VerifyRequest describes one verification of rule examples.
