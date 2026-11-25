@@ -379,7 +379,7 @@ func (rs *RuleSet) Scan(ctx context.Context, root string, files []string) (Scann
 		if err != nil {
 			return Scanned{}, errors.New("a Python file cannot be read")
 		}
-		source, reason := toUTF8(source)
+		source, reason := Decode(source)
 		if reason != "" {
 			out.Skipped = append(out.Skipped, Skipped{File: f, Reason: reason})
 			continue

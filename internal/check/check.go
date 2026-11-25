@@ -56,6 +56,8 @@ type Request struct {
 	root string
 	// stepSummary is the path of the GitHub job summary, "" when there is none.
 	stepSummary string
+	// names are the names of the files the command writes; the zero value is june's own.
+	names diag.Names
 }
 
 // Result is the verdict and its rendering.
@@ -109,8 +111,7 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 	for _, s := range scanned.Skipped {
 		skipped[s.File] = true
 		warns++
-		ds = append(ds, diag.Diagnostic{File: s.File, Line: 1, Col: 1, Code: "ENCODING", Sev: diag.Warning, Kind: diag.Finding,
-			Msg: "file not scanned: " + s.Reason + ". Fix: add a PEP 263 coding declaration for a supported encoding, or save it as UTF-8"})
+		ds = append(ds, encodingWarning(s.File, s.Reason))
 	}
 	exit := 0
 	type site struct {
@@ -214,6 +215,12 @@ func Change(ctx context.Context, env Env, req Request) (Result, error) {
 		sum += "; " + count(legacy, "legacy violation") + " listed"
 	}
 	return render(req, exit, ds, sum), nil
+}
+
+// encodingWarning is the warning for a file that cannot be read as text, which is left out of the check.
+func encodingWarning(file, reason string) diag.Diagnostic {
+	return diag.Diagnostic{File: file, Line: 1, Col: 1, Code: "ENCODING", Sev: diag.Warning, Kind: diag.Finding,
+		Msg: "file not scanned: " + reason + ". Fix: add a PEP 263 coding declaration for a supported encoding, or save it as UTF-8"}
 }
 
 // scoped is the front half of a verdict that every command on a change shares: the project, the excludes
@@ -613,9 +620,19 @@ func render(req Request, exit int, ds []diag.Diagnostic, summary string) Result 
 			shown[i] = d
 		}
 	}
-	out, files := diag.Render(shown, summary, req.Format)
+	var out []byte
+	var files []diag.File
+	if req.names == (diag.Names{}) {
+		out, files = diag.Render(shown, summary, req.Format)
+	} else {
+		out, files = diag.RenderAs(shown, summary, req.Format, req.names)
+	}
 	if req.stepSummary != "" {
-		files = append(files, diag.File{Path: req.stepSummary, Data: diag.StepSummary(shown, summary), Append: true})
+		step := diag.StepSummary(shown, summary)
+		if req.names != (diag.Names{}) {
+			step = diag.StepSummaryAs(shown, summary, req.names.Heading)
+		}
+		files = append(files, diag.File{Path: req.stepSummary, Data: step, Append: true})
 	}
 	return Result{Exit: exit, Out: out, Files: files, Diags: ds}
 }
